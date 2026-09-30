@@ -1,0 +1,38 @@
+name: Tests
+
+# Branch pushes are covered by their pull request; `main` is tested after the merge.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  php:
+    name: PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # 7.4: the oldest PHP the plugin promises to run on (forum hosts);
+        # 8.3: a current one.
+        php: ['7.4', '8.3']
+    steps:
+      - uses: actions/checkout@v5
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: curl, json, mbstring, pdo_sqlite
+          coverage: none
+      - name: Syntax of the plugin's files
+        run: find inc minos-webhook.php -name '*.php' -print0 | xargs -0 -n1 php -l
+      - name: Dependencies
+        # The client library comes from GitHub (a VCS repository in composer.json); the
+        # token spares the API's anonymous rate limit.
+        env:
+          COMPOSER_AUTH: '{"github-oauth": {"github.com": "${{ secrets.GITHUB_TOKEN }}"}}'
+        run: composer install --no-interaction --no-progress --prefer-dist
+      - run: vendor/bin/phpunit
