@@ -20,7 +20,9 @@ use Minos\Client\WebhookPayload;
  *    that is not `mybb:<pid>`, a post the plugin is not waiting for, and a delivery already
  *    applied (deliveries repeat) get `200` and nothing else.
  * 4. The verdict is applied ({@see Applier}) — the claim on the row makes sure a repeated or
- *    concurrent delivery applies nothing twice.
+ *    concurrent delivery applies nothing twice. A verdict for a post the failure mode
+ *    already published (`fail-open`) is applied late while nobody touched the post
+ *    ({@see Applier::late}); a moderator's decision stays final.
  * 5. The answer is a bare `200`; the gateway discards its body. The work in step 4 is a
  *    few queries, well inside the gateway's 10 seconds.
  *
@@ -75,10 +77,16 @@ final class Receiver
         }
         $pid = (int)$m[1];
         $row = $this->platform->pending($pid);
-        if ($row === null || !$this->platform->claimPending($pid)) {
-            return 200; // unknown, or already handled
+        if ($row === null) {
+            return 200; // unknown
         }
-        $this->applier->verdict($row, $payload, $settings, $now);
-        return 200;
+        if ($this->platform->claimPending($pid, $now)) {
+            $this->applier->verdict($row, $payload, $settings, $now);
+        } elseif ((int)$row['auto_published'] === 1
+            && $this->platform->claimPending($pid, $now, [Status::PUBLISHED], true)) {
+            // Published by the failure mode before this verdict came: still applied.
+            $this->applier->late($row, $payload, $settings, $now);
+        }
+        return 200; // applied, or already handled
     }
 }

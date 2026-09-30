@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Minos\MyBB\Tests\EndToEnd;
 
 use Minos\Mock\Config;
-use Minos\MyBB\Gateway;
 use Minos\MyBB\Plugin;
 use Minos\MyBB\Status;
 use Minos\MyBB\Tests\Support\Forum;
@@ -18,8 +17,10 @@ use PHPUnit\Framework\TestCase;
  * - PHP's built-in server serves the STAGED forum root — the real `minos-webhook.php`, with
  *   a fake `inc/init.php` over the SQLite file this test shares;
  * - another serves the mock gateway, told to deliver to that webhook;
- * - posts are written through the plugin's hooks in this process, sent with cURL, and the
- *   mock's worker CLI delivers the verdicts, signed like the gateway signs.
+ * - `forum-cli.php`, run from the staged root, installs the plugin and writes the posts
+ *   through its hooks, sent with cURL — both sides run the staged plugin, not this
+ *   repository's classes — and the mock's worker CLI delivers the verdicts, signed like the
+ *   gateway signs.
  *
  * The mock chooses verdicts from `[minos:…]` markers in the text (its README).
  */
@@ -65,10 +66,17 @@ final class EndToEndTest extends TestCase
         self::assertFileExists($forumRoot . '/inc/plugins/minos/vendor/minos-moderation/client-php/src/Signature.php');
         self::assertDirectoryDoesNotExist($forumRoot . '/inc/plugins/minos/vendor/minos-moderation/client-php/mock-gateway');
         copy(__DIR__ . '/fixtures/init.php', $forumRoot . '/inc/init.php');
+        copy(__DIR__ . '/fixtures/forum-cli.php', $forumRoot . '/forum-cli.php');
 
         $database = $this->dir . '/forum.sqlite';
-        $forum = Forum::create($database);
-        $receiverPort = $this->serve($forumRoot, ['MINOS_TEST_DB' => $database, 'MINOS_TEST_REPO' => realpath(self::ROOT)]);
+        Forum::create($database); // the schema, in this process; the forum itself runs staged
+        $receiverPort = $this->freePort();
+        $forumEnv = [
+            'MINOS_TEST_DB'     => $database,
+            'MINOS_TEST_REPO'   => (string)realpath(self::ROOT),
+            'MINOS_TEST_BBURL'  => "http://127.0.0.1:{$receiverPort}",
+        ];
+        $this->serve($forumRoot, $forumEnv, $receiverPort);
         $mockEnv = [
             'MINOS_MOCK_WEBHOOK_URL' => "http://127.0.0.1:{$receiverPort}/minos-webhook.php",
             'MINOS_MOCK_DATA_DIR'    => $this->dir . '/mock',
@@ -76,33 +84,31 @@ final class EndToEndTest extends TestCase
         ];
         $mockPort = $this->serve(self::MOCK . '/public', $mockEnv);
 
-        $forum->mybb->settings['bburl'] = "http://127.0.0.1:{$receiverPort}";
-        $plugin = Plugin::build($forum->platform(), new Gateway());
-        $plugin->installer->install();
-        $plugin->installer->activate();
-        $forum->set([
-            'minos_enabled'        => '1',
-            'minos_gateway_url'    => "http://127.0.0.1:{$mockPort}",
-            'minos_api_key'        => Config::DEFAULT_KEY,
-            'minos_webhook_secret' => Config::DEFAULT_SECRET,
-        ]);
-        $forum->mybb->user = ['uid' => 7, 'postnum' => 1, 'moderateposts' => 0];
+        // Install and post from the STAGED tree, as a forum would.
+        $posted = json_decode($this->runCommand([PHP_BINARY, $forumRoot . '/forum-cli.php'], $forumEnv, (string)json_encode([
+            'install' => [
+                'minos_enabled'        => '1',
+                'minos_gateway_url'    => "http://127.0.0.1:{$mockPort}",
+                'minos_api_key'        => Config::DEFAULT_KEY,
+                'minos_webhook_secret' => Config::DEFAULT_SECRET,
+            ],
+            'user'  => ['uid' => 7, 'postnum' => 1, 'moderateposts' => 0],
+            'posts' => [
+                'safe'     => [false, 'Świetny wpis!'],
+                'blocked'  => [false, 'spadaj [minos:blokuj] [minos:kategoria=nekanie]'],
+                'censored' => [false, 'to jest [minos:cenzuruj] [[głupi]] pomysł'],
+                'none'     => [false, 'coś [minos:nieocenione]'],
+                'support'  => [false, 'Jest mi bardzo źle [minos:kategoria=samookaleczenie]'],
+                'twice'    => [false, 'Dwa razy [minos:dwa-razy]'],
+                'forged'   => [false, 'Podrobiony [minos:zly-podpis]'],
+                'thread'   => [true, 'Pierwszy post wątku.', 'Wątek z bramy'],
+            ],
+        ])), true);
+        self::assertStringStartsWith(realpath($forumRoot), (string)$posted['plugin'], 'the posting side ran the staged plugin');
+        $pids = array_map('intval', (array)$posted['pids']);
+        self::assertCount(8, $pids);
 
-        $pids = [];
-        foreach ([
-            'safe'      => 'Świetny wpis!',
-            'blocked'   => 'spadaj [minos:blokuj] [minos:kategoria=nekanie]',
-            'censored'  => 'to jest [minos:cenzuruj] [[głupi]] pomysł',
-            'none'      => 'coś [minos:nieocenione]',
-            'support'   => 'Jest mi bardzo źle [minos:kategoria=samookaleczenie]',
-            'twice'     => 'Dwa razy [minos:dwa-razy]',
-            'forged'    => 'Podrobiony [minos:zly-podpis]',
-        ] as $name => $message) {
-            $pids[$name] = (int)$forum->write(false, $message)->return_values['pid'];
-        }
-        $thread = $forum->write(true, 'Pierwszy post wątku.', ['subject' => 'Wątek z bramy']);
-        $pids['thread'] = (int)$thread->return_values['pid'];
-
+        $forum = Forum::create($database);
         foreach ($pids as $name => $pid) {
             self::assertSame(Status::PENDING, $forum->row($pid)['status'], "{$name}: the mock accepted it (202)");
             self::assertSame(0, (int)$forum->post($pid)['visible'], "{$name}: held until its verdict");
@@ -127,22 +133,39 @@ final class EndToEndTest extends TestCase
         self::assertSame([1, Status::PUBLISHED, 'bezpieczne'], $state('twice'));
         self::assertSame([0, Status::PENDING, ''], $state('forged'));
         self::assertSame([1, Status::PUBLISHED, 'bezpieczne'], $state('thread'));
-        // The mock masks `[[głupi]]` as five characters, dropping the brackets, so its text
-        // is shorter than what was sent; the contract masks one character per character.
-        // The plugin does not publish a masked text of another length: it holds the post.
-        self::assertSame([0, Status::HELD, 'ocenzurowane'], $state('censored'));
+        // The mock masks one character per character, as the contract does.
+        self::assertSame([1, Status::CENSORED, 'ocenzurowane'], $state('censored'));
+        self::assertSame('to jest [minos:cenzuruj] [[█████]] pomysł', $forum->post($pids['censored'])['message']);
+        self::assertSame('to jest [minos:cenzuruj] [[głupi]] pomysł', $forum->row($pids['censored'])['original_text']);
+    }
+
+    /**
+     * A port nothing listens on now.
+     */
+    private function freePort(): int
+    {
+        for ($try = 0; $try < 20; $try++) {
+            $port = random_int(20000, 40000);
+            $socket = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.1);
+            if ($socket === false) {
+                return $port;
+            }
+            fclose($socket);
+        }
+        self::fail('no free port');
     }
 
     /**
      * Starts PHP's built-in server and waits until it answers.
      *
      * @param array<string,string> $env
+     * @param int|null             $port A port to try first.
      * @return int The port.
      */
-    private function serve(string $docroot, array $env): int
+    private function serve(string $docroot, array $env, ?int $port = null): int
     {
         for ($try = 0; $try < 5; $try++) {
-            $port = random_int(20000, 40000);
+            $port = $port !== null && $try === 0 ? $port : random_int(20000, 40000);
             // An array, not a string: a string runs through `sh -c`, and terminating the
             // shell would leave PHP's server running.
             $server = proc_open([PHP_BINARY, '-S', "127.0.0.1:{$port}", '-t', $docroot],
@@ -168,12 +191,15 @@ final class EndToEndTest extends TestCase
      *
      * @param array<int,string>    $command
      * @param array<string,string> $env
+     * @param string               $input Its standard input.
      * @return string Its output.
      */
-    private function runCommand(array $command, array $env): string
+    private function runCommand(array $command, array $env, string $input = ''): string
     {
-        $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, $env + getenv());
+        $process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, $env + getenv());
         self::assertIsResource($process);
+        fwrite($pipes[0], $input);
+        fclose($pipes[0]);
         $output = (string)stream_get_contents($pipes[1]) . (string)stream_get_contents($pipes[2]);
         fclose($pipes[1]);
         fclose($pipes[2]);

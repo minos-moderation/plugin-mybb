@@ -185,7 +185,8 @@ final class Admin
         foreach ($this->platform->attentionRows(self::ROWS) as $row) {
             $rows[] = [
                 ['url' => $this->platform->postUrl((int)$row['pid'], (int)$row['tid']), 'text' => '#' . (int)$row['pid']],
-                $this->platform->lang('minos_status_' . $row['status']),
+                $this->platform->lang((int)$row['auto_published'] === 1 && $row['status'] === Status::PUBLISHED
+                    ? 'minos_status_auto_published' : 'minos_status_' . $row['status']),
                 $this->verdictLabel((string)$row['verdict']),
                 (string)$row['categories'],
                 (int)$row['support'] === 1 ? $this->platform->lang('minos_acp_support_yes') : '',

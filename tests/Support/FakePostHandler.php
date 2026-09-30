@@ -21,11 +21,20 @@ final class FakePostHandler
     /** @var array<string,mixed> */
     public $return_values = [];
 
+    /** @var array<int,array<string,mixed>> What validation found (MyBB's `$errors`). */
+    public $errors = [];
+
     /** @param array<string,mixed> $data */
     public function __construct(string $method, string $action, array $data)
     {
         $this->method = $method;
         $this->action = $action;
         $this->data = $data;
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    public function get_errors()
+    {
+        return $this->errors;
     }
 }

@@ -6,8 +6,9 @@ namespace Minos\MyBB;
 
 /**
  * The ONE place the plugin touches MyBB: its globals (`$mybb`, `$db`, `$cache`, `$lang`,
- * `$page`), its functions (`is_moderator`, `forum_permissions`, `rebuild_settings`,
- * `fetch_next_run`, `add_task_log`, `get_post_link`), its `Moderation` class and its tables.
+ * `$page`), its functions (`is_moderator`, `forum_permissions`, `get_forum`,
+ * `rebuild_settings`, `fetch_next_run`, `add_task_log`, `get_post_link`), its `Moderation`
+ * class and its tables.
  * Every other class works through this one, so a MyBB change lands here, and the tests run
  * the real class against hand-written stand-ins for those globals (`tests/Stubs/`).
  *
@@ -204,6 +205,25 @@ final class Platform
     }
 
     /**
+     * How a forum shows posts: whether it parses HTML, MyCode, `[img]` and `[video]`.
+     *
+     * @param int $fid The forum.
+     * @return array<string,int> `allowhtml`, `allowmycode`, `allowimgcode`,
+     *     `allowvideocode`, as MyBB's `get_forum` has them (missing ones left out).
+     */
+    public function forumParsing(int $fid): array
+    {
+        $forum = get_forum($fid);
+        $options = [];
+        foreach (array_keys(Text::DEFAULT_FORUM) as $key) {
+            if (is_array($forum) && isset($forum[$key])) {
+                $options[$key] = (int)$forum[$key];
+            }
+        }
+        return $options;
+    }
+
+    /**
      * Whether MyBB would send this post to its queue anyway — the forum moderates new
      * posts or threads, or the user is under moderation. The plugin leaves such a post to
      * the humans who asked for it.
@@ -268,10 +288,13 @@ final class Platform
      *
      * @param int    $pid     The post.
      * @param string $message The new message.
+     * @return bool Whether the post now holds it — read back, not trusted.
      */
-    public function replaceMessage(int $pid, string $message): void
+    public function replaceMessage(int $pid, string $message): bool
     {
         $this->db->update_query('posts', ['message' => $this->db->escape_string($message)], "pid='" . $pid . "'");
+        $query = $this->db->simple_select('posts', 'message', "pid='" . $pid . "'");
+        return (string)$this->db->fetch_field($query, 'message') === $message;
     }
 
     /**
@@ -307,6 +330,22 @@ final class Platform
     }
 
     /**
+     * Sends a published post back to the moderation queue, the way a moderator's
+     * "unapprove" does (`Moderation` rebuilds the counters).
+     *
+     * @param array{pid:int,tid:int,first:bool} $post The post ({@see post}).
+     */
+    public function unapprove(array $post): void
+    {
+        $moderation = $this->moderation();
+        if ($post['first']) {
+            $moderation->unapprove_threads([$post['tid']]);
+        } else {
+            $moderation->unapprove_posts([$post['pid']]);
+        }
+    }
+
+    /**
      * A post's address, for the ACP page.
      *
      * @param int $pid The post.
@@ -331,7 +370,8 @@ final class Platform
             'tid' => 0, 'is_thread' => 0, 'status' => Status::PENDING, 'submitted_at' => 0,
             'accepted_at' => 0, 'retry_at' => 0, 'attempts' => 0, 'truncated' => 0,
             'prefix_len' => 0, 'text_len' => 0, 'verdict' => '', 'categories' => '',
-            'support' => 0, 'error_code' => '', 'decided_at' => 0, 'original_text' => '',
+            'support' => 0, 'error_code' => '', 'decided_at' => 0, 'auto_published' => 0,
+            'claimed_at' => 0, 'claimed_from' => '', 'original_text' => '',
         ]));
     }
 
@@ -349,17 +389,42 @@ final class Platform
     }
 
     /**
-     * Takes a row that is still waiting, so exactly one webhook delivery or task run
-     * applies it (deliveries repeat, and the task runs beside the webhook).
+     * Takes a row, so exactly one webhook delivery or task run applies it (deliveries
+     * repeat, and the task runs beside the webhook). The status it had and the moment are
+     * recorded, so {@see releaseStaleClaims} can give back a claim whose holder died.
      *
-     * @param int $pid The post.
-     * @return bool True for the one caller that changed it from {@see Status::OPEN}.
+     * @param int               $pid              The post.
+     * @param int               $now              Unix seconds.
+     * @param array<int,string> $from             The statuses it may be taken from.
+     * @param bool              $autoPublishedOnly Only a row the plugin itself published
+     *     in fail-open mode (`auto_published`).
+     * @return bool True for the one caller that changed it.
      */
-    public function claimPending(int $pid): bool
+    public function claimPending(int $pid, int $now, array $from = Status::OPEN, bool $autoPublishedOnly = false): bool
     {
-        $this->db->update_query(self::PENDING_TABLE, ['status' => Status::APPLYING],
-            "pid='" . $pid . "' AND status IN ('" . implode("','", Status::OPEN) . "')");
-        return (int)$this->db->affected_rows() === 1;
+        foreach ($from as $status) {
+            $this->db->update_query(self::PENDING_TABLE, [
+                'status' => Status::APPLYING, 'claimed_from' => $this->db->escape_string($status), 'claimed_at' => $now,
+            ], "pid='" . $pid . "' AND status='" . $this->db->escape_string($status) . "'"
+                . ($autoPublishedOnly ? " AND auto_published='1'" : ''));
+            if ((int)$this->db->affected_rows() === 1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Gives back claims older than a moment: the process that took them died between the
+     * claim and the outcome. The row returns to the status it was claimed from.
+     *
+     * @param int $before Unix seconds.
+     */
+    public function releaseStaleClaims(int $before): void
+    {
+        $this->db->write_query('UPDATE ' . $this->prefix . self::PENDING_TABLE
+            . " SET status=claimed_from, claimed_at='0' WHERE status='" . Status::APPLYING
+            . "' AND claimed_from<>'' AND claimed_at<'" . $before . "'");
     }
 
     /**
@@ -417,7 +482,8 @@ final class Platform
     public function attentionRows(int $limit): array
     {
         return $this->rows(self::PENDING_TABLE,
-            "support='1' OR status IN ('" . implode("','", [Status::HELD, Status::PENDING, Status::RETRY, Status::APPLYING]) . "')",
+            "support='1' OR auto_published='1' OR status IN ('"
+                . implode("','", [Status::HELD, Status::PENDING, Status::RETRY, Status::APPLYING]) . "')",
             ['order_by' => 'submitted_at', 'order_dir' => 'DESC', 'limit' => $limit]);
     }
 
@@ -510,6 +576,7 @@ final class Platform
                 'attempts' => 'small', 'truncated' => 'flag', 'prefix_len' => 'small',
                 'text_len' => 'small', 'verdict' => 'varchar(20)', 'categories' => 'varchar(255)',
                 'support' => 'flag', 'error_code' => 'varchar(40)', 'decided_at' => 'int',
+                'auto_published' => 'flag', 'claimed_at' => 'int', 'claimed_from' => 'varchar(20)',
                 'original_text' => 'text',
             ],
             self::LOG_TABLE => [
@@ -619,6 +686,18 @@ final class Platform
         }
         $this->db->delete_query('settinggroups', "name='" . self::SETTING_GROUP . "'");
         rebuild_settings();
+    }
+
+    /**
+     * Changes how one setting is rendered (its `optionscode`), keeping its value.
+     *
+     * @param string $name        The setting.
+     * @param string $optionscode The new `optionscode`.
+     */
+    public function setOptionscode(string $name, string $optionscode): void
+    {
+        $this->db->update_query('settings', ['optionscode' => $this->db->escape_string($optionscode)],
+            "name='" . $this->db->escape_string($name) . "'");
     }
 
     /**
@@ -864,7 +943,8 @@ final class Platform
         if (!$pg && !$sqlite && isset($columns['retry_at'])) {
             $lines[] = 'KEY status (status, retry_at)';
         }
+        // No ENGINE clause: the server's default (InnoDB on current MySQL and MariaDB).
         return 'CREATE TABLE ' . $table . " (\n  " . implode(",\n  ", $lines) . "\n)"
-            . ($pg || $sqlite ? '' : ' ENGINE=MyISAM' . $collation);
+            . ($pg || $sqlite ? '' : $collation);
     }
 }

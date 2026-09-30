@@ -146,6 +146,37 @@ final class TaskTest extends PluginTestCase
         self::assertNull($this->forum->row($old));
     }
 
+    public function testATimeoutBelowTwentyMinutesIsRaisedToTwenty(): void
+    {
+        // The review's probe: a one-minute timeout, the task at 61 s, the verdict at 5 min.
+        $this->forum->set(['minos_failure_mode' => 'fail-open', 'minos_timeout' => '1']);
+        $pid = $this->heldReply();
+        $this->age($pid, 61);
+
+        task_minos(['tid' => 1]);
+        self::assertSame([0, Status::PENDING], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']],
+            'the verdict is still on its way');
+
+        $this->forum->deliver(self::payload($pid, ['kwalifikacja' => 'zablokowane']), null, null, TIME_NOW + 5 * 60 - 61);
+        self::assertSame([0, Status::HELD], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
+    }
+
+    public function testAClaimWhoseHolderDiedIsGivenBack(): void
+    {
+        $stale = $this->heldReply();
+        $fresh = $this->heldReply();
+        $platform = $this->forum->platform();
+        self::assertTrue($platform->claimPending($stale, TIME_NOW - 6 * 60));
+        self::assertTrue($platform->claimPending($fresh, TIME_NOW - 60));
+
+        task_minos(['tid' => 1]);
+
+        self::assertSame(Status::PENDING, $this->forum->row($stale)['status']);
+        self::assertSame(Status::APPLYING, $this->forum->row($fresh)['status']);
+        self::assertSame(200, $this->forum->deliver(self::payload($stale)));
+        self::assertSame(Status::PUBLISHED, $this->forum->row($stale)['status'], 'a released row takes its verdict again');
+    }
+
     private function age(int $pid, int $seconds): void
     {
         $this->forum->platform()->updatePending($pid, ['submitted_at' => TIME_NOW - $seconds, 'accepted_at' => TIME_NOW - $seconds]);

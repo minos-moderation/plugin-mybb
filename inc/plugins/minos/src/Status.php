@@ -21,7 +21,11 @@ final class Status
     /** Claimed by one webhook delivery or one task run, so no other applies it too. */
     public const APPLYING = 'applying';
 
-    /** Approved as written. */
+    /**
+     * Approved as written — by a verdict, or by the failure mode in `fail-open`, which the
+     * row marks with `auto_published = 1`: a verdict that comes later is still applied
+     * while nobody has touched the post ({@see Applier::late}).
+     */
     public const PUBLISHED = 'published';
 
     /** Approved with the gateway's masked text; the original is in `original_text`. */
@@ -49,4 +53,10 @@ final class Status
 
     /** Recorded in `verdict` when the post was edited before its verdict came. */
     public const REASON_EDITED = 'edited';
+
+    /**
+     * Recorded in `verdict` when a publishing verdict came for a post longer than what was
+     * sent: it judged the beginning only, so the failure mode decides.
+     */
+    public const REASON_TRUNCATED = 'truncated';
 }

@@ -25,6 +25,9 @@ $plugins->add_hook('datahandler_post_insert_post_end', 'minos_hook_inserted_post
 $plugins->add_hook('datahandler_post_insert_thread_end', 'minos_hook_inserted_thread');
 // An edit of a post still waiting for its verdict.
 $plugins->add_hook('datahandler_post_update', 'minos_hook_updated');
+// The form shown again after a failed validation: the post was not inserted.
+$plugins->add_hook('newreply_start', 'minos_hook_form_shown');
+$plugins->add_hook('newthread_start', 'minos_hook_form_shown');
 
 if (defined('IN_ADMINCP')) {
     $plugins->add_hook('admin_config_settings_change', 'minos_hook_settings_change');
@@ -135,6 +138,14 @@ function minos_hook_inserted_thread($handler)
 function minos_hook_updated($handler)
 {
     \Minos\MyBB\Plugin::instance()->submitter->onUpdated($handler, TIME_NOW);
+}
+
+/**
+ * `newreply_start`, `newthread_start`.
+ */
+function minos_hook_form_shown()
+{
+    \Minos\MyBB\Plugin::instance()->submitter->onFormShown();
 }
 
 /**

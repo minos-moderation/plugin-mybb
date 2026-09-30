@@ -113,11 +113,16 @@ final class Installer
     }
 
     /**
-     * `minos_deactivate()`.
+     * `minos_deactivate()`: switches the task off, and disables the key and secret fields —
+     * without the plugin's hooks a typed value would be dropped silently on save, so the
+     * page says so instead. Activation restores them.
      */
     public function deactivate(): void
     {
         $this->platform->setTaskEnabled(false);
+        foreach (Settings::SECRET_NAMES as $name) {
+            $this->platform->setOptionscode($name, self::maskedInput($name, $this->platform->lang('minos_secret_inactive')));
+        }
     }
 
     /**
@@ -154,7 +159,8 @@ final class Installer
             Settings::WEBHOOK_SECRET  => ['webhook_secret', self::maskedInput(Settings::WEBHOOK_SECRET), ''],
             Settings::PROFILE         => ['profile', $select('profile', Settings::PROFILES), Settings::PROFILES[0]],
             Settings::FAILURE_MODE    => ['failure_mode', $select('failure_mode', [Settings::FAIL_CLOSED, Settings::FAIL_OPEN]), Settings::FAIL_CLOSED],
-            Settings::TIMEOUT_MIN     => ['timeout', "numeric\nmin=1\nmax=1440", (string)Settings::DEFAULT_TIMEOUT_MIN],
+            Settings::TIMEOUT_MIN     => ['timeout', 'numeric' . "\nmin=" . Settings::DEFAULT_TIMEOUT_MIN . "\nmax=" . Settings::MAX_TIMEOUT_MIN,
+                (string)Settings::DEFAULT_TIMEOUT_MIN],
             Settings::CENSORED        => ['censored', $select('censored', [Settings::PUBLISH, Settings::QUEUE]), Settings::PUBLISH],
             Settings::BLOCKED         => ['blocked', $select('blocked', [Settings::QUEUE, Settings::SOFT_DELETE]), Settings::QUEUE],
             Settings::FORUMS          => ['forums', 'forumselect', '-1'],
@@ -182,13 +188,21 @@ final class Installer
      * to open its raw "Edit setting" page for a `php` setting, so the ACP has no page that
      * prints the value.
      *
-     * @param string $name The setting.
+     * @param string      $name     The setting.
+     * @param string|null $disabled A note that replaces the field's use: the field is
+     *     disabled (the plugin is deactivated) and the note says why.
      * @return string The optionscode.
      */
-    public static function maskedInput(string $name): string
+    public static function maskedInput(string $name, ?string $disabled = null): string
     {
-        return "php\n" . '<input type=\"password\" name=\"' . self::SECRET_INPUT . '[' . $name
-            . ']\" value=\"\" class=\"text_input\" autocomplete=\"new-password\" />';
+        $input = '<input type=\"password\" name=\"' . self::SECRET_INPUT . '[' . $name
+            . ']\" value=\"\" class=\"text_input\" autocomplete=\"new-password\"';
+        if ($disabled === null) {
+            return "php\n" . $input . ' />';
+        }
+        // The note goes into a string MyBB evaluates in double quotes: no `"`, `\` or `$`.
+        $note = addcslashes(htmlspecialchars($disabled, ENT_QUOTES, 'UTF-8'), '"\\$');
+        return "php\n" . $input . ' disabled=\"disabled\" /> <em>' . $note . '</em>';
     }
 
     /**

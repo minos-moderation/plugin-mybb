@@ -67,11 +67,12 @@ final class SettingsTest extends TestCase
         self::assertTrue($chosen->softDeleteBlocked());
     }
 
-    public function testTheTimeoutIsMinutesWithADefaultAndBounds(): void
+    public function testTheTimeoutIsAtLeastTwentyMinutes(): void
     {
         self::assertSame(20 * 60, (new Settings(self::WORKING))->timeoutS());
         self::assertSame(20 * 60, (new Settings(['minos_timeout' => 'x'] + self::WORKING))->timeoutS());
-        self::assertSame(60, (new Settings(['minos_timeout' => '0'] + self::WORKING))->timeoutS());
+        self::assertSame(20 * 60, (new Settings(['minos_timeout' => '1'] + self::WORKING))->timeoutS(), 'shorter than the gateway\'s TTL');
+        self::assertSame(45 * 60, (new Settings(['minos_timeout' => '45'] + self::WORKING))->timeoutS());
         self::assertSame(1440 * 60, (new Settings(['minos_timeout' => '99999'] + self::WORKING))->timeoutS());
     }
 

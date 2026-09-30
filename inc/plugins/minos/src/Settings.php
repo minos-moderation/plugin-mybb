@@ -46,10 +46,14 @@ final class Settings
     public const SOFT_DELETE = 'soft-delete';
 
     /**
-     * The receive timeout by default, in minutes: the gateway's 15-minute TTL plus five
-     * minutes of grace for a delivery that is still being retried.
+     * The receive timeout by default and at LEAST, in minutes: the gateway's 15-minute TTL
+     * plus five minutes of grace for a delivery that is still being retried. A shorter one
+     * would apply the failure mode while the verdict is still on its way.
      */
     public const DEFAULT_TIMEOUT_MIN = 20;
+
+    /** The longest receive timeout, in minutes. */
+    public const MAX_TIMEOUT_MIN = 1440;
 
     /** A B2B key: `wgb2b_` and a token with no whitespace (it goes into a header). */
     private const KEY_PATTERN = '/^wgb2b_[A-Za-z0-9._~-]{1,200}\z/';
@@ -174,13 +178,14 @@ final class Settings
     /**
      * How long to wait for a verdict before applying the failure mode.
      *
-     * @return int Seconds, from 1 minute to 24 hours; the default when not a number.
+     * @return int Seconds, from 20 minutes ({@see DEFAULT_TIMEOUT_MIN}) to 24 hours; the
+     *     default when not a number.
      */
     public function timeoutS(): int
     {
         $minutes = trim((string)($this->raw[self::TIMEOUT_MIN] ?? ''));
         $minutes = ctype_digit($minutes) ? (int)$minutes : self::DEFAULT_TIMEOUT_MIN;
-        return 60 * max(1, min(1440, $minutes));
+        return 60 * max(self::DEFAULT_TIMEOUT_MIN, min(self::MAX_TIMEOUT_MIN, $minutes));
     }
 
     /**

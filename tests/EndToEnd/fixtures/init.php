@@ -2,7 +2,8 @@
 
 /*
  * A stand-in for MyBB's `inc/init.php`, copied into the staged forum root of
- * EndToEndTest and run by PHP's built-in server behind the REAL `minos-webhook.php`.
+ * EndToEndTest: run by PHP's built-in server behind the REAL `minos-webhook.php`, and by
+ * `forum-cli.php`, which writes posts the way `newreply.php` would.
  *
  * It builds the same miniature forum as the tests (`tests/Support`), on the SQLite file the
  * test process shares (MINOS_TEST_DB), then loads the plugin as MyBB loads an active one —
@@ -35,7 +36,8 @@ $GLOBALS['plugins'] = $plugins;
 // The plugin's own loader first, so Forum's references to the plugin's classes resolve
 // to the staged copies.
 require_once MYBB_ROOT . 'inc/plugins/minos/autoload.php';
-Minos\MyBB\Tests\Support\Forum::create((string)getenv('MINOS_TEST_DB'));
+$minosForum = Minos\MyBB\Tests\Support\Forum::create((string)getenv('MINOS_TEST_DB'));
+$minosForum->mybb->settings['bburl'] = (string)getenv('MINOS_TEST_BBURL');
 
 // MyBB: $plugins->load() includes every active plugin.
 require_once MYBB_ROOT . 'inc/plugins/minos.php';

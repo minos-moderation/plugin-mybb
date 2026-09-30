@@ -72,16 +72,44 @@ final class InstallerTest extends TestCase
         $this->forum->set(['minos_api_key' => Forum::KEY]);
         $optionscode = $this->settings('optionscode')['minos_api_key'];
 
-        // What MyBB 1.8.41's settings page does with a `php` setting (config/settings.php).
         self::assertStringStartsWith('php', $optionscode);
-        $setting_code = '';
-        eval("\$setting_code = \"" . substr($optionscode, 3) . "\";");
+        $setting_code = self::render($optionscode);
 
         self::assertStringContainsString('type="password"', $setting_code);
         self::assertStringContainsString('value=""', $setting_code);
         self::assertStringContainsString('name="' . Installer::SECRET_INPUT . '[minos_api_key]"', $setting_code);
         self::assertStringNotContainsString('upsetting', $setting_code, 'MyBB must never save the empty field by itself');
         self::assertStringNotContainsString(Forum::KEY, $setting_code);
+    }
+
+    public function testTheTimeoutFieldRefusesLessThanTwentyMinutes(): void
+    {
+        minos_install();
+        self::assertSame("numeric\nmin=20\nmax=1440", $this->settings('optionscode')['minos_timeout']);
+    }
+
+    public function testWhileDeactivatedTheSecretFieldsAreDisabledAndSaySo(): void
+    {
+        minos_install();
+        minos_activate();
+        minos_deactivate();
+        foreach (['minos_api_key', 'minos_webhook_secret'] as $name) {
+            $html = self::render($this->settings('optionscode')[$name]);
+            self::assertStringContainsString('disabled="disabled"', $html, $name);
+            self::assertStringContainsString('Aktywuj wtyczkę', $html, $name);
+        }
+        minos_activate();
+        self::assertStringNotContainsString('disabled', self::render($this->settings('optionscode')['minos_api_key']));
+    }
+
+    public function testTheTablesUseTheServersDefaultEngine(): void
+    {
+        $create = new \ReflectionMethod(\Minos\MyBB\Platform::class, 'createTable');
+        $create->setAccessible(true);
+        $sql = (string)$create->invoke(null, 'mysqli', 'mybb_minos_pending', ['pid' => 'int', 'status' => 'varchar(20)'], 'pid',
+            ' CHARACTER SET utf8mb4');
+        self::assertStringNotContainsStringIgnoringCase('ENGINE', $sql);
+        self::assertStringEndsWith(') CHARACTER SET utf8mb4', $sql);
     }
 
     public function testUninstallAsksFirstThenRemovesEverything(): void
@@ -114,6 +142,16 @@ final class InstallerTest extends TestCase
 
         minos_install();
         self::assertTrue(minos_is_installed(), 'a later install reuses the kept tables');
+    }
+
+    /**
+     * What MyBB 1.8.41's settings page does with a `php` setting (config/settings.php).
+     */
+    private static function render(string $optionscode): string
+    {
+        $setting_code = '';
+        eval("\$setting_code = \"" . substr($optionscode, 3) . "\";");
+        return $setting_code;
     }
 
     /** @return array<string,string> By setting name. */

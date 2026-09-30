@@ -6,6 +6,7 @@ namespace Minos\MyBB\Tests\Plugin;
 
 use Minos\Client\Signature;
 use Minos\MyBB\Status;
+use Minos\MyBB\Tests\Support\FakePostHandler;
 use Minos\MyBB\Tests\Support\Forum;
 use Minos\MyBB\Tests\Support\PluginTestCase;
 
@@ -223,6 +224,110 @@ final class ReceiverTest extends PluginTestCase
         $pid = $this->heldReply();
         self::assertSame(200, $delivered);
         self::assertSame(Status::PUBLISHED, $this->forum->row($pid)['status']);
+    }
+
+    /**
+     * @dataProvider failureModes
+     */
+    public function testASafeVerdictOnACutPostFollowsTheFailureMode(string $mode, int $visible, string $status): void
+    {
+        $this->forum->set(['minos_failure_mode' => $mode]);
+        $pid = $this->heldReply(str_repeat('a', 3000) . ' OGON_NIEOCENIONY_OBELGA');
+        self::assertStringNotContainsString('OGON_NIEOCENIONY_OBELGA', $this->forum->transport->lastBody()['elementy'][0]['tekst']);
+
+        $this->forum->deliver(self::payload($pid));
+
+        $row = $this->forum->row($pid);
+        self::assertSame([$visible, $status, Status::REASON_TRUNCATED], [(int)$this->forum->post($pid)['visible'], $row['status'], $row['verdict']]);
+        self::assertSame('wpis dłuższy niż 3000 znaków — oceniono początek',
+            $this->forum->platform()->lang('minos_reason_' . $row['verdict']), 'the note moderators see');
+    }
+
+    /** @return array<string,array{0:string,1:int,2:string}> */
+    public function failureModes(): array
+    {
+        return [
+            'fail-closed' => ['fail-closed', 0, Status::HELD],
+            'fail-open'   => ['fail-open', 1, Status::PUBLISHED],
+        ];
+    }
+
+    public function testABlockedCutPostIsStillBlocked(): void
+    {
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $pid = $this->heldReply(str_repeat('zły ', 800));
+        $this->forum->deliver(self::payload($pid, ['kwalifikacja' => 'zablokowane']));
+        self::assertSame([0, Status::HELD], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
+    }
+
+    public function testACensoredTextThatCannotBeStoredKeepsThePostHeld(): void
+    {
+        // The database silently refuses to change the message.
+        $this->forum->pdo->exec('CREATE TRIGGER keep_message BEFORE UPDATE OF message ON mybb_posts BEGIN SELECT RAISE(IGNORE); END');
+        $pid = $this->heldReply('abc zły');
+        $this->forum->deliver(self::payload($pid, ['kwalifikacja' => 'ocenzurowane', 'ocenzurowany' => 'abc ███']));
+        self::assertSame([0, 'abc zły', Status::HELD],
+            [(int)$this->forum->post($pid)['visible'], $this->forum->post($pid)['message'], $this->forum->row($pid)['status']]);
+        self::assertSame([], self::moderation(), 'the original is never published on this verdict');
+    }
+
+    public function testALateVerdictIsAppliedToAPostTheFailureModePublished(): void
+    {
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $blocked = $this->autoPublished();
+        $censored = $this->autoPublished('abc zły');
+        $safe = $this->autoPublished();
+
+        $this->forum->deliver(self::payload($blocked, ['kwalifikacja' => 'zablokowane']));
+        $this->forum->deliver(self::payload($censored, ['kwalifikacja' => 'ocenzurowane', 'ocenzurowany' => 'abc ███']));
+        $this->forum->deliver(self::payload($safe));
+
+        self::assertSame([0, Status::HELD], [(int)$this->forum->post($blocked)['visible'], $this->forum->row($blocked)['status']]);
+        self::assertContains(['unapprove_posts', [$blocked]], self::moderation());
+        self::assertSame([1, 'abc ███', Status::CENSORED],
+            [(int)$this->forum->post($censored)['visible'], $this->forum->post($censored)['message'], $this->forum->row($censored)['status']]);
+        self::assertSame([1, Status::PUBLISHED, 'bezpieczne', '0'], [(int)$this->forum->post($safe)['visible'],
+            $this->forum->row($safe)['status'], $this->forum->row($safe)['verdict'], (string)$this->forum->row($safe)['auto_published']]);
+    }
+
+    public function testALateCensoredVerdictFollowsTheSetting(): void
+    {
+        $this->forum->set(['minos_failure_mode' => 'fail-open', 'minos_censored' => 'queue']);
+        $pid = $this->autoPublished('abc zły');
+        $this->forum->deliver(self::payload($pid, ['kwalifikacja' => 'ocenzurowane', 'ocenzurowany' => 'abc ███']));
+        self::assertSame([0, 'abc zły', Status::HELD],
+            [(int)$this->forum->post($pid)['visible'], $this->forum->post($pid)['message'], $this->forum->row($pid)['status']]);
+    }
+
+    public function testAModeratorsDecisionOnAnAutoPublishedPostStaysFinal(): void
+    {
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $unapproved = $this->autoPublished();
+        $this->forum->db->update_query('posts', ['visible' => 0], "pid='" . $unapproved . "'");
+        $edited = $this->autoPublished();
+        $edit = new FakePostHandler('update', 'post', ['pid' => $edited, 'message' => 'Poprawione.']);
+        $GLOBALS['plugins']->run_hooks('datahandler_post_update', $edit);
+        $GLOBALS['minos_test']['moderation'] = [];
+
+        $this->forum->deliver(self::payload($unapproved));
+        $this->forum->deliver(self::payload($edited, ['kwalifikacja' => 'zablokowane']));
+
+        self::assertSame([0, Status::SUPERSEDED], [(int)$this->forum->post($unapproved)['visible'], $this->forum->row($unapproved)['status']]);
+        self::assertSame([1, Status::PUBLISHED], [(int)$this->forum->post($edited)['visible'], $this->forum->row($edited)['status']],
+            'an edit ended the late window');
+        self::assertSame([], self::moderation());
+    }
+
+    /**
+     * A held reply the failure mode (fail-open) published after the timeout.
+     */
+    private function autoPublished(string $message = 'Treść.'): int
+    {
+        $pid = $this->heldReply($message);
+        $this->forum->platform()->updatePending($pid, ['accepted_at' => TIME_NOW - 21 * 60]);
+        $this->forum->plugin->task->run(TIME_NOW);
+        self::assertSame([1, '1'], [(int)$this->forum->post($pid)['visible'], (string)$this->forum->row($pid)['auto_published']]);
+        return $pid;
     }
 
     private function assertStillWaiting(int $pid): void

@@ -24,8 +24,9 @@ use SplObjectStorage;
  * new posts, or the user is under moderation — humans asked for those), a post written on
  * someone else's behalf, and every post while the plugin is off or misconfigured.
  *
- * What an item carries: `id` `mybb:<pid>`, `tekst` ({@see Text::forPost}), `profil`, and
- * `meta` with `links` and — for a registered author, when MyBB knows it — `author_first_post`.
+ * What an item carries: `id` `mybb:<pid>`, `tekst` ({@see Text::forPost}: what readers of the
+ * post see), `profil`, and `meta` with `links`, `link_domains` and — for a registered author,
+ * when MyBB knows it — `author_first_post`.
  * Never an e-mail, an IP address, a username or a user id ({@see item}).
  * No PHP 8 syntax.
  */
@@ -35,7 +36,7 @@ final class Submitter
     public const ID_PREFIX = 'mybb:';
 
     /** The only `meta` fields the plugin sends. */
-    public const META_FIELDS = ['links', 'author_first_post'];
+    public const META_FIELDS = ['links', 'link_domains', 'author_first_post'];
 
     /** The first retry pause without `ponow_za_s`, in seconds; it doubles per attempt. */
     public const BACKOFF_S = 60;
@@ -78,6 +79,11 @@ final class Submitter
         if (!empty($data['savedraft'])) {
             return;
         }
+        // A post that failed validation is not inserted: raising the flag would only
+        // mislabel the form MyBB shows again.
+        if (method_exists($handler, 'get_errors') && $handler->get_errors() !== []) {
+            return;
+        }
         $settings = new Settings($this->platform->settings());
         if (!$settings->active()) {
             return;
@@ -96,6 +102,15 @@ final class Submitter
         }
         $this->platform->holdCurrentUsersPosts();
         $this->held->attach($handler);
+    }
+
+    /**
+     * `newreply_start` / `newthread_start`: MyBB shows the form again — the post was not
+     * inserted (a later validate hook found an error), so the flag raised for it goes back.
+     */
+    public function onFormShown(): void
+    {
+        $this->platform->releaseCurrentUsersPosts();
     }
 
     /**
@@ -121,7 +136,7 @@ final class Submitter
         }
         $message = (string)($data['message'] ?? '');
         $subject = $thread ? (string)($data['subject'] ?? '') : '';
-        $text = Text::forPost($message, $subject);
+        $text = Text::forPost($message, $subject, $this->platform->forumParsing((int)($data['fid'] ?? 0)));
         $row = [
             'pid'          => $pid,
             'tid'          => $thread ? (int)($values['tid'] ?? 0) : (int)($data['tid'] ?? 0),
@@ -143,7 +158,7 @@ final class Submitter
             $this->decideWithout($row, Status::REASON_NO_TEXT, $settings, $now);
             return;
         }
-        $meta = ['links' => Text::links($subject . "\n" . $message)];
+        $meta = self::linkSignals($subject . "\n" . $message);
         $first = $this->platform->currentUserHasNoPosts();
         if ($first !== null) {
             $meta['author_first_post'] = $first;
@@ -163,11 +178,18 @@ final class Submitter
     public function onUpdated($handler, int $now): void
     {
         $pid = (int)(is_array($handler->data ?? null) ? ($handler->data['pid'] ?? 0) : 0);
-        if ($pid > 0 && $this->platform->claimPending($pid)) {
+        if ($pid <= 0) {
+            return;
+        }
+        if ($this->platform->claimPending($pid, $now)) {
             $this->platform->updatePending($pid, [
                 'status' => Status::SUPERSEDED, 'verdict' => Status::REASON_EDITED, 'decided_at' => $now,
             ]);
+            return;
         }
+        // A post the failure mode published and someone then edited: a late verdict would
+        // judge text that is gone, so it no longer applies ({@see Applier::late}).
+        $this->platform->updatePending($pid, ['auto_published' => 0], Status::PUBLISHED);
     }
 
     /**
@@ -185,14 +207,15 @@ final class Submitter
             $pid = (int)$row['pid'];
             $post = $this->platform->post($pid);
             if ($post === null || $post['visible'] !== 0) {
-                if ($this->platform->claimPending($pid)) {
+                if ($this->platform->claimPending($pid, $now)) {
                     $this->platform->updatePending($pid, [
                         'status' => $post === null ? Status::GONE : Status::SUPERSEDED, 'decided_at' => $now,
                     ]);
                 }
                 continue;
             }
-            $text = Text::forPost($post['message'], (int)$row['is_thread'] === 1 ? $post['subject'] : '');
+            $text = Text::forPost($post['message'], (int)$row['is_thread'] === 1 ? $post['subject'] : '',
+                $this->platform->forumParsing($post['fid']));
             if ($text['tekst'] === '') {
                 $this->decideWithout($row, Status::REASON_NO_TEXT, $settings, $now);
                 continue;
@@ -202,7 +225,7 @@ final class Submitter
             $batch[] = [
                 'row'  => $shape + $row,
                 'item' => self::item($pid, $text['tekst'], (string)$settings->profile(),
-                    ['links' => Text::links($post['subject'] . "\n" . $post['message'])]),
+                    self::linkSignals($post['subject'] . "\n" . $post['message'])),
             ];
         }
         foreach (array_chunk($batch, Gateway::MAX_ITEMS) as $chunk) {
@@ -226,10 +249,31 @@ final class Submitter
         if (isset($meta['links'])) {
             $meta['links'] = max(0, min(100000, (int)$meta['links']));
         }
+        if (isset($meta['link_domains'])) {
+            $meta['link_domains'] = array_slice(array_values(array_filter((array)$meta['link_domains'], 'is_string')), 0, Text::MAX_DOMAINS);
+            if ($meta['link_domains'] === []) {
+                unset($meta['link_domains']);
+            }
+        }
         if (isset($meta['author_first_post'])) {
             $meta['author_first_post'] = (bool)$meta['author_first_post'];
         }
         return ['id' => self::ID_PREFIX . $pid, 'tekst' => $text, 'profil' => $profile, 'meta' => $meta];
+    }
+
+    /**
+     * The link signals of a post: `links`, and `link_domains` when it has any.
+     *
+     * @return array<string,mixed>
+     */
+    private static function linkSignals(string $text): array
+    {
+        $signals = ['links' => Text::links($text)];
+        $domains = Text::linkDomains($text);
+        if ($domains !== []) {
+            $signals['link_domains'] = $domains;
+        }
+        return $signals;
     }
 
     /**
@@ -291,7 +335,7 @@ final class Submitter
      */
     private function decideWithout(array $row, string $reason, Settings $settings, int $now): void
     {
-        if ($this->platform->claimPending((int)$row['pid'])) {
+        if ($this->platform->claimPending((int)$row['pid'], $now)) {
             $this->applier->failure($row, $reason, $settings, $now);
         }
     }

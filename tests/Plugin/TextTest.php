@@ -8,35 +8,59 @@ use Minos\MyBB\Text;
 use PHPUnit\Framework\TestCase;
 
 /**
- * What the plugin sends as `tekst`: plain text, the first 3000 characters.
+ * What the plugin sends as `tekst`: what readers of the post see, the first 3000 characters.
  */
 final class TextTest extends TestCase
 {
-    public function testMyCodeAndHtmlTagsGoAndTheirTextStays(): void
+    /** The review's probe: with HTML off, readers see every word of it. */
+    private const PROBE = 'Miłego dnia <b TY_OBELGA_WIDOCZNA>';
+
+    private const HTML_ON = ['allowhtml' => 1];
+
+    public function testWithHtmlOffAngleBracketsAreTextAndStay(): void
     {
-        $plain = Text::plain("[b]Pogrubione[/b] i [url=https://example.com/a]opis linku[/url]\r\n"
-            . '[color=red]kolor[/color] <em>html</em> [size=large]duże[/size]');
-        self::assertSame("Pogrubione i opis linku\nkolor html duże", $plain);
-        self::assertDoesNotMatchRegularExpression('~\[/?(b|url|color|size)\b|<em>~', $plain);
+        self::assertSame(self::PROBE, Text::visible(self::PROBE));
+        self::assertStringContainsString('TY_OBELGA_WIDOCZNA', Text::forPost(self::PROBE)['tekst']);
+        self::assertSame('a < b i <3 <script>x</script>', Text::visible('a < b i <3 <script>x</script>'));
     }
 
-    public function testAQuoteIsKeptBecauseItIsShownOnThePage(): void
+    public function testWithHtmlOnTagsGoButAltAndTitleTextStays(): void
     {
-        $plain = Text::plain("[quote=\"Ktoś\" pid='3' dateline='1700000000']cytowana treść[/quote]\nMoja odpowiedź");
-        self::assertStringContainsString('cytowana treść', $plain);
-        self::assertStringContainsString('Moja odpowiedź', $plain);
-        self::assertStringNotContainsString('[quote', $plain);
+        self::assertSame('Miłego dnia', Text::visible(self::PROBE, self::HTML_ON), 'a tag is invisible on an HTML forum');
+        $visible = Text::visible('<p>Obraz: <img src="https://example.com/a.png" alt="OBELGA_ALT"> i '
+            . '<a href="https://example.com" title=\'OBELGA_TITLE\'>link</a></p><script>ukryte()</script>', self::HTML_ON);
+        self::assertSame("Obraz: OBELGA_ALT i OBELGA_TITLE link", $visible);
     }
 
-    public function testMediaAddressesAreNotText(): void
+    public function testEntitiesAreDecodedAsMyBBShowsThem(): void
     {
-        $plain = Text::plain('Zdjęcie: [img]https://example.com/a.png[/img] [video=youtube]https://youtu.be/x[/video] [attachment=12] koniec');
-        self::assertSame('Zdjęcie: koniec', $plain);
+        self::assertSame('A i &lt;', Text::visible('&#65; i &lt;'), 'HTML off: only numeric entities render');
+        self::assertSame('A i <', Text::visible('&#65; i &lt;', self::HTML_ON));
     }
 
-    public function testWhatIsNotATagStays(): void
+    public function testMyCodeIsRenderedAsItsReadersSeeIt(): void
     {
-        self::assertSame('a < b i <3 oraz [minos:blokuj] [[fragment]]', Text::plain('a < b i <3 oraz [minos:blokuj] [[fragment]]'));
+        self::assertSame("Pogrubione i opis linku (https://example.com/a)\nkolor duże",
+            Text::visible("[b]Pogrubione[/b] i [url=https://example.com/a]opis linku[/url]\r\n[color=red]kolor[/color] [size=large]duże[/size]"));
+        self::assertSame('Zdjęcie: https://example.com/a.png koniec', Text::visible('Zdjęcie: [img]https://example.com/a.png[/img] [attachment=12] koniec'));
+        self::assertSame('https://example.com/b.png', Text::visible('[img=100x50 align=left]https://example.com/b.png[/img]'));
+        self::assertSame('https://youtu.be/x', Text::visible('[video=youtube]https://youtu.be/x[/video]'));
+        self::assertSame("a\nb", Text::visible('[list][*]a[*]b[/list]'));
+        self::assertSame("[b]\ni nie [i]zamknięte", Text::visible('[code][b][/code] i nie [i]zamknięte'), 'a code block is shown as written');
+    }
+
+    public function testAQuoteShowsItsAuthorAndItsText(): void
+    {
+        $visible = Text::visible("[quote=\"Ktoś\" pid='3' dateline='1700000000']cytowana [quote=Inny]głębiej[/quote] treść[/quote]\nMoja odpowiedź");
+        self::assertSame("Ktoś napisał(a):\ncytowana\nInny napisał(a):\ngłębiej\ntreść\n\nMoja odpowiedź", $visible);
+        self::assertSame("cytat bez autora", Text::visible('[quote]cytat bez autora[/quote]'));
+    }
+
+    public function testMyCodeMyBBWouldNotParseStaysLiterally(): void
+    {
+        self::assertSame('[spoiler]ukryte[/spoiler] [minos:blokuj] [[fragment]]', Text::visible('[spoiler]ukryte[/spoiler] [minos:blokuj] [[fragment]]'));
+        self::assertSame('[b]pogrubione[/b]', Text::visible('[b]pogrubione[/b]', ['allowmycode' => 0]), 'MyCode off');
+        self::assertSame('[img]nie-adres[/img]', Text::visible('[img]nie-adres[/img]'));
     }
 
     public function testTheCutIsAtThreeThousandCharactersNotBytes(): void
@@ -49,24 +73,21 @@ final class TextTest extends TestCase
 
         $short = Text::forPost(str_repeat('ż', Text::MAX_CHARS));
         self::assertFalse($short['truncated']);
-        self::assertSame(Text::MAX_CHARS, $short['text_len']);
     }
 
     public function testANewThreadsSubjectIsAssessedInFrontOfItsPost(): void
     {
-        $sent = Text::forPost('Treść postu.', 'Tytuł wątku');
-        self::assertSame("Tytuł wątku\n\nTreść postu.", $sent['tekst']);
-        self::assertSame(mb_strlen("Tytuł wątku\n\n", 'UTF-8'), $sent['prefix_len']);
+        $sent = Text::forPost('Treść postu.', 'Tytuł <wątku> &#33;');
+        self::assertSame("Tytuł <wątku> !\n\nTreść postu.", $sent['tekst'], 'a subject is always shown escaped');
+        self::assertSame(mb_strlen("Tytuł <wątku> !\n\n", 'UTF-8'), $sent['prefix_len']);
         self::assertSame('Treść postu.', Text::tail($sent['tekst'], $sent['prefix_len']));
-
-        $replyOnly = Text::forPost('Treść postu.');
-        self::assertSame(0, $replyOnly['prefix_len']);
+        self::assertSame(0, Text::forPost('Treść postu.')['prefix_len']);
     }
 
-    public function testAPostWithNoTextSendsNothing(): void
+    public function testAPostReadersSeeNoTextInSendsNothing(): void
     {
-        self::assertSame('', Text::forPost('[img]https://example.com/a.png[/img]')['tekst']);
-        self::assertSame('Tytuł', Text::forPost('[img]https://example.com/a.png[/img]', 'Tytuł')['tekst']);
+        self::assertSame('', Text::forPost('[attachment=7]')['tekst']);
+        self::assertSame('Tytuł', Text::forPost('[attachment=7]', 'Tytuł')['tekst']);
     }
 
     public function testBrokenUtf8BecomesValidText(): void
@@ -76,9 +97,18 @@ final class TextTest extends TestCase
         self::assertNotFalse(json_encode($sent['tekst']));
     }
 
-    public function testLinksAreCountedOnce(): void
+    public function testLinksAndTheirRegistrableDomains(): void
     {
-        self::assertSame(2, Text::links('https://a.example/x [url=https://a.example/x]x[/url] www.b.example i tyle'));
-        self::assertSame(0, Text::links('bez linków'));
+        $message = 'https://a.example.com/x [url=https://a.example.com/x]x[/url] www.b.example.co.uk '
+            . '[img]http://img.sklep.com.pl/a.png[/img] http://192.0.2.7/x https://A.Example.com/y';
+        self::assertSame(5, Text::links($message));
+        self::assertSame(['example.com', 'example.co.uk', 'sklep.com.pl'], Text::linkDomains($message));
+        self::assertSame([], Text::linkDomains('bez linków'));
+
+        $many = '';
+        for ($i = 0; $i < 15; $i++) {
+            $many .= " https://site{$i}.example{$i}.org/";
+        }
+        self::assertCount(Text::MAX_DOMAINS, Text::linkDomains($many));
     }
 }

@@ -35,6 +35,19 @@ if (!function_exists('is_moderator')) {
     }
 
     /**
+     * MyBB: a forum's row. Here: its parsing options as the test set them, over MyBB's
+     * defaults for a new forum (HTML off, MyCode on).
+     *
+     * @return array<string,mixed>
+     */
+    function get_forum($fid, $active_override = 0)
+    {
+        return ($GLOBALS['minos_test']['forums'][(int)$fid] ?? []) + [
+            'fid' => (int)$fid, 'allowhtml' => 0, 'allowmycode' => 1, 'allowimgcode' => 1, 'allowvideocode' => 1,
+        ];
+    }
+
+    /**
      * MyBB: writes `inc/settings.php` from the settings table. Here: reloads `$mybb->settings`.
      */
     function rebuild_settings()
@@ -82,7 +95,7 @@ if (!function_exists('is_moderator')) {
 
 if (!class_exists('Moderation', false)) {
     /**
-     * MyBB's `Moderation`: the four methods the plugin calls. Visibility changes as MyBB's
+     * MyBB's `Moderation`: the six methods the plugin calls. Visibility changes as MyBB's
      * do (`1` approved, `-1` soft-deleted; a thread's first post follows its thread); the
      * counters MyBB rebuilds are not modelled — the calls are recorded instead.
      */
@@ -101,6 +114,22 @@ if (!class_exists('Moderation', false)) {
         {
             $this->record('approve_threads', $tids);
             $this->threads($tids, 1, 0);
+            return true;
+        }
+
+        /** @param array<int,int> $pids */
+        public function unapprove_posts($pids)
+        {
+            $this->record('unapprove_posts', $pids);
+            $this->posts($pids, 0, 1);
+            return true;
+        }
+
+        /** @param array<int,int> $tids */
+        public function unapprove_threads($tids)
+        {
+            $this->record('unapprove_threads', $tids);
+            $this->threads($tids, 0, 1);
             return true;
         }
 

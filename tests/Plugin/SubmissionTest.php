@@ -42,13 +42,49 @@ final class SubmissionTest extends PluginTestCase
         self::assertSame('mybb:' . $pid, $item['id']);
         self::assertMatchesRegularExpression('/^[A-Za-z0-9._:-]{1,64}$/', $item['id'], 'the contract\'s id alphabet');
         self::assertSame('forum_adult', $item['profil']);
-        self::assertSame([], array_diff(array_keys($item['meta']), ['links', 'author_first_post']));
+        self::assertSame([], array_diff(array_keys($item['meta']), ['links', 'link_domains', 'author_first_post']));
         self::assertSame(2, $item['meta']['links']);
+        self::assertSame(['example.com', 'example.org'], $item['meta']['link_domains']);
 
         $raw = $this->forum->transport->requests[0]['body'];
         foreach (['autor@example.com', '203.0.113.77', 'Autor Testowy', '"uid', '"email', '"ip', '"username', '"' . self::UID . '"'] as $personal) {
             self::assertStringNotContainsString($personal, $raw, "the body must not carry {$personal}");
         }
+    }
+
+    public function testTheTextIsWhatReadersOfTheForumSee(): void
+    {
+        $this->heldReply('Miłego dnia <b TY_OBELGA_WIDOCZNA>');
+        self::assertSame('Miłego dnia <b TY_OBELGA_WIDOCZNA>', $this->forum->transport->lastBody()['elementy'][0]['tekst'],
+            'HTML is off by default: readers see the brackets and every word');
+
+        $GLOBALS['minos_test']['forums'][Forum::FID] = ['allowhtml' => 1];
+        $this->heldReply('Miłego dnia <b TY_OBELGA_WIDOCZNA> <img src="https://example.com/a.png" alt="OBELGA_ALT">');
+        self::assertSame('Miłego dnia OBELGA_ALT', $this->forum->transport->lastBody()['elementy'][0]['tekst']);
+    }
+
+    public function testAPostThatFailedValidationRaisesNoFlag(): void
+    {
+        $handler = new FakePostHandler('insert', 'post', ['uid' => self::UID, 'fid' => Forum::FID, 'tid' => 1, 'message' => 'x']);
+        $handler->errors = [['error_code' => 'message_too_short']];
+        $GLOBALS['plugins']->run_hooks('datahandler_post_validate_post', $handler);
+        self::assertSame(0, $this->forum->mybb->user['moderateposts']);
+    }
+
+    public function testTheFormShownAgainPutsTheFlagBack(): void
+    {
+        // A later validate hook (another plugin's) refused the post after this one held it.
+        $handler = new FakePostHandler('insert', 'post', ['uid' => self::UID, 'fid' => Forum::FID, 'tid' => 1, 'message' => 'x']);
+        $GLOBALS['plugins']->run_hooks('datahandler_post_validate_post', $handler);
+        self::assertSame(1, $this->forum->mybb->user['moderateposts']);
+        $nothing = '';
+        $GLOBALS['plugins']->run_hooks('newreply_start', $nothing);
+        self::assertSame(0, $this->forum->mybb->user['moderateposts']);
+
+        $thread = new FakePostHandler('insert', 'thread', ['uid' => self::UID, 'fid' => Forum::FID, 'message' => 'x']);
+        $GLOBALS['plugins']->run_hooks('datahandler_post_validate_thread', $thread);
+        $GLOBALS['plugins']->run_hooks('newthread_start', $nothing);
+        self::assertSame(0, $this->forum->mybb->user['moderateposts']);
     }
 
     public function testAuthorFirstPostComesFromPostnumAndIsOmittedForGuests(): void
@@ -161,12 +197,12 @@ final class SubmissionTest extends PluginTestCase
 
     public function testAPostWithNoTextGetsTheFailureModeWithoutARequest(): void
     {
-        $held = $this->heldReply('[img]https://example.com/a.png[/img]');
+        $held = $this->heldReply('[attachment=4]');
         self::assertSame([], $this->forum->transport->requests);
         self::assertSame([Status::HELD, Status::REASON_NO_TEXT], [$this->forum->row($held)['status'], $this->forum->row($held)['verdict']]);
 
         $this->forum->set(['minos_failure_mode' => 'fail-open']);
-        $published = $this->heldReply('[img]https://example.com/b.png[/img]');
+        $published = $this->heldReply('[attachment=5]');
         self::assertSame(1, (int)$this->forum->post($published)['visible']);
     }
 
