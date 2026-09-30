@@ -56,6 +56,32 @@ final class TextTest extends TestCase
         self::assertSame("cytat bez autora", Text::visible('[quote]cytat bez autora[/quote]'));
     }
 
+    /**
+     * @dataProvider refusedOptions
+     */
+    public function testATagWhoseValueMyBBRefusesStaysOnThePage(string $message): void
+    {
+        self::assertSame($message, Text::visible($message));
+    }
+
+    /** @return array<string,array{0:string}> */
+    public function refusedOptions(): array
+    {
+        return [
+            'size'  => ['[size=OBELGA]x[/size]'],
+            'align' => ['[align=OBELGA]x[/align]'],
+            'color' => ['[color=zła osoba]x[/color]'],
+            'font'  => ['[font=Żółć]x[/font]'],
+        ];
+    }
+
+    public function testATagWhoseValueMyBBAcceptsGoes(): void
+    {
+        self::assertSame('a b c d e f g',
+            Text::visible('[size=12]a[/size] [size=x-large]b[/size] [align=justify]c[/align] [color=#f00]d[/color] '
+                . '[color=Red]e[/color] [font="Arial, sans-serif"]f[/font] [font=Times New Roman]g[/font]'));
+    }
+
     public function testMyCodeMyBBWouldNotParseStaysLiterally(): void
     {
         self::assertSame('[spoiler]ukryte[/spoiler] [minos:blokuj] [[fragment]]', Text::visible('[spoiler]ukryte[/spoiler] [minos:blokuj] [[fragment]]'));

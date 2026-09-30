@@ -21,8 +21,9 @@ namespace Minos\MyBB;
  *   quoted text; `[url=X]Y[/url]` becomes "Y (X)"; `[img]X[/img]` and `[video=…]X[/video]`
  *   become the address X; `[code]` and `[php]` keep their content as written; formatting
  *   tags go and their text stays. MyCode MyBB would not parse — an unknown tag, a tag
- *   without its pair, any tag in a forum with MyCode off — stays literally, as readers see
- *   it.
+ *   without its pair, a `[size]`, `[align]`, `[color]` or `[font]` whose value MyBB's
+ *   patterns refuse (`[size=OBELGA]`), any tag in a forum with MyCode off — stays
+ *   literally, as readers see it.
  *
  * Only the FIRST 3000 characters are sent; {@see Applier} does not publish a cut post on a
  * verdict about its beginning. Works without mbstring (PCRE with `/u`). No PHP 8 syntax.
@@ -211,8 +212,15 @@ final class Text
         $text = self::quotes($text);
 
         $find = [
-            '#\[(b|u|i|s|url|email|color)\](.*?)\[/\1\]#is'                                            => '$2',
-            '#\[(email|color|size|font|align)=[^\]\n]*\](.*?)\[/\1\]#is'                              => '$2',
+            '#\[(b|u|i|s|url|email)\](.*?)\[/\1\]#is'                                                  => '$2',
+            '#\[email=[^\]\n]*\](.*?)\[/email\]#is'                                                   => '$1',
+            // Only the option values MyBB 1.8.41's parser accepts (class_parser.php, the
+            // color/size/align/font patterns); any other value leaves the tag on the page.
+            '#\[color=([a-zA-Z]*|\#?[\da-fA-F]{3}|\#?[\da-fA-F]{6})\](.*?)\[/color\]#si'                => '$2',
+            '#\[size=(xx-small|x-small|small|medium|large|x-large|xx-large)\](.*?)\[/size\]#si'           => '$2',
+            '#\[size=([0-9\+\-]+?)\](.*?)\[/size\]#si'                                                  => '$2',
+            '#\[align=(left|center|right|justify)\](.*?)\[/align\]#si'                                   => '$2',
+            '#\[font=\s*("?)([a-z0-9 ,\-_\'"]+)\1\s*\](.*?)\[/font\]#si'                                => '$3',
             '#\[img(?:=[1-9][0-9]*x[1-9][0-9]*)?(?: align=(?:left|right))?\]\s*(https?://[^<>"\']+?)\[/img\]#is' => '$1',
             '#\[url=((?!javascript)[a-z]+?://)([^\r\n"<]+?)\](.+?)\[/url\]#si'                         => '$3 ($1$2)',
             '#\[url=((?!javascript:)[^\r\n"<&\(\)]+?)\](.+?)\[/url\]#si'                               => '$2 ($1)',
