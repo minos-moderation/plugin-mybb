@@ -235,7 +235,8 @@ final class Text
             }
         }
 
-        return (string)preg_replace_callback("#\x00([0-9]+)\x00#", static function (array $m) use ($blocks): string {
+        // PCRE's own `\x00` escape: PHP before 8.2 refuses a literal NUL byte in a pattern.
+        return (string)preg_replace_callback('#\x00([0-9]+)\x00#', static function (array $m) use ($blocks): string {
             return "\n" . $blocks[(int)$m[1]] . "\n";
         }, $text);
     }
