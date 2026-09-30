@@ -1,0 +1,38 @@
+{
+    "name": "minos-moderation/plugin-mybb",
+    "description": "Minos for MyBB 1.8: sends new posts to the Wergiliusz gateway and applies the verdict it delivers to a signed webhook",
+    "type": "project",
+    "license": "GPL-2.0-only",
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/minos-moderation/client-php"
+        }
+    ],
+    "require": {
+        "php": ">=7.4",
+        "ext-curl": "*",
+        "ext-json": "*",
+        "minos-moderation/client-php": "dev-main"
+    },
+    "require-dev": {
+        "ext-pdo_sqlite": "*",
+        "phpunit/phpunit": "^9.6"
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Minos\\MyBB\\": "inc/plugins/minos/src/",
+            "Minos\\MyBB\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
+    "config": {
+        "platform": {
+            "php": "7.4.33"
+        },
+        "sort-packages": true
+    },
+    "minimum-stability": "stable"
+}
