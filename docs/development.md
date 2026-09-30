@@ -26,7 +26,7 @@ The classes:
 |---|---|
 | `Platform` | The ONE adapter to MyBB: globals, functions, `Moderation`, tables, the ACP page object. |
 | `Settings` | Reads and checks the settings; everything that decides publish or hold is read fail-closed. |
-| `Text` | Post → `tekst`: MyCode/HTML stripped, the first 3000 characters. |
+| `Text` | Post → `tekst`: what readers see (MyBB's rendering rules, per forum), the first 3000 characters; the link signals. |
 | `Gateway` | `POST /api/v1/b2b/oceny` over cURL; reads answers into accepted / retry / config error. |
 | `Submitter` | The hold (validate hooks), the submission (insert-end hooks), resubmission, edits. |
 | `Receiver` | The webhook's checklist: method, signature, payload, id, claim, apply. |
@@ -52,7 +52,37 @@ its own moderated path. `Submitter::onInserted` (on `datahandler_post_insert_pos
 the row and sends the item.
 
 A post MyBB would hold anyway (the forum moderates new posts or threads for the user's
-group, or the user is under moderation) is left alone: humans asked for those.
+group, or the user is under moderation) is left alone: humans asked for those. A post
+whose validation already failed (`get_errors()`) raises no flag, and `newreply_start` /
+`newthread_start` (the form shown again after a later validate hook refused the post) put
+it back.
+
+**Subscription notifications are not sent** for held posts. `insert_post` and
+`insert_thread` build them inline (`inc/datahandlers/post.php`, the thread-subscription
+block of `insert_post` and the forum-subscription block of `insert_thread`, only when
+`visible == 1`); MyBB 1.8.41 has no function that sends them, and neither
+`Moderation::approve_*` nor `modcp.php`/`moderation.php` send any on approval — the same
+as for manually moderated posts. Sending them would mean copying that block (per-subscriber
+permissions, languages, `send_pm`, the mail queue); that is a separate decision.
+
+## What `tekst` is
+
+The text readers SEE, following MyBB's own text renderer
+(`Postparser::text_parse_message`) and the forum's `allowhtml`/`allowmycode`/
+`allowvideocode` (`get_forum`):
+
+- HTML off (MyBB's default): `<…>` is literal on the page and stays; only decimal numeric
+  entities are decoded (`htmlspecialchars_uni` lets them through). HTML on: tags go, the
+  text of `alt`/`title` stays, `<script>`/`<style>` go with their content, entities are
+  decoded.
+- MyCode: `[quote=NAME]` → "NAME napisał(a):"; `[url=X]Y[/url]` → "Y (X)"; `[img]X[/img]`,
+  `[video=…]X[/video]` → X; `[code]`/`[php]` keep their content; formatting tags go; MyCode
+  MyBB would not parse stays literally.
+- A new thread's subject goes in front (always escaped, never parsed). Only the first 3000
+  characters are sent.
+- `meta`: `links` (distinct links), `link_domains` (up to 10 registrable domains — the last
+  two host labels, or three under a two-label public suffix from a short list; an
+  approximation of the Public Suffix List), `author_first_post` for registered authors.
 
 ## The row's life
 
@@ -63,15 +93,28 @@ insert ─► retry ──202──► pending ──webhook──► applying �
             │ ▲                                              superseded | gone
             │ └─ 429/503/no answer: retry_at = ponow_za_s, or 60 s doubling to 1 h
             └─ other 4xx: failure mode (config_error); ACP notice
-pending/retry older than the timeout ─► failure mode (timeout)
+pending/retry older than the timeout (≥ 20 min) ─► failure mode (timeout)
+fail-open ─► published + auto_published ──late webhook──► applying ─► held | censored | published
 an edit while retry/pending ─► superseded (the post stays in MyBB's queue)
+an edit of an auto-published post ─► auto_published = 0 (a late verdict no longer applies)
+applying for more than 5 min ─► back to claimed_from (the task)
 ```
 
 - A row starts as `retry` with `retry_at` a minute ahead, so a request that dies half-way
   is sent again by the task and never mistaken for an accepted one.
-- `Platform::claimPending` moves a row from `pending`/`retry` to `applying` with one
-  conditional `UPDATE`; only the caller that changed it applies anything. Repeated and
-  concurrent deliveries, and the task beside the webhook, apply nothing twice.
+- `Platform::claimPending` moves a row from `pending`/`retry` (or, for a late verdict, from
+  an `auto_published` `published`) to `applying` with a conditional `UPDATE`, recording
+  `claimed_from` and `claimed_at`; only the caller that changed it applies anything.
+  Repeated and concurrent deliveries, and the task beside the webhook, apply nothing twice.
+  The task gives back claims older than 5 minutes (their holder died).
+- The receive timeout is at least 20 minutes (the gateway's 15-minute TTL plus grace). A
+  post the failure mode published (`fail-open`) is marked `auto_published`; a verdict that
+  still arrives is applied by `Applier::late` while the post is public and untouched
+  (`zablokowane` → `unapprove`, `ocenzurowane` → by setting). A moderator's action (the
+  post's visibility changed) or an edit (the update hook clears the mark) makes the human
+  decision final.
+- A publishing verdict (`bezpieczne`) for a post cut at 3000 characters goes to the failure
+  mode (`truncated`): the verdict judged the beginning only.
 - The submission records the gateway's answer only while the row is still `retry`, so a
   verdict that arrived before the `202` is not overwritten.
 - Before applying, the post is read again: gone → `gone`; no longer unapproved (a moderator
@@ -79,7 +122,9 @@ an edit while retry/pending ─► superseded (the post stays in MyBB's queue)
 - The masked text replaces the message only when it stands for the whole post (see
   `Applier`): not when the text sent was cut, not when its length differs from what was
   sent (the contract masks one `█` per character), not when a mask falls in a new thread's
-  subject, and not when only the subject remains. The original goes into the row first.
+  subject, and not when only the subject remains. The original goes into the row first,
+  and the new message is read back before the post is approved: a message that could not
+  be written keeps the post held.
 
 `PREFIX_minos_log` holds events with a code and a post id — never content, a key or a
 secret. Log entries are kept 30 days, decided rows 90 days.
@@ -106,10 +151,11 @@ hook functions MyBB would call are the ones tested:
 `bin/build-zip.sh --stage-only`, serves the staged forum root with PHP's built-in server
 (the real `minos-webhook.php`, with a fake `inc/init.php` over the SQLite file the test
 shares — the plugin's classes and the client library then load from the STAGED tree
-through the plugin's own autoloader), serves the mock gateway from
-`vendor/minos-moderation/client-php/mock-gateway`, posts through the hooks with the real
-cURL transport, and runs the mock's worker to deliver. CI runs everything on PHP 7.4 and
-8.3.
+through the plugin's own autoloader) and the mock gateway from
+`vendor/minos-moderation/client-php/mock-gateway`. `fixtures/forum-cli.php`, run from the
+staged root too, installs the plugin and posts through its hooks with the real cURL
+transport, so both sides run the distributable; the mock's worker delivers, including a
+censored post published over HTTP. CI runs everything on PHP 7.4 and 8.3.
 
 ## Against the mock gateway by hand
 
@@ -130,11 +176,9 @@ verdict with markers in a post: `[minos:blokuj]`, `[minos:cenzuruj]` with `[[fra
 `[minos:zly-podpis]`, `[minos:cisza]`. Never post real users' content to the mock: it keeps
 its queue as plain JSON on disk.
 
-One difference matters here: the mock masks `[[głupi]]` as `█████`, dropping the four
-brackets, so its `ocenzurowany` is shorter than the text it was sent. The contract masks
-one character per character, and the plugin refuses to publish a masked text of another
-length, so against the mock a `[minos:cenzuruj]` post stays in the queue (the unit tests
-cover the publishing path).
+The mock masks `[[głupi]]` as `[[█████]]`, one character per character as the contract
+does (client-php `f85c6ed` and later), so a `[minos:cenzuruj]` post is published with its
+masked text; the plugin refuses a masked text of another length.
 
 ## Building the distributable
 
@@ -171,7 +215,11 @@ reading the code, not by running a live forum:
 | `Moderation::approve_posts`, `approve_threads`, `soft_delete_posts`, `soft_delete_threads` (counters and last post rebuilt inside) | `inc/class_moderation.php` | `Platform::approve`, `softDelete` |
 | `is_moderator($fid, '', $uid)` (super moderators included), `forum_permissions()['modposts'/'modthreads']` | `inc/functions.php` | `Platform` |
 | `get_post_link`, `rebuild_settings` | `inc/functions.php` | `Platform` |
-| settings groups and settings (the `hello` plugin's pattern), `optionscode` types `onoff`, `yesno`, `text`, `numeric` with `min`/`max`, `select`, `forumselect`, `php` (evaluated as a double-quoted string; its "Edit setting" page refused) | `admin/modules/config/settings.php`, `inc/plugins/hello.php` | `Installer`, `Platform::saveSettings` |
+| settings groups and settings (the `hello` plugin's pattern), `optionscode` types `onoff`, `yesno`, `text`, `numeric` with `min`/`max`, `select`, `forumselect`, `php` (evaluated as a double-quoted string; its "Edit setting" page refused; disabled while the plugin is deactivated) | `admin/modules/config/settings.php`, `inc/plugins/hello.php` | `Installer`, `Platform::saveSettings`, `setOptionscode` |
+| `newreply_start` / `newthread_start` (the form shown again after errors), `DataHandler::get_errors` | `newreply.php`, `newthread.php`, `inc/datahandler.php` | `Submitter` |
+| `get_forum()['allowhtml'/'allowmycode'/'allowimgcode'/'allowvideocode']`, `htmlspecialchars_uni`, `Postparser::text_parse_message` (the rules `Text` follows) | `inc/functions.php`, `inc/class_parser.php` | `Platform::forumParsing`, `Text` |
+| `Moderation::unapprove_posts`, `unapprove_threads` | `inc/class_moderation.php` | `Platform::unapprove` (a late `zablokowane`) |
+| subscription notifications: inline in `insert_post`/`insert_thread`, only for `visible == 1`; none on approval | `inc/datahandlers/post.php`, `inc/class_moderation.php`, `modcp.php` | not sent (see above) |
 | `admin_config_settings_change` before `upsetting` is saved | `admin/modules/config/settings.php` | `Admin::onSettingsChange` |
 | `admin_formcontainer_output_row` (references; a setting row's `row_options['id']` is `row_setting_<name>`) | `admin/inc/class_form.php` | `Admin::onFormRow` |
 | `admin_tools_action_handler`, `admin_tools_menu_logs`, `admin_tools_permissions`, `admin_load` before the module file is required | `admin/modules/tools/module_meta.php`, `admin/index.php` | `Admin` |
@@ -184,8 +232,12 @@ reading the code, not by running a live forum:
 
 Not verified — to check on a live forum before a release:
 
-- The MySQL and PostgreSQL `CREATE TABLE` statements and `CREATE INDEX IF NOT EXISTS`
-  (PostgreSQL 9.5+): only the SQLite ones run in the tests.
+- The MySQL and PostgreSQL `CREATE TABLE` statements (no `ENGINE` clause: the server's
+  default) and `CREATE INDEX IF NOT EXISTS` (PostgreSQL 9.5+): only the SQLite ones run in
+  the tests.
+- The pending table gained `auto_published`, `claimed_at` and `claimed_from` before any
+  release; a table created by the unreleased first draft (`0146a3a`) lacks them — drop it
+  (uninstall with "Tak") before reinstalling.
 - `affected_rows()` after the claim's conditional `UPDATE` on MySQL (it counts changed
   rows; the claim always changes `status`, so it should read 1).
 - Other plugins hooked on `class_moderation_*`: in the webhook and the task there is no

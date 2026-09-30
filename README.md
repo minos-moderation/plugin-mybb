@@ -13,7 +13,7 @@ Minos.
 
 1. Użytkownik wysyła nowy post albo wątek. Wtyczka prosi MyBB, żeby potraktował go jak
    post użytkownika pod moderacją: post trafia do zwykłej kolejki moderacji forum
-   (niewidoczny, liczniki i powiadomienia subskrybentów wstrzymane — dokładnie jak przy
+   (niewidoczny, liczniki forum nie uwzględniają go aż do publikacji — dokładnie jak przy
    ręcznej moderacji).
 2. Wtyczka wysyła tekst postu do bramy (`POST /api/v1/b2b/oceny`, do 10 sekund). Brama
    odpowiada od razu, że przyjęła post do oceny.
@@ -71,7 +71,7 @@ Minos.
 | Sekret webhooka | Sekret do sprawdzania podpisu werdyktów. Zapisywany i pokazywany jak klucz. | — |
 | Profil oceny | `forum_adult` (forum dla dorosłych) albo `forum_teen` (forum dla młodzieży). Musi być na liście profili klucza. | `forum_adult` |
 | Tryb awaryjny | Co zrobić z postem bez werdyktu: **zostawić w kolejce moderacji** (fail-closed) albo **opublikować bez oceny** (fail-open). | fail-closed |
-| Czas oczekiwania na werdykt | Minuty, po których post bez werdyktu dostaje tryb awaryjny. 20 = 15 minut, przez które brama próbuje doręczyć werdykt, i 5 minut zapasu. | 20 |
+| Czas oczekiwania na werdykt | Minuty, po których post bez werdyktu dostaje tryb awaryjny. **Najmniej 20** = 15 minut, przez które brama próbuje doręczyć werdykt, i 5 minut zapasu; mniejsza wartość jest traktowana jak 20. | 20 |
 | Post ocenzurowany | **Opublikuj zamaskowany tekst** albo **zostaw w kolejce moderacji**. | opublikuj |
 | Post zablokowany | **Zostaw w kolejce moderacji** albo **usuń (miękko)** — moderator może go przywrócić. | zostaw w kolejce |
 | Fora | Fora, w których wtyczka moderuje nowe posty. | wszystkie |
@@ -79,6 +79,10 @@ Minos.
 
 Gdy wtyczka jest włączona, ale czegoś brakuje (klucza, sekretu, poprawnego adresu bramy),
 nie zatrzymuje nowych postów, a każda strona panelu administratora mówi, czego brakuje.
+
+**Klucz i sekret zapisuj przy aktywnej wtyczce.** Zapisuje je kod wtyczki, więc przy
+dezaktywowanej wtyczce pola klucza i sekretu są wyłączone (z informacją, dlaczego) —
+wpisana wartość i tak nie zostałaby zapisana.
 
 ## Które posty trafiają do oceny
 
@@ -91,15 +95,20 @@ użytkownik jest pod moderacją) — o tych decydują ludzie, tak jak ustawiono 
 
 Wysyłane jest tylko:
 - identyfikator `mybb:<numer postu>` — bez żadnej treści;
-- tekst postu bez znaczników MyCode i HTML, **tylko pierwsze 3000 znaków** (limit bramy);
-  przy nowym wątku z tytułem na początku. Cytaty zostają, bo są widoczne na stronie;
-  adresy obrazków i filmów oraz załączniki są pomijane;
+- tekst postu **taki, jaki widzą czytelnicy**, tylko pierwsze 3000 znaków (limit bramy);
+  przy nowym wątku z tytułem na początku. Wtyczka odtwarza to, co MyBB pokazuje na stronie:
+  - na forum bez HTML (domyślnie) znaki `<…>` są zwykłym tekstem i zostają w całości;
+    na forum z HTML znaczniki znikają, ale tekst z atrybutów `alt` i `title` zostaje;
+  - cytat `[quote=NAZWA]` staje się „NAZWA napisał(a):” i cytowanym tekstem;
+    `[url=ADRES]opis[/url]` — „opis (ADRES)”; `[img]ADRES[/img]` i filmy — samym adresem;
+  - MyCode, którego MyBB nie rozpozna (nieznany znacznik, znacznik bez pary, forum
+    z wyłączonym MyCode), zostaje dosłownie — tak jak widzi go czytelnik;
 - profil oceny;
-- dwa sygnały antyspamowe: liczba linków w poście i — dla zarejestrowanego autora —
-  czy to jego pierwszy post.
+- sygnały antyspamowe: liczba linków w poście, domeny tych linków (najwyżej 10, np.
+  `example.com`) i — dla zarejestrowanego autora — czy to jego pierwszy post.
 
-**Nigdy** nie są wysyłane: adres e-mail, adres IP, nazwa ani numer użytkownika, załączniki,
-obrazki ani dalsza część postu ponad 3000 znaków.
+**Nigdy** nie są wysyłane: adres e-mail, adres IP, nazwa ani numer użytkownika, załączniki
+ani dalsza część postu ponad 3000 znaków.
 
 ## Werdykty
 
@@ -111,11 +120,17 @@ obrazki ani dalsza część postu ponad 3000 znaków.
 | `nieocenione` | tryb awaryjny |
 | `wsparcie` | niezależnie od werdyktu oznacza post w dzienniku wtyczki: autor może potrzebować wsparcia, nie kary |
 
+**Post dłuższy niż 3000 znaków**: brama oceniła tylko jego początek, więc werdykt
+`bezpieczne` nie wystarcza do publikacji — post dostaje tryb awaryjny (fail-closed: zostaje
+w kolejce z uwagą „wpis dłuższy niż 3000 znaków — oceniono początek”; fail-open: zostaje
+opublikowany). Werdykt `zablokowane` działa normalnie, a `ocenzurowane` zawsze zostawia
+taki post w kolejce.
+
 Opublikowany post ocenzurowany jest **zwykłym tekstem**: traci formatowanie MyCode, bo brama
-maskuje tekst bez znaczników. Oryginał zostaje w tabeli wtyczki (przez 90 dni). Post
-ocenzurowany zawsze zostaje w kolejce, gdy: był dłuższy niż 3000 znaków, brama zamaskowała
-coś w tytule wątku, zamaskowany tekst ma inną długość niż wysłany albo brama nie przysłała
-zamaskowanego tekstu.
+maskuje tekst, który zobaczyli czytelnicy. Oryginał zostaje w tabeli wtyczki (przez 90 dni).
+Post ocenzurowany zawsze zostaje w kolejce, gdy: był dłuższy niż 3000 znaków, brama
+zamaskowała coś w tytule wątku, zamaskowany tekst ma inną długość niż wysłany, brama nie
+przysłała zamaskowanego tekstu albo nie udało się zapisać zamaskowanej treści.
 
 Jeśli moderator zdąży zatwierdzić albo usunąć post, zanim nadejdzie werdykt, wtyczka go nie
 rusza — decyzja człowieka wygrywa. Edycja postu czekającego na werdykt też zostawia go
@@ -129,10 +144,14 @@ werdyktu nie ma:
 - werdykt nie nadszedł w czasie oczekiwania;
 - brama odrzuciła wysyłkę z powodu błędu konfiguracji (np. zły klucz, profil spoza listy
   klucza, brak zapisanego webhooka) — kod błędu pojawia się w panelu administratora;
-- post nie ma tekstu do oceny (np. sam obrazek).
+- post nie ma tekstu do oceny (np. sam załącznik);
+- post był dłuższy niż 3000 znaków, a brama uznała jego początek za bezpieczny.
 
 **fail-closed** (domyślnie) zostawia taki post w kolejce moderacji dla człowieka.
-**fail-open** publikuje go bez oceny.
+**fail-open** publikuje go bez oceny — a jeśli werdykt przyjdzie później, wtyczka nadal go
+zastosuje, dopóki nikt nie ruszył postu: `zablokowane` odsyła post z powrotem do kolejki
+moderacji, `ocenzurowane` postępuje według ustawienia „Post ocenzurowany”. Jeśli w tym czasie
+moderator zdecydował o poście albo post został edytowany, decyzja człowieka jest ostateczna.
 
 Gdy brama jest chwilowo przeciążona albo niedostępna (lub nie ma połączenia), post czeka:
 zadanie ponawia wysyłkę po czasie wskazanym przez bramę albo po coraz dłuższej przerwie
@@ -144,8 +163,9 @@ zadanie ponawia wysyłkę po czasie wskazanym przez bramę albo po coraz dłużs
   (czego brakuje), albo gdy brama odrzuciła ostatnią wysyłkę z powodu błędu konfiguracji
   (kod błędu i czas). Znika po pierwszej udanej wysyłce.
 - **Narzędzia i konserwacja → Dzienniki → Minos — dziennik**: stan konfiguracji, adres
-  webhooka, posty wymagające uwagi (zatrzymane w kolejce, czekające na werdykt i oznaczone
-  jako potrzebujące wsparcia) oraz dziennik zdarzeń. Dziennik zawiera wyłącznie kody i
+  webhooka, posty wymagające uwagi (zatrzymane w kolejce, czekające na werdykt, opublikowane
+  bez oceny w trybie fail-open i oznaczone jako potrzebujące wsparcia) oraz dziennik
+  zdarzeń. Dziennik zawiera wyłącznie kody i
   numery postów — nigdy treść, klucz ani sekret. Wpisy starsze niż 30 dni są usuwane.
 
 ## Ograniczenia
@@ -153,7 +173,12 @@ zadanie ponawia wysyłkę po czasie wskazanym przez bramę albo po coraz dłużs
 - Ocenianych jest tylko pierwsze 3000 znaków postu.
 - Tytuły odpowiedzi nie są oceniane (MyBB nadaje im zwykle „RE: …”); tytuł nowego wątku —
   tak.
-- Edycje opublikowanych postów nie są ponownie oceniane.
+- Edycje opublikowanych postów nie są ponownie oceniane (poza zakresem tej wersji).
+- **Subskrybenci wątku i forum NIE dostają powiadomień** (e-mail ani prywatnej wiadomości)
+  o postach, które przeszły przez wtyczkę — także po ich publikacji. MyBB wysyła je tylko
+  w chwili dodania posta widocznego od razu; przy zatwierdzeniu z kolejki moderacji nie
+  wysyła ich wcale (tak samo jest przy ręcznej moderacji), a nie udostępnia funkcji, którą
+  wtyczka mogłaby je wysłać.
 - Informacja „wsparcie” jest widoczna tylko w dzienniku wtyczki, nie w kolejce moderacji
   MyBB.
 - Klucz i sekret są przechowywane jak inne ustawienia MyBB: w bazie danych i w pliku
