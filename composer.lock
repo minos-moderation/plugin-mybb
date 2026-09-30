@@ -12,12 +12,12 @@
             "source": {
                 "type": "git",
                 "url": "https://github.com/minos-moderation/client-php.git",
-                "reference": "fc4beb7625c9119315a560fd04c4c2e49e49f6ae"
+                "reference": "f85c6eda5c34d986703227209b63070b6acb4369"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/minos-moderation/client-php/zipball/fc4beb7625c9119315a560fd04c4c2e49e49f6ae",
-                "reference": "fc4beb7625c9119315a560fd04c4c2e49e49f6ae",
+                "url": "https://api.github.com/repos/minos-moderation/client-php/zipball/f85c6eda5c34d986703227209b63070b6acb4369",
+                "reference": "f85c6eda5c34d986703227209b63070b6acb4369",
                 "shasum": ""
             },
             "require": {
@@ -55,7 +55,7 @@
                 "source": "https://github.com/minos-moderation/client-php/tree/main",
                 "issues": "https://github.com/minos-moderation/client-php/issues"
             },
-            "time": "2026-09-30T14:15:54+00:00"
+            "time": "2026-09-30T15:32:51+00:00"
         }
     ],
     "packages-dev": [
