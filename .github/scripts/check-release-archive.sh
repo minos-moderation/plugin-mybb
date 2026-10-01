@@ -57,9 +57,13 @@ absent 'a .git* entry' '(^|/)\.git[^/]*(/|$)'
 absent 'a CLAUDE.md' '(^|/)CLAUDE\.md$'
 absent 'a .claude/ directory' '(^|/)\.claude(/|$)'
 absent 'a .github/ directory' '(^|/)\.github(/|$)'
+absent "Composer's installed.json (the exact dependency pins)" '(^|/)installed\.json$'
 
+# The licence must be there AND say something: an empty or blank file is no licence.
 if ! grep -F -x -q -- "$licence" <<<"$listing"; then
   fail "the licence $licence is not in the archive"
+elif [ "$(unzip -p "$archive" "$licence" | tr -d '[:space:]' | wc -c)" -eq 0 ]; then
+  fail "the licence $licence in the archive is empty"
 fi
 
 # The version as MyBB shows it: minos_info()'s "version" is Installer::VERSION, read the
@@ -68,6 +72,7 @@ version=''
 if grep -F -x -q -- "$version_file" <<<"$listing"; then
   class_file="$(mktemp)"
   unzip -p "$archive" "$version_file" > "$class_file"
+  # shellcheck disable=SC2016  # PHP code: its $argv is PHP's, not the shell's.
   version="$(php -r 'require $argv[1]; echo Minos\MyBB\Installer::VERSION;' "$class_file" || true)"
   rm -f "$class_file"
 fi
