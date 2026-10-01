@@ -18,6 +18,7 @@ forum:
 | `inc/tasks/minos.php` | `task_minos($task)`, run every 5 minutes by MyBB's task system. |
 | `inc/languages/{polish,english}/minos.lang.php` | Polish texts, byte-identical: MyBB falls back to `english/` when the board's pack has no file, and the plugin serves Polish forums. |
 | `bin/build-zip.sh` | Builds `build/minos-mybb-<version>.zip` (`Upload/`, `README.md`, `LICENSE`). |
+| `.github/workflows/release.yml` | On a `v*` tag: builds the zip, proves it with `.github/scripts/check-release-archive.sh` and attaches it to the GitHub Release. |
 | `tests/` | PHPUnit: stand-ins for MyBB (`Stubs/`, `Support/`), unit tests (`Plugin/`), the end-to-end run (`EndToEnd/`), the Claude Code rules (`Repo/`). |
 
 The classes:
@@ -191,6 +192,38 @@ copies only the client's `src/`, `LICENSE` and `composer.json` under
 `Upload/inc/plugins/minos/vendor/minos-moderation/client-php/` — never its mock gateway or
 tests, which must not become reachable under a forum's web root. `MINOS_VENDOR_DIR`
 points it at an existing `vendor/` instead (the tests use the repository's).
+
+## Releasing
+
+The version lives in ONE place the release workflow checks: `Installer::VERSION` in `inc/plugins/minos/src/Installer.php`, which `minos_info()` reports to MyBB's plugin list and `bin/build-zip.sh` puts in the zip's name. The repository
+keeps no changelog; the release notes are GitHub's generated ones. The workflow, not a
+person, creates the release, and only after its checks pass.
+
+1. Bump `Installer::VERSION` in a pull request, and merge it. On every pull request the `release-archive` job
+   of `tests.yml` already runs the release build and checks against the declared version.
+2. The dry run on `main`: Actions → Release → "Run workflow", branch `main`, the tag to
+   be (`v0.2.0`). It builds and checks exactly as a tag push does and keeps the zip
+   as the run's `release-archive` artifact (7 days); see it green.
+3. The owner creates and pushes the TAG ONLY, on the commit the dry run checked, from a
+   local clone: `git tag -a v0.2.0 -m v0.2.0 <commit>` and `git push origin v0.2.0`.
+   Not GitHub's "Draft a new release" form: a tag created there is published together
+   with its release, before any check. Tag pushes from Claude Code sessions are refused.
+4. The tag's push starts `.github/workflows/release.yml`, which builds `build/minos-mybb-<version>.zip` with `bin/build-zip.sh` on PHP 7.4 and lists it,
+   failing on any hit: `composer.lock`, `tests/`, `phpunit*`, the mock gateway, `.git*`, `CLAUDE.md`, `.claude/`, `.github/`, Composer's `installed.json`; it also fails unless `LICENSE` at the zip's root is inside and not
+   blank, and the zip's `Installer::VERSION` equals the tag without the `v` (the message names both). Only
+   then the `publish` job creates the release with the zip attached (`--verify-tag`,
+   generated notes, a pre-release for a tag with `-`). gh creates it as a draft, uploads,
+   then publishes, so a failed upload leaves a draft, never a release without its asset.
+
+When a release for the tag already exists at that point, `publish` fails and attaches
+nothing: such a release was published unchecked. Delete it (keep the tag) and re-run the
+failed jobs. Nothing replaces an asset (`--clobber` is never used), so a second upload
+fails loudly. A failed check publishes nothing: delete the tag, fix `main`, start again
+from step 1. By hand: `bin/build-zip.sh`, then `.github/scripts/check-release-archive.sh build/minos-mybb-0.1.0.zip v0.1.0`.
+
+Nothing in this repository enforces that only the owner tags (the session refusal lives
+outside GitHub): the owner should add a tag ruleset on `v*` that only they may bypass, or
+a `release` environment with a required reviewer on the `publish` job.
 
 ## Composer
 
