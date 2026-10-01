@@ -53,7 +53,7 @@ final class Installer
             'description'   => $this->platform->lang('minos_description',
                 htmlspecialchars(Settings::webhookUrl($this->platform->boardUrl()), ENT_QUOTES, 'UTF-8')),
             'website'       => 'https://github.com/minos-moderation/plugin-mybb',
-            'author'        => 'Minos',
+            'author'        => 'INPERITIA',
             'authorsite'    => 'https://github.com/minos-moderation',
             'version'       => self::VERSION,
             'compatibility' => '18*',
