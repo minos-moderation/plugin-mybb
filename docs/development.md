@@ -18,6 +18,7 @@ forum:
 | `inc/tasks/minos.php` | `task_minos($task)`, run every 5 minutes by MyBB's task system. |
 | `inc/languages/{polish,english}/minos.lang.php` | Polish texts, byte-identical: MyBB falls back to `english/` when the board's pack has no file, and the plugin serves Polish forums. |
 | `bin/build-zip.sh` | Builds `build/minos-mybb-<version>.zip` (`Upload/`, `README.md`, `LICENSE`). |
+| `.github/workflows/release.yml` | On a `v*` tag: builds the zip, proves it with `.github/scripts/check-release-archive.sh` and attaches it to the GitHub Release. |
 | `tests/` | PHPUnit: stand-ins for MyBB (`Stubs/`, `Support/`), unit tests (`Plugin/`), the end-to-end run (`EndToEnd/`), the Claude Code rules (`Repo/`). |
 
 The classes:
@@ -191,6 +192,36 @@ copies only the client's `src/`, `LICENSE` and `composer.json` under
 `Upload/inc/plugins/minos/vendor/minos-moderation/client-php/` — never its mock gateway or
 tests, which must not become reachable under a forum's web root. `MINOS_VENDOR_DIR`
 points it at an existing `vendor/` instead (the tests use the repository's).
+
+## Releasing
+
+The version lives in ONE place the release workflow checks: `Installer::VERSION` in
+`inc/plugins/minos/src/Installer.php`, which `minos_info()` reports to MyBB's plugin list
+and `bin/build-zip.sh` puts in the zip's name. The repository keeps no changelog; the
+release notes are GitHub's generated ones.
+
+1. Bump `Installer::VERSION` in a pull request, and merge it.
+2. The owner creates the tag `v<version>` (for `0.2.0`, `v0.2.0`) through GitHub Releases:
+   "Draft a new release", a new tag on `main`, publish. Tag pushes from Claude Code
+   sessions are refused, so a session never tags.
+3. The tag's push starts `.github/workflows/release.yml`, which builds
+   `build/minos-mybb-<version>.zip` with `bin/build-zip.sh` on PHP 7.4 and lists it,
+   failing on any hit: `composer.lock`, `tests/`, `phpunit*`, the mock gateway, `.git*`,
+   `CLAUDE.md`, `.claude/`, `.github/`; it also fails unless `LICENSE` is at the zip's
+   root and the zip's `Installer::VERSION` equals the tag without the `v` (the message
+   names both). Only then it attaches the zip to the tag's release: it creates the release
+   (`--verify-tag`, generated notes, a pre-release for a tag with `-`) or, when the owner
+   already published one, replaces the asset (`--clobber`).
+
+A dry run before tagging: Actions → Release → "Run workflow" on a branch, with the tag to
+check the version against. It builds and checks the same way and only keeps the zip as
+the run's `release-archive` artifact (7 days). By hand: `bin/build-zip.sh`, then
+`.github/scripts/check-release-archive.sh build/minos-mybb-0.1.0.zip v0.1.0`.
+
+Before the first public release, `minos-moderation/client-php` needs a tagged version
+(`v0.1.0`) that `composer.json` can require (`^0.1`); until it exists the lock pins a
+commit of `dev-main` (see "Composer"). Moving to the tag is its own change, not part of a
+release.
 
 ## Composer
 
