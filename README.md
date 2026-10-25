@@ -6,8 +6,10 @@ bezpieczny post publikuje, ocenzurowany publikuje z zamaskowanymi fragmentami,
 zablokowany zostawia w kolejce albo usuwa — tak, jak ustawi administrator. Część projektu
 Minos.
 
-> Trasa B2B bramy nie jest jeszcze otwarta produkcyjnie. Do czasu otwarcia wtyczkę można
-> sprawdzić z atrapą bramy (opis dla programistów: `docs/development.md`).
+> Wtyczka korzysta z asynchronicznej trasy bramy (`POST /api/v1/b2b/oceny`), otwartej
+> produkcyjnie od 25 października 2026: brama przyjmuje post od razu, a werdykt odsyła
+> później podpisanym webhookiem. Bez klucza wtyczkę można sprawdzić z atrapą bramy
+> z `minos-moderation/client-php` (opis dla programistów: `docs/development.md`).
 
 ## Jak to działa
 
