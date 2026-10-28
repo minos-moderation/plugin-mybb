@@ -102,8 +102,11 @@ The text readers SEE, following MyBB's own text renderer
   sent (fail-open publishes it marked `auto_published`). A poll is text (S5): an empty body
   with a poll sends the title and the poll.
 - Neither is an image, a video or a link without a label (F7, `Text::shows`): a body whose
-  only visible content is `[img]`/`[img=WxH]`/`[img align=…]` (with the forum's image
-  MyCode on), a `[video=…]` of a site MyBB embeds with a valid address, an attachment,
+  only visible content is `[img]`/`[img=WxH]`/`[img align=…]` as MyBB's own patterns take
+  it (with the forum's image MyCode on; at most one line break before the address), a
+  `[video=…]` MyBB embeds (`Text::embedsVideo` follows `mycode_parse_video` step by step:
+  a site it knows, a valid URL, an id its rule finds — any other stays as typed), an
+  attachment,
   `[url=X]` around a label that shows nothing (blanks, an image, empty formatting), or on an
   HTML forum an `<img>` — its `alt`/`title` notwithstanding — or an `<a>` without text, is
   `no_text`; so is one whose only other characters take no visible place (white space,

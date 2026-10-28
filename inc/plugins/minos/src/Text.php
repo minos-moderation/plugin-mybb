@@ -83,13 +83,6 @@ final class Text
     /** A forum's parsing options when MyBB does not say (its defaults for a new forum). */
     public const DEFAULT_FORUM = ['allowhtml' => 0, 'allowmycode' => 1, 'allowimgcode' => 1, 'allowvideocode' => 1];
 
-    /**
-     * The sites MyBB 1.8.41 embeds a `[video=…]` of (`Postparser::mycode_parse_video`); a
-     * tag of another site stays on the page as typed.
-     */
-    private const VIDEO_SITES = ['dailymotion', 'metacafe', 'myspacetv', 'facebook', 'mixer', 'liveleak',
-        'yahoo', 'vimeo', 'youtube', 'twitch'];
-
     /** A link, for the spam signals. */
     private const LINK = '~(?:https?://|www\.)[^\s\[\]<>"\'()]+~iu';
 
@@ -569,22 +562,119 @@ final class Text
                     return ' ' . (stripos($address, 'data:') === 0 ? $address : $m[$parts[0]]) . ' ';
                 }, $text);
             }
+            // MyBB 1.8.41's own image patterns (`parse_mycode`): at most one line break before
+            // the address, nothing else; any other `[img]` stays on the page as typed.
             if ($images) {
-                $text = self::replace('#\[img(?:=[1-9][0-9]*x[1-9][0-9]*)?(?: align=(?:left|right))?\]\s*(https?://[^<>"\']+?)\[/img\]#is', ' ', $text);
+                $text = self::replace('#\[img(?:=[1-9][0-9]*x[1-9][0-9]*)?(?: align=(?:left|right))?\](?:\r\n?|\n?)https?://[^<>"\']+?\[/img\]#is', ' ', $text);
             }
+            // MyBB's video pattern (no line breaks), and only a video it embeds goes; one it
+            // leaves as typed stays text — and is kept as typed, not read again below.
             if ($video) {
-                $text = self::replaceCallback('#\[video=([a-z0-9_]+)\](.*?)\[/video\]#is', static function (array $m): string {
-                    $embedded = in_array(strtolower($m[1]), self::VIDEO_SITES, true)
-                        && filter_var(trim($m[2]), FILTER_VALIDATE_URL) !== false;
-                    return $embedded ? ' ' : $m[2];
+                $text = self::replaceCallback('#\[video=(.*?)\](.*?)\[/video\]#i', static function (array $m): string {
+                    return self::embedsVideo($m[1], $m[2]) ? ' ' : $m[0];
                 }, $text);
             }
-            $text = self::inline($text, $video);
+            $text = self::inline($text, false);
             if ($text === $before) {
                 break;
             }
         }
         return $text;
+    }
+
+    /**
+     * Whether MyBB 1.8.41 shows a `[video=SITE]URL[/video]` as an embedded player:
+     * `Postparser::mycode_parse_video`, step by step — a site it knows, a valid URL, and an
+     * id its rule for that site finds in the address. Anything else MyBB leaves on the page
+     * as typed (`[video=SITE]URL[/video]`), which is text.
+     */
+    private static function embedsVideo(string $video, string $url): bool
+    {
+        if (empty($video) || empty($url) || filter_var($url, FILTER_VALIDATE_URL) === false) {
+            return false;
+        }
+        $parsed = @parse_url(urldecode($url));
+        if ($parsed === false) {
+            return false;
+        }
+        $fragments = empty($parsed['fragment']) ? [] : explode('&', $parsed['fragment']);
+        if ($video === 'liveleak' && !empty($parsed['query'])) {
+            $parsed['query'] = 'i' . substr($parsed['query'], 1);
+        }
+        $input = [];
+        foreach (empty($parsed['query']) ? [] : explode('&', $parsed['query']) as $query) {
+            $pair = explode('=', $query);
+            if (count($pair) === 2) {
+                $input[str_replace('amp;', '', $pair[0])] = $pair[1];
+            }
+        }
+        $path = empty($parsed['path']) ? [] : explode('/', $parsed['path']);
+        $id = '';
+        switch ($video) {
+            case 'dailymotion':
+                if (!empty($path[2])) {
+                    $id = explode('_', $path[2], 2)[0];
+                } elseif (!empty($path[1])) {
+                    $id = $path[1];
+                }
+                break;
+            case 'metacafe':
+                $id = !empty($path[2]) ? $path[2] : '';
+                break;
+            case 'myspacetv':
+                $id = !empty($path[4]) ? $path[4] : '';
+                break;
+            case 'facebook':
+                if (!empty($input['v'])) {
+                    $id = $input['v'];
+                } elseif (!empty($path[3]) && substr($path[3], 0, 3) === 'vb.' && !empty($path[4])) {
+                    $id = $path[4];
+                } elseif (!empty($path[3])) {
+                    $id = $path[3];
+                }
+                break;
+            case 'mixer':
+                $id = !empty($path[1]) ? $path[1] : '';
+                break;
+            case 'liveleak':
+                $id = !empty($input['i']) ? $input['i'] : '';
+                break;
+            case 'yahoo':
+                if (!empty($path[2])) {
+                    $id = $path[2];
+                } elseif (!empty($path[1])) {
+                    $id = $path[1];
+                }
+                break;
+            case 'vimeo':
+                if (!empty($path[3])) {
+                    $id = $path[3];
+                } elseif (!empty($path[1])) {
+                    $id = $path[1];
+                }
+                break;
+            case 'youtube':
+                if (!empty($fragments[0])) {
+                    $id = str_replace('!v=', '', $fragments[0]);
+                } elseif (!empty($input['v'])) {
+                    $id = $input['v'];
+                } elseif (!empty($path[1])) {
+                    $id = $path[1];
+                }
+                break;
+            case 'twitch':
+                if (count($path) >= 3 && $path[1] === 'videos') {
+                    $id = 'video=v' . $path[2];
+                } elseif (count($path) >= 4 && $path[2] === 'v') {
+                    $id = 'video=v' . $path[3];
+                } elseif (count($path) >= 2) {
+                    $id = 'channel=' . $path[1];
+                }
+                break;
+            default:
+                return false;
+        }
+        return !empty($id);
     }
 
     /**

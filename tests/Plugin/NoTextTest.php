@@ -49,6 +49,10 @@ final class NoTextTest extends PluginTestCase
             'an attachment'               => ['[attachment=4]', []],
             'HTML: an image with alt and title' => ['<img src="https://example.com/a.png" alt="podpis" title="tytuł">', ['allowhtml' => 1]],
             'HTML: a link without text'   => ['<a href="https://example.com/" title="tytuł"> </a>', ['allowhtml' => 1]],
+            // MyBB's own image and video rules (the review of #7, major 2).
+            'an image after one line break' => ["[img]\nhttps://example.com/a.png[/img]", []],
+            'a video whose id MyBB finds on another host' => ['[video=youtube]https://example.com/obelga[/video]', []],
+            'a twitch channel'            => ['[video=twitch]https://example.com/[/video]', []],
             // Characters that take no visible place (the review of #7, major 1).
             'an image and U+200B'         => ["[img]https://example.com/a.png[/img]\u{200B}", []],
             'an image and &#8203;'        => ['[img]https://example.com/a.png[/img]&#8203;', []],
@@ -99,6 +103,15 @@ final class NoTextTest extends PluginTestCase
                 "Ktoś napisał(a):\nhttps://example.com/a.png"],
             'an image and &shy; MyBB shows as typed' => ['[img]https://example.com/a.png[/img]&shy;', [],
                 'https://example.com/a.png&shy;'],
+            'an image tag with a space before its address' => ['[img] https://example.com/ obelga obelga[/img]', [],
+                'https://example.com/ obelga obelga'],
+            'an image tag with two line breaks' => ["[img]\n\nhttps://example.com/a.png[/img]", [], 'https://example.com/a.png'],
+            'a video tag over two lines'  => ["[video=youtube]\nhttps://www.youtube.com/watch?v=dQw4w9WgXcQ[/video]", [],
+                'https://www.youtube.com/watch?v=dQw4w9WgXcQ'],
+            'a video without an id'       => ['[video=youtube]https://www.youtube.com/[/video]', [], 'https://www.youtube.com/'],
+            'a facebook video without an id' => ['[video=facebook]https://example.com/[/video]', [], 'https://example.com/'],
+            'a site name MyBB does not know' => ['[video=YouTube]https://www.youtube.com/watch?v=x[/video]', [],
+                'https://www.youtube.com/watch?v=x'],
             'a word and U+200B'           => ["obelga\u{200B}", [], "obelga\u{200B}"],
             'HTML: an image beside text, its hints with it' => ['Tekst <img src="https://example.com/a.png" alt="podpis">',
                 ['allowhtml' => 1], 'Tekst podpis'],
@@ -142,6 +155,18 @@ final class NoTextTest extends PluginTestCase
         $bomb = 'Widoczne SLOWO ' . str_repeat('[url=http://a.pl]x', 1000);
         self::assertTrue(Text::shows($bomb));
         self::assertTrue(Text::forPost($bomb)['error']);
+    }
+
+    /**
+     * The review's probe: under fail-open, an image tag MyBB leaves on the page as typed
+     * (a space before its address) is sent, not published unassessed.
+     */
+    public function testUnderFailOpenAnImageTagMyBBLeavesAsTypedIsSent(): void
+    {
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $pid = $this->heldReply('[img] https://example.com/ obelga obelga[/img]');
+        self::assertCount(1, $this->forum->transport->requests);
+        self::assertSame([0, Status::PENDING], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
     }
 
     public function testTheLinkSignalsOfABareAddressAreSent(): void

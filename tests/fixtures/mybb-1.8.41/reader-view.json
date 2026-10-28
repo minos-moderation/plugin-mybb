@@ -349,6 +349,134 @@
             "media": 0,
             "has_text": true
         },
+        "img-leading-space": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[img] https://example.com/ obelga obelga[/img]",
+            "html": "[img] <a href=\"https://example.com/\" target=\"_blank\" rel=\"noopener\" class=\"mycode_url\">https://example.com/</a> obelga obelga[/img]",
+            "text": "[img] https://example.com/ obelga obelga[/img]",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "img-two-newlines": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[img]\n\nhttps://example.com/obrazek.png[/img]",
+            "html": "[img]<br />\n<br />\n<a href=\"https://example.com/obrazek.png\" target=\"_blank\" rel=\"noopener\" class=\"mycode_url\">https://example.com/obrazek.png</a>[/img]",
+            "text": "[img] https://example.com/obrazek.png[/img]",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "img-one-newline": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[img]\nhttps://example.com/obrazek.png[/img]",
+            "html": "<img src=\"https://example.com/obrazek.png\" loading=\"lazy\"  alt=\"[Image: obrazek.png]\" class=\"mycode_img\" />",
+            "text": "",
+            "hints": [
+                "[Image: obrazek.png]"
+            ],
+            "media": 1,
+            "has_text": false
+        },
+        "video-newline": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[video=youtube]\nhttps://www.youtube.com/watch?v=dQw4w9WgXcQ[/video]",
+            "html": "[video=youtube]<br />\n<a href=\"https://www.youtube.com/watch?v=dQw4w9WgXcQ\" target=\"_blank\" rel=\"noopener\" class=\"mycode_url\">https://www.youtube.com/watch?v=dQw4w9WgXcQ</a>[/video]",
+            "text": "[video=youtube] https://www.youtube.com/watch?v=dQw4w9WgXcQ[/video]",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "video-no-id": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[video=youtube]https://www.youtube.com/[/video]",
+            "html": "[video=youtube]https://www.youtube.com/[/video]",
+            "text": "[video=youtube]https://www.youtube.com/[/video]",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "video-facebook-no-id": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[video=facebook]https://example.com/[/video]",
+            "html": "[video=facebook]https://example.com/[/video]",
+            "text": "[video=facebook]https://example.com/[/video]",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "video-id-other-host": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[video=youtube]https://example.com/obelga[/video]",
+            "html": "<iframe width=\"560\" height=\"315\" src=\"//www.youtube-nocookie.com/embed/obelga\" frameborder=\"0\" allowfullscreen=\"true\"></iframe>",
+            "text": "",
+            "hints": [],
+            "media": 1,
+            "has_text": false
+        },
+        "video-twitch-channel": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[video=twitch]https://example.com/[/video]",
+            "html": "<iframe src=\"https://player.twitch.tv/?channel=&amp;parent=127.0.0.1&amp;autoplay=false\" frameborder=\"0\" scrolling=\"no\" height=\"378\" width=\"620\"></iframe>",
+            "text": "",
+            "hints": [],
+            "media": 1,
+            "has_text": false
+        },
+        "video-site-case": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[video=YouTube]https://www.youtube.com/watch?v=dQw4w9WgXcQ[/video]",
+            "html": "[video=YouTube]https://www.youtube.com/watch?v=dQw4w9WgXcQ[/video]",
+            "text": "[video=YouTube]https://www.youtube.com/watch?v=dQw4w9WgXcQ[/video]",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
         "img-zero-width-space": {
             "forum": {
                 "allowhtml": 0,
