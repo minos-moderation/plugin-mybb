@@ -178,10 +178,13 @@ final class Submitter
         // The post as stored, as every later rendering reads it (the thread's title, a poll).
         $post = $this->platform->post($pid) ?? [
             'fid' => (int)($data['fid'] ?? 0), 'message' => (string)($data['message'] ?? ''),
-            'subject' => (string)($data['subject'] ?? ''), 'thread_subject' => '', 'poll' => null,
+            'subject' => (string)($data['subject'] ?? ''), 'thread_subject' => '', 'replyto_subject' => '', 'poll' => null,
         ];
-        $text = Text::ofPost($post, $thread, $this->platform->forumParsing((int)$post['fid']));
-        $signals = $text['error'] ? null : self::linkSignals(Text::sourceOf($post, $thread));
+        // Whether a reply's own subject goes with it is decided now and kept with the row, so
+        // a later change of the thread's title does not turn MyBB's default into another text.
+        $own = !$thread && Text::sendsOwnSubject($post);
+        $text = Text::ofPost($post, $thread, $this->platform->forumParsing((int)$post['fid']), $own);
+        $signals = $text['error'] ? null : self::linkSignals(Text::sourceOf($post, $thread, $own));
         // Read now, in the author's request: a resubmission (the task) has no author.
         $first = $this->platform->currentUserHasNoPosts();
         $row = [
@@ -198,6 +201,7 @@ final class Submitter
             'text_len'     => $text['text_len'],
             'sent_sha256'  => self::digest($text),
             'first_post'   => $first === null ? '' : ($first ? '1' : '0'),
+            'own_subject'  => $own ? 1 : 0,
         ];
         $this->platform->addPending($row);
         $row = $this->platform->pending($pid) ?? $row;
@@ -304,28 +308,50 @@ final class Submitter
                 ]);
                 return;
             }
-        } elseif ($post !== null && $this->sendsTheSameText($pid, $changes + $post)) {
-            return;
-        } elseif ($this->platform->revise($pid, $now)) {
-            return;
+        } else {
+            $row = $post !== null ? $this->platform->pending($pid) : null;
+            $own = $row !== null ? self::ownSubjectAfter($row, $post, $changes) : null;
+            if ($row !== null && $this->sendsTheSameText($row, $changes + $post, (bool)$own)) {
+                return;
+            }
+            if ($this->platform->revise($pid, $now, $own === null ? null : ($own ? 1 : 0))) {
+                return;
+            }
         }
         $this->platform->updatePending($pid, ['auto_published' => 0], Status::PUBLISHED);
+    }
+
+    /**
+     * Whether a reply's subject goes with it after an edit: decided again when the edit
+     * changes the subject, else as the row keeps it.
+     *
+     * @param array<string,mixed>  $row     The row.
+     * @param array<string,mixed>  $post    The post before the edit ({@see Platform::post}).
+     * @param array<string,string> $changes The edit's new `message` and `subject`.
+     */
+    private static function ownSubjectAfter(array $row, array $post, array $changes): bool
+    {
+        if ((int)$row['is_thread'] === 1) {
+            return false;
+        }
+        if (isset($changes['subject']) && trim($changes['subject']) !== trim((string)$post['subject'])) {
+            return Text::sendsOwnSubject(['subject' => $changes['subject']] + $post);
+        }
+        return (int)($row['own_subject'] ?? 0) === 1;
     }
 
     /**
      * Whether a post, as it reads after an edit, gives the text its row last recorded as
      * sent (or as unreadable or empty: an edit that leaves it so starts nothing either).
      *
-     * @param int                 $pid  The post.
-     * @param array<string,mixed> $post The post after the edit ({@see Platform::post}).
+     * @param array<string,mixed> $row        The row.
+     * @param array<string,mixed> $post       The post after the edit ({@see Platform::post}).
+     * @param bool                $ownSubject For a reply: whether its subject goes with it.
      */
-    private function sendsTheSameText(int $pid, array $post): bool
+    private function sendsTheSameText(array $row, array $post, bool $ownSubject): bool
     {
-        $row = $this->platform->pending($pid);
-        if ($row === null) {
-            return false;
-        }
-        $text = Text::ofPost($post, (int)$row['is_thread'] === 1, $this->platform->forumParsing((int)$post['fid']));
+        $text = Text::ofPost($post, (int)$row['is_thread'] === 1, $this->platform->forumParsing((int)$post['fid']),
+            $ownSubject);
         return hash_equals((string)$row['sent_sha256'], self::digest($text));
     }
 
@@ -407,8 +433,9 @@ final class Submitter
             }
             return null;
         }
-        $text = Text::ofPost($post, (int)$row['is_thread'] === 1, $this->platform->forumParsing($post['fid']));
-        $signals = $text['error'] ? null : self::linkSignals(Text::sourceOf($post, (int)$row['is_thread'] === 1));
+        $own = (int)($row['own_subject'] ?? 0) === 1;
+        $text = Text::ofPost($post, (int)$row['is_thread'] === 1, $this->platform->forumParsing($post['fid']), $own);
+        $signals = $text['error'] ? null : self::linkSignals(Text::sourceOf($post, (int)$row['is_thread'] === 1, $own));
         if ($signals === null) {
             $this->unreadable($row, $settings, $now);
             return null;

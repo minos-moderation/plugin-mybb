@@ -149,7 +149,8 @@ final class Forum
      *
      * @param bool                $thread  A new thread (else a reply to {@see thread}).
      * @param string              $message The message (MyCode source).
-     * @param array<string,mixed> $options `subject`, `fid`, `tid`, `uid`, `savedraft`.
+     * @param array<string,mixed> $options `subject`, `fid`, `tid`, `uid`, `savedraft`, `replyto`
+     *     (the post whose reply or quote button was used).
      * @return FakePostHandler The handler, with `return_values`.
      */
     public function write(bool $thread, string $message, array $options = []): FakePostHandler
@@ -161,7 +162,7 @@ final class Forum
         $handler = new FakePostHandler('insert', $thread ? 'thread' : 'post', [
             'uid' => $uid, 'fid' => $fid, 'tid' => $tid, 'subject' => $subject, 'message' => $message,
             'username' => 'Autor Testowy', 'ipaddress' => '203.0.113.77',
-            'savedraft' => !empty($options['savedraft']) ? 1 : 0,
+            'savedraft' => !empty($options['savedraft']) ? 1 : 0, 'replyto' => (int)($options['replyto'] ?? 0),
         ]);
         $kind = $thread ? 'thread' : 'post';
         $GLOBALS['plugins']->run_hooks('datahandler_post_validate_' . $kind, $handler);
@@ -184,7 +185,7 @@ final class Forum
             $tid = $this->db->insert_query('threads', ['fid' => $fid, 'subject' => $this->db->escape_string($subject),
                 'uid' => $uid, 'firstpost' => 0, 'visible' => $visible]);
         }
-        $pid = $this->db->insert_query('posts', ['tid' => $tid, 'fid' => $fid, 'uid' => $uid,
+        $pid = $this->db->insert_query('posts', ['tid' => $tid, 'replyto' => (int)$handler->data['replyto'], 'fid' => $fid, 'uid' => $uid,
             'subject' => $this->db->escape_string($subject), 'message' => $this->db->escape_string($message),
             'ipaddress' => '203.0.113.77', 'visible' => $visible]);
         if ($thread) {
@@ -350,7 +351,8 @@ final class Forum
                 . " poll INTEGER NOT NULL DEFAULT 0)",
             "CREATE TABLE {$p}polls (pid INTEGER PRIMARY KEY, tid INTEGER NOT NULL DEFAULT 0, question TEXT NOT NULL DEFAULT '',"
                 . " options TEXT NOT NULL DEFAULT '', votes TEXT NOT NULL DEFAULT '', numoptions INTEGER NOT NULL DEFAULT 0)",
-            "CREATE TABLE {$p}posts (pid INTEGER PRIMARY KEY, tid INTEGER NOT NULL DEFAULT 0, fid INTEGER NOT NULL DEFAULT 0,"
+            "CREATE TABLE {$p}posts (pid INTEGER PRIMARY KEY, tid INTEGER NOT NULL DEFAULT 0, replyto INTEGER NOT NULL DEFAULT 0,"
+                . " fid INTEGER NOT NULL DEFAULT 0,"
                 . " uid INTEGER NOT NULL DEFAULT 0, subject TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '',"
                 . " ipaddress TEXT NOT NULL DEFAULT '', visible INTEGER NOT NULL DEFAULT 1)",
         ];

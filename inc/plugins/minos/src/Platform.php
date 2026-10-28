@@ -65,6 +65,9 @@ final class Platform
         // `zablokowane` or `nieocenione`, whatever the plugin then did) and when it came:
         // with `accepted_at` (the 202), the ACP's time-to-verdict figures.
         'answer' => 'varchar(20)', 'answered_at' => 'int',
+        // Whether a reply's own subject was sent with it (`Text::ownSubject`), as decided
+        // at its first send or by the edit that started its revision.
+        'own_subject' => 'flag',
     ];
 
     /** The log table's columns. */
@@ -336,22 +339,25 @@ final class Platform
     // ---------------------------------------------------------------- posts
 
     /**
-     * A post as it is now, with whether it opens its thread, its thread's title, and — for
-     * the first post of a thread with a poll — the poll as `showthread.php` reads it
-     * (`threads.poll` → `polls`; the options are one string, `||~|~||` between them, of
-     * which `numoptions` are shown).
+     * A post as it is now, with whether it opens its thread, its thread's title, the subject
+     * of the post it replies to (`posts.replyto`, '' for none), and — for the first post of
+     * a thread with a poll — the poll as `showthread.php` reads it (`threads.poll` →
+     * `polls`; the options are one string, `||~|~||` between them, of which `numoptions`
+     * are shown).
      *
      * @param int $pid The post.
-     * @return array{pid:int,tid:int,fid:int,visible:int,subject:string,message:string,first:bool,thread_subject:string,poll:array{question:string,options:array<int,string>}|null}|null
+     * @return array{pid:int,tid:int,fid:int,visible:int,subject:string,message:string,first:bool,thread_subject:string,replyto_subject:string,poll:array{question:string,options:array<int,string>}|null}|null
      *     Null when it no longer exists.
      */
     public function post(int $pid): ?array
     {
         $query = $this->db->query(
             'SELECT p.pid, p.tid, p.fid, p.visible, p.subject, p.message, t.firstpost, t.subject AS thread_subject,'
+            . ' r.subject AS replyto_subject,'
             . ' pl.pid AS poll_id, pl.question AS poll_question, pl.options AS poll_options, pl.numoptions AS poll_numoptions'
             . ' FROM ' . $this->prefix . 'posts p'
             . ' LEFT JOIN ' . $this->prefix . 'threads t ON (t.tid=p.tid)'
+            . ' LEFT JOIN ' . $this->prefix . "posts r ON (r.pid=p.replyto AND p.replyto>'0')"
             . ' LEFT JOIN ' . $this->prefix . "polls pl ON (pl.pid=t.poll AND t.poll>'0')"
             . " WHERE p.pid='" . $pid . "'"
         );
@@ -377,6 +383,7 @@ final class Platform
             'message'        => (string)$row['message'],
             'first'          => $first,
             'thread_subject' => (string)($row['thread_subject'] ?? ''),
+            'replyto_subject' => (string)($row['replyto_subject'] ?? ''),
             'poll'           => $poll,
         ];
     }
@@ -489,7 +496,7 @@ final class Platform
             'support' => 0, 'error_code' => '', 'decided_at' => 0, 'auto_published' => 0,
             'claimed_at' => 0, 'claimed_from' => '', 'original_text' => '', 'sent_sha256' => '',
             'masked_text' => '', 'apply_errors' => 0, 'first_post' => '', 'rev' => 0,
-            'answer' => '', 'answered_at' => 0,
+            'answer' => '', 'answered_at' => 0, 'own_subject' => 0,
         ]));
     }
 
@@ -597,14 +604,17 @@ final class Platform
      * now, with a fresh receive timeout and nothing of the earlier attempt (its digest, its
      * outcome); the task sends it under the next revision's id.
      *
-     * @param int $pid The post.
-     * @param int $now Unix seconds.
+     * @param int      $pid        The post.
+     * @param int      $now        Unix seconds.
+     * @param int|null $ownSubject For a reply: whether its subject goes with the new
+     *     revision (1 or 0); null keeps what the row has.
      * @return bool True when the row now waits as a new revision.
      */
-    public function revise(int $pid, int $now): bool
+    public function revise(int $pid, int $now, ?int $ownSubject = null): bool
     {
         $this->db->write_query('UPDATE ' . $this->prefix . self::PENDING_TABLE
             . " SET rev=rev+1, status='" . Status::RETRY . "', submitted_at='" . $now . "', accepted_at='0',"
+            . ($ownSubject !== null ? " own_subject='" . ($ownSubject === 1 ? 1 : 0) . "'," : '')
             . " retry_at='" . $now . "', attempts='0', error_code='', verdict='', categories='', support='0',"
             . " decided_at='0', auto_published='0', claimed_at='0', claimed_from='', sent_sha256='',"
             . " masked_text='', apply_errors='0', truncated='0', prefix_len='0', text_len='0'"

@@ -283,7 +283,8 @@ final class Applier
         if (strlen($digest) !== 64) {
             return null;
         }
-        $text = Text::ofPost($post, (int)$row['is_thread'] === 1, $this->platform->forumParsing($post['fid']));
+        $text = Text::ofPost($post, (int)$row['is_thread'] === 1, $this->platform->forumParsing($post['fid']),
+            (int)($row['own_subject'] ?? 0) === 1);
         return !$text['error'] && hash_equals($digest, hash('sha256', $text['tekst'])) ? $text['tekst'] : null;
     }
 

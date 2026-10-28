@@ -83,10 +83,15 @@ The text readers SEE, following MyBB's own text renderer
 - What heads the post goes in front, a blank line between the parts (`Text::ofPost`): a
   new thread's subject (always escaped, never parsed), then its poll — the question
   escaped like a subject, each option on its own line through the post rules above, as
-  `showthread.php` shows them; for a reply, its own subject when it is not MyBB's default
-  ("RE: " and the thread's title, the title cut to 82 characters and "..." when longer
-  than 85, or the title itself — `Text::ownSubject`). All of it is `prefix_len`: a mask
-  there holds the post. Only the first 3000 characters are sent.
+  `showthread.php` shows them; for a reply, its own subject when it is not one of MyBB's
+  defaults ("RE: " and the thread's title, or — for a reply to a post, `posts.replyto` —
+  "RE: " and that post's subject without its "RE:"; either cut to 82 characters and "..."
+  when longer than 85; or the thread's title itself — `Text::ownSubject`). Whether a
+  reply's subject goes with it is decided at its first send and kept in the row
+  (`own_subject`), and decided again only by an edit that changes the subject: renaming
+  the thread or the replied-to post later does not turn a default into another text. All
+  of it is `prefix_len`: a mask there holds the post. Only the first 3000 characters are
+  sent.
 - A title or a reply's own subject alone is not a text to assess (shared rule F7 in
   client-php's `docs/plugin-behaviour.md`): when the body shows no text and there is no
   poll, `tekst` is `''` and the post gets the failure mode at once as `no_text`, nothing
@@ -354,7 +359,7 @@ reading the code, not by running a live forum:
 | `get_forum()['allowhtml'/'allowmycode'/'allowimgcode'/'allowvideocode']`, `htmlspecialchars_uni`, `Postparser::text_parse_message` (the rules `Text` follows) | `inc/functions.php`, `inc/class_parser.php` | `Platform::forumParsing`, `Text` |
 | `polls_do_newpoll_end`, `polls_do_editpoll_end` (no arguments; the thread's row in the global `$thread`, read before the poll was written) | `polls.php` | `Platform::pollThreadFirstPost`, `Submitter::onPollChanged` |
 | a thread's poll: `threads.poll` → `polls` (`question`, `options` joined by `\|\|~\|~\|\|`, `numoptions` of them shown); the question through `htmlspecialchars_uni`, each option through `parse_message` with the forum's options | `showthread.php`, `install/resources/mysql_db_tables.php` | `Platform::post`, `Text` |
-| a reply's default subject: "RE: " and the thread's title (cut to 82 characters and "..." past 85; when quoting, "RE: " and the quoted post's subject without its "RE:") | `newreply.php`, `inc/datahandlers/post.php` (`verify_subject`) | `Text::ownSubject` |
+| a reply's default subject: "RE: " and the thread's title (cut to 82 characters and "..." past 85; for a reply to a post, `replyto`, "RE: " and that post's subject without its `#^RE:\s?#i`); `posts.replyto` | `newreply.php`, `inc/datahandlers/post.php` (`verify_subject`, `insert_post`) | `Text::ownSubject`, `Platform::post` |
 | `Moderation::unapprove_posts`, `unapprove_threads` | `inc/class_moderation.php` | `Platform::unapprove` (a late `zablokowane`) |
 | subscription notifications: inline in `insert_post`/`insert_thread`, only for `visible == 1`; none on approval | `inc/datahandlers/post.php`, `inc/class_moderation.php`, `modcp.php` | not sent (see above) |
 | `admin_config_settings_change` before `upsetting` is saved | `admin/modules/config/settings.php` | `Admin::onSettingsChange` |

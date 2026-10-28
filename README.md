@@ -288,7 +288,10 @@ numer postu — nigdy treść błędu.
 
 - Ocenianych jest tylko pierwsze 3000 znaków postu.
 - Temat odpowiedzi jest oceniany tylko wtedy, gdy autor go zmienił — domyślne „RE: <tytuł
-  wątku>” nie mówi nic nowego; tytuł nowego wątku — zawsze.
+  wątku>” (a w odpowiedzi na konkretny post: „RE: <temat tego postu>”) nie mówi nic nowego;
+  tytuł nowego wątku — zawsze. Czy temat odpowiedzi idzie do oceny, wtyczka ustala przy
+  pierwszej wysyłce; późniejsza zmiana tytułu wątku tego nie zmienia, a poprawka tematu
+  przez autora wysyła odpowiedź jeszcze raz.
 - Ankieta jest oceniana razem z pierwszym postem wątku tylko wtedy, gdy powstała, kiedy wątek
   czekał na werdykt albo stał w kolejce bez oceny (np. z pustą treścią). MyBB pozwala dodać ankietę do wątku z kolejki moderacji tylko
   moderatorom (formularz ankiety odmawia autorowi), więc autor dodaje ją zwykle po publikacji

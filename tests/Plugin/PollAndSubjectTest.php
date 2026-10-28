@@ -131,6 +131,71 @@ final class PollAndSubjectTest extends PluginTestCase
         self::assertSame('Treść.', $this->forum->transport->lastBody()['elementy'][0]['tekst']);
     }
 
+    /**
+     * Whether a reply's subject goes with it is decided when it is first sent: a moderator
+     * renaming the thread meanwhile does not turn MyBB's default "RE: <old title>" into a
+     * subject of the author's — the verdict still judges the text sent, and an author's edit
+     * that keeps the subject sends nothing again.
+     */
+    public function testADefaultSubjectStaysUnsentWhenTheThreadIsRenamed(): void
+    {
+        $tid = $this->thread('Wątek');
+        $pid = (int)$this->forum->write(false, 'Zwykła odpowiedź.', ['subject' => 'RE: Wątek', 'tid' => $tid])->return_values['pid'];
+        self::assertSame('Zwykła odpowiedź.', $this->forum->transport->lastBody()['elementy'][0]['tekst']);
+        $this->forum->db->update_query('threads', ['subject' => 'Wątek po zmianie tytułu'], "tid='" . $tid . "'");
+        $sent = count($this->forum->transport->requests);
+
+        $this->forum->edit($pid, 'Zwykła odpowiedź.', 'RE: Wątek');
+        task_minos(['tid' => 1]);
+        self::assertCount($sent, $this->forum->transport->requests, 'the same text: nothing sent again');
+
+        self::assertSame(200, $this->forum->deliver(self::payload($pid)));
+        self::assertSame([1, Status::PUBLISHED], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
+    }
+
+    /**
+     * MyBB's other default: a reply to a post (its reply or quote button) gets "RE: " and that
+     * post's subject without its own "RE:" — not the author's subject either.
+     *
+     * @dataProvider repliesToAPost
+     */
+    public function testAReplyToAPostKeepsMyBBsDefaultForItUnsent(string $quotedSubject, string $subject, string $tekst): void
+    {
+        $tid = $this->thread('Wątek');
+        $quoted = $this->forum->db->insert_query('posts', ['tid' => $tid, 'fid' => Forum::FID, 'uid' => 1,
+            'subject' => $this->forum->db->escape_string($quotedSubject), 'message' => 'Cytowany post.', 'visible' => 1]);
+        $this->forum->write(false, 'Odpowiedź z cytatem.', ['subject' => $subject, 'tid' => $tid, 'replyto' => $quoted]);
+        self::assertSame($tekst, $this->forum->transport->lastBody()['elementy'][0]['tekst']);
+    }
+
+    /** @return array<string,array{0:string,1:string,2:string}> */
+    public function repliesToAPost(): array
+    {
+        return [
+            'the quoted post\'s own subject' => ['Temat cytowanego posta', 'RE: Temat cytowanego posta', 'Odpowiedź z cytatem.'],
+            'its "Re:" stripped once'       => ['Re: Temat', 'RE: Temat', 'Odpowiedź z cytatem.'],
+            'an own subject all the same'   => ['Temat cytowanego posta', 'Mój temat', "Mój temat\n\nOdpowiedź z cytatem."],
+        ];
+    }
+
+    /**
+     * An author's edit that gives a waiting reply its own subject: the next revision carries
+     * it, and its verdict applies to that text.
+     */
+    public function testAnEditThatGivesAReplyItsOwnSubjectSendsIt(): void
+    {
+        $tid = $this->thread('Wątek');
+        $pid = (int)$this->forum->write(false, 'Treść.', ['subject' => 'RE: Wątek', 'tid' => $tid])->return_values['pid'];
+
+        $this->forum->edit($pid, 'Treść.', 'Obraźliwy temat');
+        task_minos(['tid' => 1]);
+
+        $item = $this->forum->transport->lastBody()['elementy'][0];
+        self::assertSame(['mybb:' . $pid . '.1', "Obraźliwy temat\n\nTreść."], [$item['id'], $item['tekst']]);
+        self::assertSame(200, $this->forum->deliver(self::payload($pid, ['id' => 'mybb:' . $pid . '.1'])));
+        self::assertSame([1, Status::PUBLISHED], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
+    }
+
     public function testAMaskInAReplysSubjectHoldsIt(): void
     {
         $pid = (int)$this->forum->write(false, 'Treść.', ['subject' => 'Głupi temat', 'tid' => $this->thread('Wątek')])

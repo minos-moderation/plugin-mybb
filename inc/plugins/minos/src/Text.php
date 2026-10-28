@@ -97,19 +97,45 @@ final class Text
      * post its subject and its poll, for a reply its own subject ({@see ownSubject}).
      *
      * @param array<string,mixed> $post        The post: `message`, `subject`,
-     *     `thread_subject` and `poll` (`question`, `options`, or null).
+     *     `thread_subject`, `replyto_subject` and `poll` (`question`, `options`, or null).
      * @param bool                $opensThread The post opens its thread.
      * @param array<string,mixed> $forum       The forum's parsing options.
+     * @param bool|null           $ownSubject  For a reply: whether its subject goes with it,
+     *     as decided when it was first sent (the row keeps it) — a later change of the
+     *     thread's title or of the quoted post's subject changes nothing; null decides now.
      * @return array{tekst:string,truncated:bool,prefix_len:int,text_len:int,error:bool} As {@see forPost}.
      */
-    public static function ofPost(array $post, bool $opensThread, array $forum = []): array
+    public static function ofPost(array $post, bool $opensThread, array $forum = [], ?bool $ownSubject = null): array
     {
         if ($opensThread) {
             $poll = is_array($post['poll'] ?? null) ? $post['poll'] : null;
             return self::forPost((string)$post['message'], (string)$post['subject'], $forum, $poll);
         }
-        return self::forPost((string)$post['message'],
-            self::ownSubject((string)$post['subject'], (string)($post['thread_subject'] ?? '')), $forum);
+        return self::forPost((string)$post['message'], self::replySubject($post, $ownSubject), $forum);
+    }
+
+    /**
+     * Whether a reply's subject goes with it, decided now ({@see ownSubject}).
+     *
+     * @param array<string,mixed> $post As for {@see ofPost}.
+     */
+    public static function sendsOwnSubject(array $post): bool
+    {
+        return self::ownSubject((string)$post['subject'], (string)($post['thread_subject'] ?? ''),
+            (string)($post['replyto_subject'] ?? '')) !== '';
+    }
+
+    /**
+     * The subject sent in front of a reply: its own, or ''.
+     *
+     * @param array<string,mixed> $post As for {@see ofPost}.
+     */
+    private static function replySubject(array $post, ?bool $ownSubject): string
+    {
+        if ($ownSubject === null) {
+            $ownSubject = self::sendsOwnSubject($post);
+        }
+        return $ownSubject ? trim((string)$post['subject']) : '';
     }
 
     /**
@@ -118,12 +144,12 @@ final class Text
      *
      * @param array<string,mixed> $post        As for {@see ofPost}.
      * @param bool                $opensThread The post opens its thread.
+     * @param bool|null           $ownSubject  As for {@see ofPost}.
      * @return string The parts, one per line.
      */
-    public static function sourceOf(array $post, bool $opensThread): string
+    public static function sourceOf(array $post, bool $opensThread, ?bool $ownSubject = null): string
     {
-        $parts = [$opensThread ? (string)$post['subject']
-            : self::ownSubject((string)$post['subject'], (string)($post['thread_subject'] ?? ''))];
+        $parts = [$opensThread ? (string)$post['subject'] : self::replySubject($post, $ownSubject)];
         if ($opensThread && is_array($post['poll'] ?? null)) {
             $parts[] = (string)$post['poll']['question'];
             foreach ((array)$post['poll']['options'] as $option) {
@@ -135,30 +161,52 @@ final class Text
     }
 
     /**
-     * A reply's subject when its readers learn something from it: '' for MyBB's default
-     * ("RE: " and the thread's title, the title shortened to 82 characters and "..." when
-     * longer than 85) and for the thread's title itself. MyBB shows a reply's subject in the
-     * threaded view, in search results, in the printable version and as the title of the
-     * post's link in the linear view (MyBB 1.8.41's default templates).
+     * A reply's subject when its readers learn something from it: '' for one of MyBB's
+     * defaults and for the thread's title itself. MyBB 1.8.41 (`newreply.php`) fills in "RE: "
+     * and the thread's title, or — for a reply to a post (`replyto`, the post whose quote or
+     * reply button was used) — "RE: " and that post's subject without its own leading "RE:";
+     * either cut to 82 characters and "..." when longer than 85. MyBB shows a reply's subject
+     * in the threaded view, in search results, in the printable version and as the title of
+     * the post's link in the linear view (its default templates).
      *
-     * @param string $subject       The reply's subject as stored.
-     * @param string $threadSubject Its thread's title as stored.
+     * @param string $subject        The reply's subject as stored.
+     * @param string $threadSubject  Its thread's title as stored.
+     * @param string $replytoSubject The subject of the post it replies to ('' for none).
      * @return string The subject, or ''.
      */
-    public static function ownSubject(string $subject, string $threadSubject): string
+    public static function ownSubject(string $subject, string $threadSubject, string $replytoSubject = ''): string
     {
         $subject = trim($subject);
-        $defaults = ['', $threadSubject, self::REPLY_PREFIX . $threadSubject];
-        if (strlen($threadSubject) > self::TITLE_MAX_CHARS) {
-            try {
-                if (self::length($threadSubject) > self::TITLE_MAX_CHARS) {
-                    $defaults[] = self::REPLY_PREFIX . self::head($threadSubject, self::DEFAULT_SUBJECT_CHARS) . '...';
+        $defaults = ['', $threadSubject];
+        foreach ([$threadSubject, self::withoutReplyPrefix($replytoSubject)] as $base) {
+            if ($base === '') {
+                continue;
+            }
+            $defaults[] = self::REPLY_PREFIX . $base;
+            if (strlen($base) > self::TITLE_MAX_CHARS) {
+                try {
+                    if (self::length($base) > self::TITLE_MAX_CHARS) {
+                        $defaults[] = self::REPLY_PREFIX . self::head($base, self::DEFAULT_SUBJECT_CHARS) . '...';
+                    }
+                } catch (TextError $e) {
+                    // Without mbstring, a title PCRE cannot split: the subject is sent.
                 }
-            } catch (TextError $e) {
-                // Without mbstring, a title PCRE cannot split: the subject is sent.
             }
         }
         return in_array($subject, $defaults, true) ? '' : $subject;
+    }
+
+    /**
+     * A subject without one leading "RE:" (any case) and one white-space character after it,
+     * as `newreply.php` strips the quoted post's subject (`#^RE:\s?#i`).
+     */
+    private static function withoutReplyPrefix(string $subject): string
+    {
+        if (strncasecmp($subject, 'RE:', 3) !== 0) {
+            return $subject;
+        }
+        $rest = (string)substr($subject, 3);
+        return $rest !== '' && strpos(" \t\n\r\f\v", $rest[0]) !== false ? (string)substr($rest, 1) : $rest;
     }
 
     /**
