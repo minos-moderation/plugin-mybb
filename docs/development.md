@@ -459,8 +459,14 @@ Beside them: in a forum with HTML on, MyBB shows `<script>`/`<style>` as text (i
 those tags, `inc/class_parser.php` `parse_message`) and hides HTML comments
 (`html_forum_page`, `reader-view.json`); an image (`[img]`, `[img=WxH]`, `[img align=…]`),
 a video of a known site and a link whose label shows nothing (`[url=X] [/url]`, an image
-inside the link) show no text, while a bare URL and `[url]X[/url]` show the address. The
-ModCP's report and PM API for a moderator signal (K-41, K-42) is not part of this run.
+inside the link) show no text, while a bare URL and `[url]X[/url]` show the address. For a
+moderator signal (K-41, K-42) MyBB 1.8.41 offers, read in the source and not exercised by
+the run: `add_report($report, $type = 'post')` (`inc/functions_modcp.php`: a
+`reportedcontent` row — `id` the post, `id2` its thread, `id3` its forum, `uid` the
+reporter, `reasonid`/`reason` — shown in the ModCP's report list, and with the board's
+`reportmethod` set to `email` or `pms` also sent to the moderators by `send_report`), and
+`send_pm($pm, -1, true)` (`inc/functions.php`: `subject`, `message`, `touid`,
+`receivepms`; `-1` sends as "MyBB Engine"), as `insert_post` uses it for subscriptions.
 
 Still not verified, and why:
 
