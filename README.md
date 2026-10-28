@@ -30,7 +30,10 @@ Minos.
 
 ## Wymagania
 
-- MyBB 1.8 (sprawdzone na 1.8.41) i PHP 7.4 lub nowszy z rozszerzeniami `curl` i `json`.
+- MyBB 1.8 (sprawdzone na 1.8.41: test automatyczny instaluje prawdziwe forum MyBB 1.8.41
+  na MySQL i PostgreSQL i przechodzi na nim całą drogę postu — wstrzymanie, wysyłkę,
+  podpisany werdykt, maskę, wyłączenie i odinstalowanie) i PHP 7.4 lub nowszy
+  z rozszerzeniami `curl` i `json`.
 - Forum pod adresem **HTTPS z nazwą domeny**, osiągalnym z internetu. Brama doręcza
   werdykty tylko na `https://`, tylko na nazwy hostów z listy klucza i nie podąża za
   przekierowaniami — adres webhooka musi odpowiadać bezpośrednio (bez przekierowania

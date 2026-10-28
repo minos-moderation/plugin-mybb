@@ -10,4 +10,6 @@
 - **`EndToEndTest` starts real processes**: `proc_open` with an array, never a string,
   and every port is asserted closed afterwards. Both sides — the webhook and the posting
   (`fixtures/forum-cli.php`) — run the build's staged tree, not the repository's classes.
+- **`Live/` needs a real MyBB 1.8.41 and a database**: only `bin/verify-mybb-1841.sh`
+  (and `live.yml`) runs it; the plain `vendor/bin/phpunit` never does.
 - **Test data only**: no real posts, keys or secrets.
