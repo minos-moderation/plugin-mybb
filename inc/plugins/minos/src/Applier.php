@@ -45,7 +45,9 @@ use Minos\Client\WebhookPayload;
  * a mask falls in a new thread's subject (the plugin does not rewrite titles); not when
  * nothing but the subject remains; and not unless the body that was sent IS the message as
  * stored (line endings aside) — a post with MyCode, HTML or entities renders to another
- * text, and publishing its mask would revive or drop markup. Such a post stays in the
+ * text, and publishing its mask would revive or drop markup; so does a plain one with
+ * whitespace the text squeezes (double spaces, tabs, NBSP, blank lines in a row), which
+ * stays held too (the safe direction). Such a post stays in the
  * queue with the mask kept in `masked_text` for the ACP page, and so does one whose
  * message could not be replaced — the original is never published on that verdict. The
  * original message is kept in the row of a published masked post.

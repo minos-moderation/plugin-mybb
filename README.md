@@ -132,7 +132,11 @@ Brama maskuje tekst, który zobaczyli czytelnicy, więc wtyczka publikuje zamask
 tylko wtedy, gdy jest on **dokładnie** tym, co wysłała, z niektórymi znakami zastąpionymi
 przez `█`, a post jest zwykłym tekstem. **Post z formatowaniem (MyCode, cytat, link)
 zostaje w kolejce, a zamaskowany tekst widać w dzienniku** (Minos — dziennik, kolumna
-„Tekst zamaskowany przez bramę”). Oryginał opublikowanego postu zostaje w tabeli wtyczki
+„Tekst zamaskowany przez bramę”). Tak samo zostaje w kolejce zwykły tekst z nadmiarowymi
+białymi znakami — podwójnymi spacjami, tabulatorami, twardymi spacjami, spacjami na
+początku lub końcu wiersza albo więcej niż jednym pustym wierszem z rzędu: wtyczka wysyła
+go z takimi odstępami ściśniętymi, więc maska nie odpowiada zapisanej treści znak w znak
+(różnica samych końców wiersza CR/LF nie przeszkadza). Oryginał opublikowanego postu zostaje w tabeli wtyczki
 (przez 30 dni). Post ocenzurowany zawsze zostaje w kolejce, gdy: był dłuższy niż 3000
 znaków, brama zamaskowała coś w tytule wątku, zamaskowany tekst różni się od wysłanego
 czymś innym niż znaki `█` (inna długość, inne litery), brama nie przysłała zamaskowanego

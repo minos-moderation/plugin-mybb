@@ -306,6 +306,9 @@ final class ReceiverTest extends PluginTestCase
             'the audit\'s probe M1'                    => [false, 'Ala ma kota.', 'Kup: zly.pl█', []],
             'a post with formatting'                   => [false, '[i]abc[/i] zły', 'abc ███', []],
             'a post with an entity'                    => [false, 'abc &#122;ły', 'abc ███', []],
+            'double spaces the text squeezes'          => [false, 'abc  zły', 'abc ███', []],
+            'blank lines the text squeezes'            => [false, "abc\n\n\n\nzły", "abc\n\n███", []],
+            'a no-break space'                         => [false, "abc\u{00A0}zły", 'abc ███', []],
         ];
     }
 
