@@ -362,8 +362,9 @@ final class SubmissionTest extends PluginTestCase
         self::assertSame($status, $this->forum->row($pid)['status'], 'not waiting as retry after 19 minutes');
 
         $notice = (string)$this->forum->plugin->admin->notice(TIME_NOW);
+        self::assertSame($this->refusalNotice('minos_notice_daily_limit', TIME_NOW + 36000, 'limit_dobowy_klucza'), $notice,
+            'the daily limit\'s message');
         self::assertStringContainsString(date('Y-m-d H:i', TIME_NOW + 36000), $notice, 'the hour the gateway accepts again');
-        self::assertStringContainsString('limit_dobowy_klucza', $notice);
         foreach ([Forum::KEY, Forum::SECRET, 'komunikat', '{'] as $never) {
             self::assertStringNotContainsString($never, $notice, 'never the key or the answer\'s body');
         }
@@ -403,9 +404,16 @@ final class SubmissionTest extends PluginTestCase
         $pid = $this->heldReply();
 
         self::assertSame([Status::RETRY, TIME_NOW + 60], [$this->forum->row($pid)['status'], (int)$this->forum->row($pid)['retry_at']]);
-        $notice = (string)$this->forum->plugin->admin->notice(TIME_NOW);
-        self::assertStringContainsString('przeciążona', $notice);
-        self::assertStringContainsString(date('Y-m-d H:i', TIME_NOW + 60), $notice);
+        self::assertSame($this->refusalNotice('minos_notice_overloaded', TIME_NOW + 60, 'kolejka_pelna'),
+            $this->forum->plugin->admin->notice(TIME_NOW), 'the overload\'s message, not the daily limit\'s');
+    }
+
+    /**
+     * The ACP notice of a refusal as the language file words it, escaped as the ACP shows it.
+     */
+    private function refusalNotice(string $key, int $until, string $code): string
+    {
+        return htmlspecialchars($this->forum->platform()->lang($key, date('Y-m-d H:i', $until), $code), ENT_QUOTES, 'UTF-8');
     }
 
     public function testAnOverloadLongerThanTheTimeoutAppliesTheFailureModeAtOnce(): void
