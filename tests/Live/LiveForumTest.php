@@ -757,7 +757,7 @@ final class LiveForumTest extends TestCase
             'media' => $xpath->query('//img|//iframe|//video|//object|//embed')->length,
             // White space, separators and format characters (a zero-width space, a soft
             // hyphen) take no visible place: a text of only those shows nothing.
-            'has_text' => preg_replace('/[\p{Cf}\p{Z}\s]+/u', '', $text) !== '',
+            'has_text' => preg_replace('/[\s\p{Z}\p{Cf}\p{Cc}\p{M}\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}]+/u', '', $text) !== '',
         ];
     }
 

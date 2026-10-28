@@ -96,6 +96,16 @@ final class Text
         'co.jp', 'co.kr', 'co.in', 'co.za', 'com.br', 'com.tr', 'com.ua', 'com.cn', 'com.mx', 'co.il',
     ];
 
+    /**
+     * What a reader does not see on its own (as plugin-wordpress's `Text::INVISIBLE`, plus
+     * marks): white space and separators (`\p{Z}`: U+3000, U+2028…), format characters
+     * (`\p{Cf}`: U+200B, U+2060, U+FEFF, the soft hyphen U+00AD…), controls (`\p{Cc}`),
+     * marks without a base (`\p{M}`: U+034F, U+FE0F — real text keeps its base letters),
+     * and the blank fillers some scripts carry (the Hangul fillers, the blank Braille
+     * pattern).
+     */
+    private const INVISIBLE = '/[\s\p{Z}\p{Cf}\p{Cc}\p{M}\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}]+/u';
+
     /** A tag's attributes, quoted values whole (they may hold `<`, `>`, `<!--`). */
     private const ATTRIBUTES = '(?:[^<>"\']|"[^"]*"|\'[^\']*\')*';
 
@@ -299,7 +309,7 @@ final class Text
      * or `title` notwithstanding), a video MyBB embeds (a known site, a valid address), an
      * attachment, or a link whose label shows nothing (`[url=X] [/url]`, `[url=X][img]…`,
      * `<a href="X"> </a>`), with nothing else that takes visible place — white space and
-     * invisible characters (a zero-width space, a soft hyphen…) do not. A bare address the
+     * invisible characters ({@see INVISIBLE}: a zero-width space, a soft hyphen…) do not. A bare address the
      * reader sees (`https://…`, `[url]X[/url]`, an image or video tag MyBB does not render)
      * is text. MyBB 1.8.41's reader view, recorded
      * by the live run (`tests/fixtures/mybb-1.8.41/reader-view.json`), is the reference.
@@ -320,14 +330,13 @@ final class Text
     }
 
     /**
-     * Whether a text shows a reader nothing: only white space, separators (`\p{Z}`: U+3000,
-     * U+2028…) and format characters (`\p{Cf}`: U+200B, U+2060, U+FEFF, the soft hyphen
-     * U+00AD…), which take no visible place on the page. When PCRE fails here the text is
-     * not blank: in doubt, it is sent.
+     * Whether a text shows a reader nothing: only characters in {@see INVISIBLE}, which take
+     * no visible place on the page. When PCRE fails here the text is not blank: in doubt,
+     * it is sent.
      */
     private static function blank(string $text): bool
     {
-        return preg_replace('/[\p{Cf}\p{Z}\s]+/u', '', $text) === '';
+        return preg_replace(self::INVISIBLE, '', $text) === '';
     }
 
     /**

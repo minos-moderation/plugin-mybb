@@ -95,6 +95,6 @@ final class ReaderViewTest extends TestCase
      */
     private static function words(string $text): array
     {
-        return array_values(array_filter((array)preg_split('/[\p{Cf}\p{Z}\s]+/u', $text), 'strlen'));
+        return array_values(array_filter((array)preg_split('/[\s\p{Z}\p{Cf}\p{Cc}\p{M}\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}]+/u', $text), 'strlen'));
     }
 }
