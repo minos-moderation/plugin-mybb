@@ -62,6 +62,11 @@ Minos.
 6. Napisz próbny post jako zwykły użytkownik. Stan każdego wysłanego postu widać
    w **Narzędzia i konserwacja → Dzienniki → Minos — dziennik**.
 
+**Aktualizacja do nowej wersji**: dezaktywuj wtyczkę, podmień pliki i aktywuj ją ponownie.
+Aktywacja dodaje do tabel wtyczki kolumny, których wymaga nowa wersja (dane zostają); bez
+niej nowa wersja nie zapisze postów do tabeli. Posty, które czekały na werdykt w czasie
+dezaktywacji, wtyczka wysyła ponownie przy pierwszym przebiegu zadania.
+
 ## Ustawienia
 
 | Ustawienie | Znaczenie | Domyślnie |
