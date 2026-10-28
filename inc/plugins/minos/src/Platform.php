@@ -61,6 +61,10 @@ final class Platform
         // The revision being assessed: 0 is sent as `mybb:<pid>`, n as `mybb:<pid>.<n>`
         // ({@see Submitter::itemId}); an author's edit of a waiting post adds one.
         'rev' => 'small',
+        // The gateway's answer as delivered (a wire value: `bezpieczne`, `ocenzurowane`,
+        // `zablokowane` or `nieocenione`, whatever the plugin then did) and when it came:
+        // with `accepted_at` (the 202), the ACP's time-to-verdict figures.
+        'answer' => 'varchar(20)', 'answered_at' => 'int',
     ];
 
     /** The log table's columns. */
@@ -485,6 +489,7 @@ final class Platform
             'support' => 0, 'error_code' => '', 'decided_at' => 0, 'auto_published' => 0,
             'claimed_at' => 0, 'claimed_from' => '', 'original_text' => '', 'sent_sha256' => '',
             'masked_text' => '', 'apply_errors' => 0, 'first_post' => '', 'rev' => 0,
+            'answer' => '', 'answered_at' => 0,
         ]));
     }
 
@@ -660,6 +665,28 @@ final class Platform
             "support='1' OR auto_published='1' OR verdict='" . Status::REASON_APPLY_ERROR . "' OR status IN ('"
                 . implode("','", [Status::HELD, Status::PENDING, Status::RETRY, Status::APPLYING, Status::SUPERSEDED]) . "')",
             ['order_by' => 'submitted_at', 'order_dir' => 'DESC', 'limit' => $limit]);
+    }
+
+    /**
+     * The verdicts the gateway delivered since a moment: for each, its answer and, when the
+     * row kept the moment of the gateway's `202`, the seconds from it to the delivery.
+     * Codes and times only — never a text.
+     *
+     * @param int $since Unix seconds.
+     * @return array<int,array{answer:string,seconds:int|null}> One per delivered verdict.
+     */
+    public function answersSince(int $since): array
+    {
+        $answers = [];
+        foreach ($this->rows(self::PENDING_TABLE, "answered_at>='" . $since . "' AND answer<>''", []) as $row) {
+            $accepted = (int)$row['accepted_at'];
+            $answered = (int)$row['answered_at'];
+            $answers[] = [
+                'answer'  => (string)$row['answer'],
+                'seconds' => $accepted > 0 && $answered >= $accepted ? $answered - $accepted : null,
+            ];
+        }
+        return $answers;
     }
 
     /**

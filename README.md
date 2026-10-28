@@ -248,6 +248,13 @@ numer postu — nigdy treść błędu.
   ocenzurowanym zatrzymanym w kolejce — tekst zamaskowany przez bramę) oraz dziennik
   zdarzeń. Dziennik zawiera wyłącznie kody i
   numery postów — nigdy treść, klucz ani sekret. Wpisy starsze niż 30 dni są usuwane.
+- **Werdykty z ostatnich 7 dni** (na tej samej stronie): mediana (P50) i 95. percentyl (P95)
+  czasu od przyjęcia postu przez bramę (odpowiedź `202`) do doręczenia werdyktu oraz liczba
+  werdyktów `bezpieczne`, `ocenzurowane`, `zablokowane` i `nieocenione` — takich, jakie
+  wydała brama, niezależnie od tego, co wtyczka potem zrobiła z postem (np. tryb awaryjny
+  dla postu dłuższego niż 3000 znaków). Czas jest liczony tylko z werdyktów, przy których
+  wtyczka zapisała chwilę przyjęcia (werdykt potrafi wyprzedzić odpowiedź `202`). Liczby
+  pochodzą z tabeli wtyczki: bez treści postów i bez zapytań do bramy.
 - **Jak długo wtyczka przechowuje dane postu**: wiersz rozstrzygniętego postu — z werdyktem,
   kategoriami, oryginałem opublikowanego postu ocenzurowanego i zamaskowanym tekstem
   postu zatrzymanego w kolejce — jest usuwany 30 dni po rozstrzygnięciu. Sam wysłany

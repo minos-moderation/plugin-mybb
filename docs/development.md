@@ -35,7 +35,7 @@ The classes:
 | `Applier` | A verdict or the failure mode → approve, hold, soft-delete, or publish the masked text. |
 | `Task` | Timeouts, due retries, pruning. |
 | `Installer` | Settings group, tables, task; the lifecycle functions. |
-| `Admin` | Masked secrets on the settings page, the ACP notice (problems, a configuration error, a daily limit or overload until a given time), the Tools → Logs page. |
+| `Admin` | Masked secrets on the settings page, the ACP notice (problems, a configuration error, a daily limit or overload until a given time), the Tools → Logs page with the last 7 days' verdict figures. |
 | `Plugin` | Builds the objects once per request. |
 
 ## How the plugin holds a post
@@ -202,6 +202,13 @@ applying for more than 5 min ─► back to claimed_from (the task)
   `masked_text` and shown on the ACP page. The original goes into the row first, and the
   new message is read back before the post is approved: a message that could not be
   written keeps the post held.
+
+Every verdict the webhook applies — on time or late, whatever it then does — records the
+gateway's answer as delivered (`answer`: `bezpieczne`, `ocenzurowane`, `zablokowane`,
+`nieocenione`) and the moment (`answered_at`). The ACP page (`Admin::verdictFigures`) reads
+the rows answered in the last 7 days: the median and the 95th percentile (nearest rank) of
+`answered_at` − `accepted_at` over those whose `202` was recorded, and a count per answer.
+No text, no key, no request to the gateway.
 
 `PREFIX_minos_log` holds events with a code and a post id — never content, a key or a
 secret. Log entries are kept 30 days; decided rows — with the verdict, the original text

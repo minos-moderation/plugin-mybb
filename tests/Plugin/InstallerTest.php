@@ -141,7 +141,7 @@ final class InstallerTest extends TestCase
         minos_install();
         minos_activate();
 
-        foreach (['sent_sha256', 'masked_text', 'apply_errors', 'first_post', 'rev'] as $column) {
+        foreach (['sent_sha256', 'masked_text', 'apply_errors', 'first_post', 'rev', 'answer', 'answered_at'] as $column) {
             self::assertTrue($this->forum->db->field_exists($column, 'minos_pending'), $column);
         }
         $row = $this->forum->platform()->pending(41);

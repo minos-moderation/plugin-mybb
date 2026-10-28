@@ -77,7 +77,7 @@ final class Applier
      */
     public function verdict(array $row, array $payload, Settings $settings, int $now): string
     {
-        $record = self::record($payload);
+        $record = self::record($payload) + self::answered($payload, $now);
         if ($payload['status'] !== WebhookPayload::ASSESSED || $payload['kwalifikacja'] === null) {
             return $this->failure($row, 'nieocenione', $settings, $now, $record);
         }
@@ -170,24 +170,25 @@ final class Applier
     {
         $pid = (int)$row['pid'];
         $qualification = $payload['status'] === WebhookPayload::ASSESSED ? $payload['kwalifikacja'] : null;
+        $answered = self::answered($payload, $now);
         $post = $this->platform->post($pid);
         $status = self::untouchable($post, 1);
         if ($status !== null) {
-            $this->platform->updatePending($pid, ['status' => $status, 'auto_published' => 0]);
+            $this->platform->updatePending($pid, ['status' => $status, 'auto_published' => 0] + $answered);
             return $status;
         }
         $sent = $this->sentText($row, $post);
         if ($sent === null) {
             // Not the text that was assessed: nothing is applied, and no later verdict will be.
-            $this->platform->updatePending($pid, ['status' => Status::PUBLISHED, 'auto_published' => 0]);
+            $this->platform->updatePending($pid, ['status' => Status::PUBLISHED, 'auto_published' => 0] + $answered);
             return Status::PUBLISHED;
         }
         if ($qualification === null || ($qualification === 'bezpieczne' && (int)$row['truncated'] === 1)) {
-            $this->platform->updatePending($pid, ['status' => Status::PUBLISHED]);
+            $this->platform->updatePending($pid, ['status' => Status::PUBLISHED] + $answered);
             return Status::PUBLISHED;
         }
 
-        $record = self::record($payload) + ['auto_published' => 0, 'decided_at' => $now];
+        $record = self::record($payload) + $answered + ['auto_published' => 0, 'decided_at' => $now];
         if ($qualification === 'bezpieczne') {
             $status = Status::PUBLISHED;
         } elseif ($qualification === 'ocenzurowane' && $this->censor($row, $post, $payload['ocenzurowany'], $sent, $settings)) {
@@ -253,6 +254,19 @@ final class Applier
             'categories' => substr(implode(',', $payload['kategorie']), 0, 255),
             'support'    => $payload['wsparcie'] ? 1 : 0,
         ];
+    }
+
+    /**
+     * What a delivered payload says, for the ACP's figures: the answer as the gateway gave
+     * it and when it came — whatever the plugin then does with it.
+     *
+     * @param array{status:string,kwalifikacja:?string} $payload
+     * @return array{answer:string,answered_at:int}
+     */
+    private static function answered(array $payload, int $now): array
+    {
+        $qualification = $payload['status'] === WebhookPayload::ASSESSED ? $payload['kwalifikacja'] : null;
+        return ['answer' => $qualification ?? 'nieocenione', 'answered_at' => $now];
     }
 
     /**
