@@ -51,6 +51,12 @@ final class Status
     public const REASON_CONFIG_ERROR = 'config_error';
     public const REASON_NO_TEXT = 'no_text';
 
+    /**
+     * Recorded in `verdict` when the post's text could not be read (a PCRE failure in
+     * {@see Text}): not an empty text, so nothing was sent and the failure mode decides.
+     */
+    public const REASON_TEXT_ERROR = 'text_error';
+
     /** Recorded in `verdict` when the post was edited before its verdict came. */
     public const REASON_EDITED = 'edited';
 

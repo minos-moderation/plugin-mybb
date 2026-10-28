@@ -116,6 +116,50 @@ final class TextTest extends TestCase
         self::assertSame('Tytuł', Text::forPost('[attachment=7]', 'Tytuł')['tekst']);
     }
 
+    /**
+     * A post crafted to exhaust PCRE (the audit's probe: unclosed `[url=` tags) is a text
+     * the plugin could not read — never an empty text, never the subject alone.
+     *
+     * @dataProvider pcreBombs
+     */
+    public function testAPcreFailureIsAnErrorNotAnEmptyText(int $repeats, string $jit): void
+    {
+        $before = ini_get('pcre.jit');
+        ini_set('pcre.jit', $jit);
+        try {
+            $reply = Text::forPost(self::bomb($repeats));
+            $thread = Text::forPost(self::bomb($repeats), 'Niewinny tytuł');
+        } finally {
+            ini_set('pcre.jit', (string)$before);
+        }
+        self::assertTrue($reply['error']);
+        self::assertSame('', $reply['tekst']);
+        self::assertTrue($thread['error']);
+        self::assertSame('', $thread['tekst'], 'the subject alone is never what was read');
+    }
+
+    /** @return array<string,array{0:int,1:string}> */
+    public function pcreBombs(): array
+    {
+        return [
+            '340, JIT on'   => [340, '1'],
+            '340, JIT off'  => [340, '0'],
+            '1000, JIT on'  => [1000, '1'],
+            '1000, JIT off' => [1000, '0'],
+        ];
+    }
+
+    public function testTheSamePatternOnAShortPostIsReadAsUsual(): void
+    {
+        // The guard: the probe at an ordinary size is read (its unclosed tags stay as
+        // readers see them), and the pattern it abuses still renders a closed tag.
+        $sent = Text::forPost(self::bomb(10));
+        self::assertFalse($sent['error']);
+        self::assertSame(self::bomb(10), $sent['tekst']);
+        $closed = Text::forPost('Widoczne SLOWO [url=http://a.pl]x[/url]');
+        self::assertSame([false, 'Widoczne SLOWO x (http://a.pl)'], [$closed['error'], $closed['tekst']]);
+    }
+
     public function testBrokenUtf8BecomesValidText(): void
     {
         $sent = Text::forPost("zła sekwencja \xC3\x28 tutaj");
@@ -136,5 +180,13 @@ final class TextTest extends TestCase
             $many .= " https://site{$i}.example{$i}.org/";
         }
         self::assertCount(Text::MAX_DOMAINS, Text::linkDomains($many));
+    }
+
+    /**
+     * The audit's PCRE probe: visible words, then unclosed `[url=` tags.
+     */
+    private static function bomb(int $repeats): string
+    {
+        return 'Widoczne SLOWO ' . str_repeat('[url=http://a.pl]x', $repeats);
     }
 }

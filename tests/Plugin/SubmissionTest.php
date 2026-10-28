@@ -206,6 +206,69 @@ final class SubmissionTest extends PluginTestCase
         self::assertSame(1, (int)$this->forum->post($published)['visible']);
     }
 
+    /**
+     * A post whose text PCRE cannot read (the audit's probe, unclosed `[url=` tags) gets the
+     * failure mode unsent: never `no_text`, and a new thread never goes out with its subject
+     * alone — which a `bezpieczne` would then have published even under fail-closed.
+     */
+    public function testAnUnreadableReplyIsHeldUnsentUnderFailClosed(): void
+    {
+        $pid = $this->heldReply(self::bomb());
+
+        self::assertSame([], $this->forum->transport->requests);
+        $row = $this->forum->row($pid);
+        self::assertSame([Status::HELD, Status::REASON_TEXT_ERROR], [$row['status'], $row['verdict']]);
+        self::assertSame(0, (int)$this->forum->post($pid)['visible']);
+        self::assertSame([['text_error', $pid]], array_map(static function (array $entry): array {
+            return [$entry['event'], (int)$entry['pid']];
+        }, $this->logEntries()));
+        self::assertSame('nie udało się odczytać tekstu postu', $this->forum->platform()->lang('minos_reason_' . $row['verdict']));
+    }
+
+    public function testAnUnreadableNewThreadIsHeldWithoutSendingItsSubject(): void
+    {
+        $pid = (int)$this->forum->write(true, self::bomb(), ['subject' => 'Niewinny tytuł'])->return_values['pid'];
+
+        self::assertSame([], $this->forum->transport->requests, 'not even the subject alone');
+        self::assertSame([Status::HELD, Status::REASON_TEXT_ERROR], [$this->forum->row($pid)['status'], $this->forum->row($pid)['verdict']]);
+        self::assertSame(0, (int)$this->forum->post($pid)['visible']);
+        self::assertSame(200, $this->forum->deliver(self::payload($pid)), 'a verdict for it changes nothing');
+        self::assertSame(0, (int)$this->forum->post($pid)['visible']);
+    }
+
+    public function testAnUnreadablePostIsPublishedUnassessedUnderFailOpen(): void
+    {
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $pid = (int)$this->forum->write(true, self::bomb(), ['subject' => 'Niewinny tytuł'])->return_values['pid'];
+
+        self::assertSame([], $this->forum->transport->requests);
+        $row = $this->forum->row($pid);
+        self::assertSame([Status::PUBLISHED, Status::REASON_TEXT_ERROR, '1'], [$row['status'], $row['verdict'], (string)$row['auto_published']]);
+        self::assertSame(1, (int)$this->forum->post($pid)['visible']);
+    }
+
+    public function testAResendOfAnUnreadablePostSendsNothing(): void
+    {
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(503, 'kolejka_niedostepna')]));
+        $pid = $this->heldReply('Zwykły tekst.');
+        $this->forum->db->update_query('posts', ['message' => self::bomb()], "pid='" . $pid . "'");
+        $this->forum->platform()->updatePending($pid, ['retry_at' => TIME_NOW - 1]);
+        $this->forum->plugin(new RecordingTransport());
+
+        task_minos(['tid' => 1]);
+
+        self::assertSame([], $this->forum->transport->requests);
+        self::assertSame([Status::HELD, Status::REASON_TEXT_ERROR], [$this->forum->row($pid)['status'], $this->forum->row($pid)['verdict']]);
+    }
+
+    /**
+     * The audit's PCRE probe: visible words, then 340 unclosed `[url=` tags (about 6 KB).
+     */
+    private static function bomb(): string
+    {
+        return 'Widoczne SLOWO ' . str_repeat('[url=http://a.pl]x', 340);
+    }
+
     public function testA429KeepsThePostPendingUntilPonowZaS(): void
     {
         $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(429, 'limit_minutowy_klucza', 120)]));

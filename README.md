@@ -145,6 +145,9 @@ werdyktu nie ma:
 - brama odrzuciła wysyłkę z powodu błędu konfiguracji (np. zły klucz, profil spoza listy
   klucza, brak zapisanego webhooka) — kod błędu pojawia się w panelu administratora;
 - post nie ma tekstu do oceny (np. sam załącznik);
+- nie udało się odczytać tekstu postu (np. treść tak zbudowana, że przetwarzanie wyrażeń
+  regularnych przerywa się z błędem) — wtyczka nie wysyła wtedy niczego, nawet samego
+  tytułu wątku, a w dzienniku zapisuje zdarzenie z numerem postu;
 - post był dłuższy niż 3000 znaków, a brama uznała jego początek za bezpieczny.
 
 **fail-closed** (domyślnie) zostawia taki post w kolejce moderacji dla człowieka.

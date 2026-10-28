@@ -20,8 +20,8 @@ use Minos\Client\WebhookPayload;
  * - `ocenzurowane` → publish the masked text, or keep in the queue — by setting, and
  *   always keep it when the masked text cannot stand for the whole post (below);
  * - `zablokowane` → keep in the queue, or soft-delete — by setting;
- * - `nieocenione`, no answer in time, a configuration error, a post with no text → the
- *   failure mode: `fail-open` publishes (and marks the row `auto_published`), `fail-closed`
+ * - `nieocenione`, no answer in time, a configuration error, a post with no text or one
+ *   whose text could not be read → the failure mode: `fail-open` publishes (and marks the row `auto_published`), `fail-closed`
  *   keeps in the queue. Never a guess;
  * - a post longer than the 3000 characters sent: the verdict judged its beginning only,
  *   so a publishing verdict (`bezpieczne`) goes to the failure mode too; `zablokowane`
@@ -102,7 +102,7 @@ final class Applier
      *
      * @param array<string,mixed>      $row      The claimed row.
      * @param string                   $reason   `nieocenione`, `timeout`, `config_error`,
-     *     `no_text` or `truncated`.
+     *     `no_text`, `text_error` or `truncated`.
      * @param Settings                 $settings The settings.
      * @param int                      $now      Unix seconds.
      * @param array<string,int|string> $record   More columns to record.

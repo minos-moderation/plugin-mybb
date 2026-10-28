@@ -137,6 +137,7 @@ final class Submitter
         $message = (string)($data['message'] ?? '');
         $subject = $thread ? (string)($data['subject'] ?? '') : '';
         $text = Text::forPost($message, $subject, $this->platform->forumParsing((int)($data['fid'] ?? 0)));
+        $signals = $text['error'] ? null : self::linkSignals($subject . "\n" . $message);
         $row = [
             'pid'          => $pid,
             'tid'          => $thread ? (int)($values['tid'] ?? 0) : (int)($data['tid'] ?? 0),
@@ -154,11 +155,15 @@ final class Submitter
         $row = $this->platform->pending($pid) ?? $row;
 
         $settings = new Settings($this->platform->settings());
+        if ($signals === null) {
+            $this->unreadable($row, $settings, $now);
+            return;
+        }
         if ($text['tekst'] === '') {
             $this->decideWithout($row, Status::REASON_NO_TEXT, $settings, $now);
             return;
         }
-        $meta = self::linkSignals($subject . "\n" . $message);
+        $meta = $signals;
         $first = $this->platform->currentUserHasNoPosts();
         if ($first !== null) {
             $meta['author_first_post'] = $first;
@@ -216,6 +221,11 @@ final class Submitter
             }
             $text = Text::forPost($post['message'], (int)$row['is_thread'] === 1 ? $post['subject'] : '',
                 $this->platform->forumParsing($post['fid']));
+            $signals = $text['error'] ? null : self::linkSignals($post['subject'] . "\n" . $post['message']);
+            if ($signals === null) {
+                $this->unreadable($row, $settings, $now);
+                continue;
+            }
             if ($text['tekst'] === '') {
                 $this->decideWithout($row, Status::REASON_NO_TEXT, $settings, $now);
                 continue;
@@ -224,8 +234,7 @@ final class Submitter
             $this->platform->updatePending($pid, $shape, Status::RETRY);
             $batch[] = [
                 'row'  => $shape + $row,
-                'item' => self::item($pid, $text['tekst'], (string)$settings->profile(),
-                    self::linkSignals($post['subject'] . "\n" . $post['message'])),
+                'item' => self::item($pid, $text['tekst'], (string)$settings->profile(), $signals),
             ];
         }
         foreach (array_chunk($batch, Gateway::MAX_ITEMS) as $chunk) {
@@ -264,12 +273,16 @@ final class Submitter
     /**
      * The link signals of a post: `links`, and `link_domains` when it has any.
      *
-     * @return array<string,mixed>
+     * @return array<string,mixed>|null Null when the text could not be read (a PCRE failure).
      */
-    private static function linkSignals(string $text): array
+    private static function linkSignals(string $text): ?array
     {
-        $signals = ['links' => Text::links($text)];
-        $domains = Text::linkDomains($text);
+        try {
+            $signals = ['links' => Text::links($text)];
+            $domains = Text::linkDomains($text);
+        } catch (TextError $e) {
+            return null;
+        }
         if ($domains !== []) {
             $signals['link_domains'] = $domains;
         }
@@ -326,6 +339,19 @@ final class Submitter
             $this->platform->updatePending((int)$entry['row']['pid'], ['error_code' => $result['kod']], Status::RETRY);
             $this->decideWithout($entry['row'], Status::REASON_CONFIG_ERROR, $settings, $now);
         }
+    }
+
+    /**
+     * A post whose text could not be read: logged with its id (never its content), and the
+     * failure mode applies — nothing is sent, not even a new thread's subject alone, and no
+     * verdict can ever publish it.
+     *
+     * @param array<string,mixed> $row
+     */
+    private function unreadable(array $row, Settings $settings, int $now): void
+    {
+        $this->platform->log('text_error', '', (int)$row['pid'], $now);
+        $this->decideWithout($row, Status::REASON_TEXT_ERROR, $settings, $now);
     }
 
     /**

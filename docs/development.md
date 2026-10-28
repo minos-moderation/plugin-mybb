@@ -28,6 +28,7 @@ The classes:
 | `Platform` | The ONE adapter to MyBB: globals, functions, `Moderation`, tables, the ACP page object. |
 | `Settings` | Reads and checks the settings; everything that decides publish or hold is read fail-closed. |
 | `Text` | Post → `tekst`: what readers see (MyBB's rendering rules, per forum), the first 3000 characters; the link signals. |
+| `TextError` | A PCRE failure inside `Text`: the text could not be read (`error: true`, never `''`). |
 | `Gateway` | `POST /api/v1/b2b/oceny` over cURL; reads answers into accepted / retry / config error. |
 | `Submitter` | The hold (validate hooks), the submission (insert-end hooks), resubmission, edits. |
 | `Receiver` | The webhook's checklist: method, signature, payload, id, claim, apply. |
@@ -81,6 +82,11 @@ The text readers SEE, following MyBB's own text renderer
   MyBB would not parse stays literally.
 - A new thread's subject goes in front (always escaped, never parsed). Only the first 3000
   characters are sent.
+- Every regular expression runs through one checked helper in `Text`: a PCRE failure (a
+  post crafted to exhaust the backtrack limit, e.g. a few hundred unclosed `[url=` tags)
+  throws `TextError`, and `Text::forPost` returns `error: true` — never `''`. The post then
+  gets the failure mode as `text_error` with nothing sent, not even a new thread's subject
+  alone (`no_text` is only for a post readers see no text in).
 - `meta`: `links` (distinct links), `link_domains` (up to 10 registrable domains — the last
   two host labels, or three under a two-label public suffix from a short list; an
   approximation of the Public Suffix List), `author_first_post` for registered authors.
