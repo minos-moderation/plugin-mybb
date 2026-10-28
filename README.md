@@ -158,7 +158,9 @@ werdyktu nie ma:
 - brama odmówiła przyjęcia postu do chwili, która wypada po końcu jego czasu oczekiwania
   (np. wyczerpany dobowy limit klucza albo przeciążenie) — tryb awaryjny od razu;
 - brama odrzuciła wysyłkę z powodu błędu konfiguracji (np. zły klucz, profil spoza listy
-  klucza, brak zapisanego webhooka) — kod błędu pojawia się w panelu administratora;
+  klucza, brak zapisanego webhooka) albo odpowiedziała czymś innym niż przyjęciem `202`
+  (np. stroną dostawcy hostingu z kodem `200`) — kod błędu pojawia się w panelu
+  administratora;
 - wtyczka jest włączona, ale jej ustawienia są niekompletne (brak klucza albo sekretu,
   adres bramy bez `https://`, nieznany profil) — nic nie jest wysyłane;
 - post nie ma tekstu do oceny (np. sam załącznik);
@@ -173,9 +175,9 @@ zastosuje, dopóki nikt nie ruszył postu: `zablokowane` odsyła post z powrotem
 moderacji, `ocenzurowane` postępuje według ustawienia „Post ocenzurowany”. Jeśli w tym czasie
 moderator zdecydował o poście albo post został edytowany, decyzja człowieka jest ostateczna.
 
-Gdy brama jest chwilowo przeciążona albo niedostępna (lub nie ma połączenia), post czeka:
-zadanie ponawia wysyłkę po czasie wskazanym przez bramę albo po coraz dłuższej przerwie
-(od 1 minuty do 1 godziny). Jeśli do końca czasu oczekiwania się nie uda — tryb awaryjny.
+Gdy brama jest chwilowo przeciążona albo niedostępna (lub nie ma połączenia albo
+połączenie przekroczyło czas — `408`), post czeka: zadanie ponawia wysyłkę po czasie
+wskazanym przez bramę albo po coraz dłuższej przerwie (od 1 minuty do 1 godziny). Jeśli do końca czasu oczekiwania się nie uda — tryb awaryjny.
 Gdy czas wskazany przez bramę kończy się dopiero po czasie oczekiwania postu (np. po
 wyczerpaniu dobowego limitu klucza brama odmawia do końca doby), post od razu dostaje tryb
 awaryjny, bez czekania. Przy wyczerpanym dobowym limicie i przy przeciążeniu bramy każda

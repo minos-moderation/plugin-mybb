@@ -29,7 +29,7 @@ The classes:
 | `Settings` | Reads and checks the settings; everything that decides publish or hold is read fail-closed. |
 | `Text` | Post → `tekst`: what readers see (MyBB's rendering rules, per forum), the first 3000 characters; the link signals. |
 | `TextError` | A PCRE failure inside `Text`: the text could not be read (`error: true`, never `''`). |
-| `Gateway` | `POST /api/v1/b2b/oceny` over cURL; reads answers into accepted / retry / config error. |
+| `Gateway` | `POST /api/v1/b2b/oceny` over cURL; reads answers into accepted (`202` only) / retry (429, 408, 5xx, no answer) / config error. |
 | `Submitter` | The hold (validate hooks), the submission (insert-end hooks), resubmission, edits. |
 | `Receiver` | The webhook's checklist: method, signature, payload, id, claim, apply. |
 | `Applier` | A verdict or the failure mode → approve, hold, soft-delete, or publish the masked text. |
@@ -98,9 +98,9 @@ The text readers SEE, following MyBB's own text renderer
 ```
 insert ─► retry ──202──► pending ──webhook──► applying ─► published | censored | held | deleted
             │ ▲                                              superseded | gone
-            │ └─ 429/503/no answer: retry_at = ponow_za_s, or 60 s doubling to 1 h
+            │ └─ 429/408/5xx/no answer: retry_at = ponow_za_s, or 60 s doubling to 1 h
             ├─ ponow_za_s ending after submitted_at + timeout: failure mode now (gateway_limit)
-            └─ other 4xx: failure mode (config_error); ACP notice
+            └─ other 4xx, a 2xx but 202: failure mode (config_error, http_<n>); ACP notice
 pending/retry older than the timeout (≥ 20 min) ─► failure mode (timeout)
 fail-open ─► published + auto_published ──late webhook──► applying ─► held | censored | published
 an edit while retry/pending ─► superseded (the post stays in MyBB's queue)
@@ -139,6 +139,8 @@ applying for more than 5 min ─► back to claimed_from (the task)
   `limit_dobowy_klucza`, `limit_globalny_b2b` or `kolejka_pelna` refusal is kept in the
   datacache entry (`refusal`: code, until) for the ACP notice "the gateway does not accept
   until …"; the next `202` clears it, and it is not shown past its end.
+- `author_first_post` is read in the author's request and kept in `first_post` ('1', '0',
+  '' for a guest), so a resubmission from the task sends it as first sent.
 - The submission records the gateway's answer only while the row is still `retry`, so a
   verdict that arrived before the `202` is not overwritten.
 - Before applying, the post is read again: gone → `gone`; no longer unapproved (a moderator

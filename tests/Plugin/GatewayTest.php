@@ -27,6 +27,10 @@ final class GatewayTest extends TestCase
     {
         return [
             '202'                       => [RecordingTransport::accepted(), Gateway::ACCEPTED, '', null],
+            '200 is no acceptance'      => [['status' => 200, 'body' => '<html>hosting</html>'], Gateway::CONFIG_ERROR, 'http_200', null],
+            '200 even with a 202 body'  => [['status' => 200, 'body' => '{"przyjete":["mybb:1"]}'], Gateway::CONFIG_ERROR, 'http_200', null],
+            '204 is no acceptance'      => [['status' => 204, 'body' => ''], Gateway::CONFIG_ERROR, 'http_204', null],
+            '408 is a network failure'  => [['status' => 408, 'body' => ''], Gateway::RETRY, 'http_408', null],
             '429 with ponow_za_s'       => [RecordingTransport::refused(429, 'limit_minutowy_klucza', 30), Gateway::RETRY, 'limit_minutowy_klucza', 30],
             '429 kolejka_pelna'         => [RecordingTransport::refused(429, 'kolejka_pelna', 60), Gateway::RETRY, 'kolejka_pelna', 60],
             '503 without ponow_za_s'    => [RecordingTransport::refused(503, 'kolejka_niedostepna'), Gateway::RETRY, 'kolejka_niedostepna', null],

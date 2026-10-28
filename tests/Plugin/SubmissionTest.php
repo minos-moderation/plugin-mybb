@@ -103,6 +103,31 @@ final class SubmissionTest extends PluginTestCase
         self::assertArrayNotHasKey('author_first_post', $this->forum->transport->lastBody()['elementy'][0]['meta']);
     }
 
+    /**
+     * The audit's probe M8: a resubmission carries the signal the first send did, as it
+     * was then — the task has no author to ask.
+     */
+    public function testAResubmissionCarriesAuthorFirstPostAsFirstSent(): void
+    {
+        $this->forum->mybb->user['postnum'] = 0;
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(503, 'kolejka_niedostepna')]));
+        $first = $this->heldReply('Pierwszy post autora.');
+        self::assertTrue($this->forum->transport->lastBody()['elementy'][0]['meta']['author_first_post']);
+        $this->forum->mybb->user = ['uid' => 0, 'moderateposts' => 0];
+        $guest = $this->heldReply('Post gościa.');
+        foreach ([$first, $guest] as $pid) {
+            $this->forum->platform()->updatePending($pid, ['retry_at' => TIME_NOW - 1]);
+        }
+        $this->forum->mybb->user = ['uid' => 99, 'postnum' => 50, 'moderateposts' => 0];
+        $this->forum->plugin(new RecordingTransport());
+
+        task_minos(['tid' => 1]);
+
+        $meta = array_column($this->forum->transport->lastBody()['elementy'], 'meta', 'id');
+        self::assertTrue($meta['mybb:' . $first]['author_first_post'], 'as first sent, not the user the task runs for');
+        self::assertArrayNotHasKey('author_first_post', $meta['mybb:' . $guest], 'unknown for a guest');
+    }
+
     public function testTheTextIsPlainAndCutAtThreeThousandCharacters(): void
     {
         $pid = $this->heldReply('[b]' . str_repeat('ą', 3200) . '[/b]');
@@ -405,6 +430,30 @@ final class SubmissionTest extends PluginTestCase
 
         self::assertSame([Status::HELD, Status::REASON_GATEWAY_LIMIT], [$this->forum->row($late)['status'], $this->forum->row($late)['verdict']]);
         self::assertSame([Status::RETRY, TIME_NOW + 180], [$this->forum->row($early)['status'], (int)$this->forum->row($early)['retry_at']]);
+    }
+
+    /**
+     * The audit's probe C6: a `200` from something in front of the gateway (a hosting page)
+     * accepted nothing — a configuration error, shown, not 20 minutes of silent waiting.
+     */
+    public function testA200IsNoAcceptance(): void
+    {
+        $this->forum->plugin(new RecordingTransport([['status' => 200, 'body' => '<html>portal hostingu</html>']]));
+        $pid = $this->heldReply();
+        self::assertSame([Status::HELD, Status::REASON_CONFIG_ERROR, 'http_200'],
+            [$this->forum->row($pid)['status'], $this->forum->row($pid)['verdict'], $this->forum->row($pid)['error_code']]);
+        $notice = (string)$this->forum->plugin->admin->notice();
+        self::assertStringContainsString('http_200', $notice);
+        self::assertStringNotContainsString('portal', $notice, 'never the body');
+    }
+
+    public function testA408IsRetriedAsANetworkFailure(): void
+    {
+        $this->forum->plugin(new RecordingTransport([['status' => 408, 'body' => '']]));
+        $pid = $this->heldReply();
+        self::assertSame([Status::RETRY, 'http_408', 0], [$this->forum->row($pid)['status'], $this->forum->row($pid)['error_code'],
+            (int)$this->forum->post($pid)['visible']]);
+        self::assertNull($this->forum->plugin->admin->notice(), 'no configuration error');
     }
 
     public function testA503OrNoAnswerRetriesAfterABackoff(): void

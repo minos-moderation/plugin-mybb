@@ -8,11 +8,14 @@ namespace Minos\MyBB;
  * `POST {gateway}/api/v1/b2b/oceny`: sends a batch and reads the answer into one of three
  * outcomes the plugin acts on (`docs/contract.md` in `minos-moderation/client-php`):
  *
- * - {@see ACCEPTED}: any 2xx (the contract's `202`). An attempt is promised, not a verdict;
- * - {@see RETRY}: `429`, `503` (and any other 5xx), no answer at all. The items stay
- *   pending and go again after `blad.ponow_za_s`, or after a backoff;
- * - {@see CONFIG_ERROR}: any other answer (a `4xx` but `429`, a redirect). The request is
- *   wrong and retrying will not help; the administrator must see it.
+ * - {@see ACCEPTED}: `202` only, the contract's acceptance. An attempt is promised, not a
+ *   verdict;
+ * - {@see RETRY}: `429`, `503` (and any other 5xx), `408` and no answer at all — a
+ *   timeout is a network failure. The items stay pending and go again after
+ *   `blad.ponow_za_s`, or after a backoff;
+ * - {@see CONFIG_ERROR}: any other answer — a `4xx` but `408` and `429`, a redirect, and
+ *   any other `2xx` (a `200` from something in front of the gateway accepted nothing),
+ *   with the code `http_<status>`. Retrying will not help; the administrator must see it.
  *
  * What goes on the wire is the batch the caller built and the key header — the item ids
  * are `mybb:<pid>`, and no e-mail, IP address or user id is ever in an item
@@ -84,8 +87,12 @@ final class Gateway
      */
     public static function classify(int $status, string $body): array
     {
-        if ($status >= 200 && $status < 300) {
+        if ($status === 202) {
             return self::result(self::ACCEPTED, $status, '', null, null);
+        }
+        if ($status >= 200 && $status < 300) {
+            // Not the gateway's acceptance; its body is no refusal either.
+            return self::result(self::CONFIG_ERROR, $status, 'http_' . $status, null, null);
         }
         $error = json_decode($body, true);
         $error = is_array($error) && is_array($error['blad'] ?? null) ? $error['blad'] : [];
@@ -95,7 +102,7 @@ final class Gateway
         $retryS = is_int($error['ponow_za_s'] ?? null) && $error['ponow_za_s'] >= 0 ? $error['ponow_za_s'] : null;
         $element = is_int($error['element'] ?? null) && $error['element'] >= 0 ? $error['element'] : null;
 
-        if ($status === 0 || $status === 429 || $status >= 500) {
+        if ($status === 0 || $status === 408 || $status === 429 || $status >= 500) {
             return self::result(self::RETRY, $status, $code, $retryS, null);
         }
         return self::result(self::CONFIG_ERROR, $status, $code, null, $element);

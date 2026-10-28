@@ -49,6 +49,8 @@ final class Platform
         'sent_sha256' => 'varchar(64)', 'masked_text' => 'text',
         // Steps that threw for the row ({@see Applier::failedStep}).
         'apply_errors' => 'small',
+        // `author_first_post` as first sent, for a resubmission: '1', '0', or '' (a guest).
+        'first_post' => 'varchar(1)',
     ];
 
     /** The log table's columns. */
@@ -439,7 +441,7 @@ final class Platform
             'prefix_len' => 0, 'text_len' => 0, 'verdict' => '', 'categories' => '',
             'support' => 0, 'error_code' => '', 'decided_at' => 0, 'auto_published' => 0,
             'claimed_at' => 0, 'claimed_from' => '', 'original_text' => '', 'sent_sha256' => '',
-            'masked_text' => '', 'apply_errors' => 0,
+            'masked_text' => '', 'apply_errors' => 0, 'first_post' => '',
         ]));
     }
 

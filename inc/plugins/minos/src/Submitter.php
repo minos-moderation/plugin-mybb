@@ -153,6 +153,8 @@ final class Submitter
         $subject = $thread ? (string)($data['subject'] ?? '') : '';
         $text = Text::forPost($message, $subject, $this->platform->forumParsing((int)($data['fid'] ?? 0)));
         $signals = $text['error'] ? null : self::linkSignals($subject . "\n" . $message);
+        // Read now, in the author's request: a resubmission (the task) has no author.
+        $first = $this->platform->currentUserHasNoPosts();
         $row = [
             'pid'          => $pid,
             'tid'          => $thread ? (int)($values['tid'] ?? 0) : (int)($data['tid'] ?? 0),
@@ -166,6 +168,7 @@ final class Submitter
             'prefix_len'   => $text['prefix_len'],
             'text_len'     => $text['text_len'],
             'sent_sha256'  => self::digest($text),
+            'first_post'   => $first === null ? '' : ($first ? '1' : '0'),
         ];
         $this->platform->addPending($row);
         $row = $this->platform->pending($pid) ?? $row;
@@ -184,11 +187,7 @@ final class Submitter
             $this->decideWithout($row, Status::REASON_NO_TEXT, $settings, $now);
             return;
         }
-        $meta = $signals;
-        $first = $this->platform->currentUserHasNoPosts();
-        if ($first !== null) {
-            $meta['author_first_post'] = $first;
-        }
+        $meta = $signals + self::firstPost($row);
         $this->send([['row' => $row, 'item' => self::item($pid, $text['tekst'], (string)$settings->profile(), $meta)]],
             $settings, $now);
     }
@@ -299,8 +298,20 @@ final class Submitter
         $this->platform->updatePending($pid, $shape, Status::RETRY);
         return [
             'row'  => $shape + $row,
-            'item' => self::item($pid, $text['tekst'], (string)$settings->profile(), $signals),
+            'item' => self::item($pid, $text['tekst'], (string)$settings->profile(), $signals + self::firstPost($row)),
         ];
+    }
+
+    /**
+     * `author_first_post` as the row kept it at the first send.
+     *
+     * @param array<string,mixed> $row
+     * @return array<string,bool> The signal, or nothing (a guest, or a row from before it was kept).
+     */
+    private static function firstPost(array $row): array
+    {
+        $first = (string)($row['first_post'] ?? '');
+        return $first === '1' || $first === '0' ? ['author_first_post' => $first === '1'] : [];
     }
 
     /**
