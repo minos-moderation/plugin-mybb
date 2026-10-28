@@ -17,10 +17,14 @@ use Minos\Client\WebhookPayload;
  *    before the signature is even looked at, and no row or post changes. The gateway
  *    retries any answer but `2xx` until its TTL, then drops the verdict; the posts already
  *    held stay in MyBB's queue for humans.
- * 3. `X-Wergiliusz-Podpis` is verified with the client library's `Signature::verify`
+ * 3. `X-Wergiliusz-Podpis` is checked with the client library's `Signature::check`
  *    (a fresh timestamp, a matching HMAC, compared in constant time): `401` otherwise, and
- *    the gateway tries again. Without a usable stored secret nothing can be verified:
- *    `401` too.
+ *    the gateway tries again. A refusal is counted with its reason only — `malformed`,
+ *    `stale` or `mismatch`, never the body, the header or the secret — in the datacache
+ *    entry {@see REJECTED}, so the ACP can tell the administrator that verdicts arrive but
+ *    their signature does not match ({@see Admin::notice}); the next verified delivery
+ *    forgets it, and so does a newly saved secret. Without a usable stored secret nothing
+ *    can be verified: `401` too, and nothing counted (the ACP lists the missing secret).
  * 4. `WebhookPayload::parse` reads it (`400` for a body that is no payload at all). An id
  *    that is not `mybb:<pid>` or `mybb:<pid>.<n>`, a post the plugin is not waiting for, a
  *    verdict for a revision an author's edit has replaced ({@see Submitter::onUpdated}),
@@ -40,6 +44,15 @@ use Minos\Client\WebhookPayload;
  */
 final class Receiver
 {
+    /**
+     * The datacache entry (under {@see Platform::STATE_PREFIX}) of the signatures refused
+     * since a delivery last passed: `count`, the last `reason`, its moment `at`.
+     */
+    public const REJECTED = 'signature_rejected';
+
+    /** The reasons `Signature::check` gives for a refusal. */
+    public const REJECTION_REASONS = [Signature::MALFORMED, Signature::STALE, Signature::MISMATCH];
+
     /** @var Platform */
     private $platform;
 
@@ -74,9 +87,12 @@ final class Receiver
         if ($secret === null) {
             return 401; // nothing can be verified without a secret
         }
-        if ($signature === null || !Signature::verify($secret, $signature, $body, $now)) {
+        $check = Signature::check($secret, (string)$signature, $body, $now);
+        if ($check !== Signature::OK) {
+            $this->recordRejection($check, $now);
             return 401;
         }
+        $this->forgetRejections();
         $payload = WebhookPayload::parse($body);
         if ($payload === null) {
             return 400;
@@ -111,5 +127,47 @@ final class Receiver
             }
         }
         return 200; // applied, or already handled
+    }
+
+    /**
+     * The signatures refused since a delivery last passed, for the ACP.
+     *
+     * @param Platform $platform The forum.
+     * @return array{count:int,reason:string,at:int}|null Null when there were none (or the
+     *     entry is not one this plugin wrote).
+     */
+    public static function rejections(Platform $platform): ?array
+    {
+        $entry = $platform->state(self::REJECTED);
+        if (!is_array($entry) || !in_array($entry['reason'] ?? null, self::REJECTION_REASONS, true)) {
+            return null;
+        }
+        return ['count' => max(1, (int)($entry['count'] ?? 1)), 'reason' => (string)$entry['reason'], 'at' => (int)($entry['at'] ?? 0)];
+    }
+
+    /**
+     * Counts one refused signature: the reason and the moment, nothing of the delivery.
+     */
+    private function recordRejection(string $reason, int $now): void
+    {
+        if (!in_array($reason, self::REJECTION_REASONS, true)) {
+            return;
+        }
+        $last = self::rejections($this->platform);
+        $this->platform->setState(self::REJECTED, [
+            'count'  => $last !== null ? min(999999999, $last['count'] + 1) : 1,
+            'reason' => $reason,
+            'at'     => $now,
+        ]);
+    }
+
+    /**
+     * A delivery passed: the refusals before it no longer tell anything.
+     */
+    private function forgetRejections(): void
+    {
+        if ($this->platform->state(self::REJECTED) !== null) {
+            $this->platform->setState(self::REJECTED, null);
+        }
     }
 }

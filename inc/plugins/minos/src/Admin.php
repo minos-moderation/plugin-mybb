@@ -14,7 +14,12 @@ namespace Minos\MyBB;
  *   cannot work (what is missing), while the gateway's last answer to a submission was a
  *   configuration error (its code — never content), and while the gateway refuses posts
  *   until a known moment — the key's daily limit, or an overload — with that moment: new
- *   posts get the failure mode until then. The first accepted submission clears it.
+ *   posts get the failure mode until then. The first accepted submission clears it. And
+ *   while the webhook refuses deliveries for their signature ({@see Receiver::rejections}):
+ *   how many since the last one that passed, when, and what the reason points at — the
+ *   secret, the server's clock, or a header that is not the gateway's — so a wrong secret
+ *   shows without reading any server log. A verified delivery or a newly saved secret
+ *   clears it.
  * - A page under Tools & Maintenance → Logs → "Minos — dziennik": the configuration's
  *   state, the verdicts of the last 7 days ({@see verdictFigures}: the median and the 95th
  *   percentile of the time from the gateway's `202` to the verdict, and how many of each
@@ -64,6 +69,12 @@ final class Admin
                 $this->platform->submitSetting($name, $value);
             } elseif (is_array($clear) && !empty($clear[$name])) {
                 $this->platform->submitSetting($name, '');
+            } else {
+                continue;
+            }
+            if ($name === Settings::WEBHOOK_SECRET) {
+                // The refusals counted so far were checked against the old secret.
+                $this->platform->setState(Receiver::REJECTED, null);
             }
         }
     }
@@ -177,6 +188,11 @@ final class Admin
         if (is_array($refusal) && (int)($refusal['until'] ?? 0) > $now) {
             $key = (string)($refusal['kod'] ?? '') === Submitter::DAILY_LIMIT ? 'minos_notice_daily_limit' : 'minos_notice_overloaded';
             $notices[] = self::e($this->platform->lang($key, date('Y-m-d H:i', (int)$refusal['until']), (string)$refusal['kod']));
+        }
+        $rejections = Receiver::rejections($this->platform);
+        if ($rejections !== null) {
+            $notices[] = self::e($this->platform->lang('minos_notice_signature', (string)$rejections['count'],
+                date('Y-m-d H:i', $rejections['at']), $this->platform->lang('minos_signature_' . $rejections['reason'])));
         }
         return $notices === [] ? null : implode('<br />', $notices);
     }

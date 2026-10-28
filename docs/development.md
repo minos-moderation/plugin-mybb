@@ -31,11 +31,11 @@ The classes:
 | `TextError` | A PCRE failure inside `Text`: the text could not be read (`error: true`, never `''`). |
 | `Gateway` | `POST /api/v1/b2b/oceny` over cURL; reads answers into accepted (`202` only) / retry (429, 408, 5xx, no answer) / config error. |
 | `Submitter` | The hold (validate hooks), the submission (insert-end hooks), resubmission, edits. |
-| `Receiver` | The webhook's checklist: method, signature, payload, id, claim, apply. |
+| `Receiver` | The webhook's checklist: method, signature (`Signature::check`; a refusal counted with its reason only), payload, id, claim, apply. |
 | `Applier` | A verdict or the failure mode → approve, hold, soft-delete, or publish the masked text. |
 | `Task` | Timeouts, due retries, pruning. |
 | `Installer` | Settings group, tables, task; the lifecycle functions. |
-| `Admin` | Masked secrets on the settings page, the ACP notice (problems, a configuration error, a daily limit or overload until a given time), the Tools → Logs page with the last 7 days' verdict figures. |
+| `Admin` | Masked secrets on the settings page, the ACP notice (problems, a configuration error, a daily limit or overload until a given time, refused signatures), the Tools → Logs page with the last 7 days' verdict figures. |
 | `Plugin` | Builds the objects once per request. |
 
 ## How the plugin holds a post
@@ -132,6 +132,13 @@ applying for more than 5 min ─► back to claimed_from (the task)
   answers `404` before the signature, the task gives back no claim, applies no failure
   mode and sends nothing (it only forgets old data), and no new post is held. What was
   held stays in MyBB's queue. No usable secret: `401`.
+- A delivery whose signature `Signature::check` refuses gets a bare `401`, and the refusal
+  is counted in the datacache entry `minos_signature_rejected` (`count`, the last
+  `reason` — `malformed`, `stale` or `mismatch` — and its moment `at`; never the body,
+  the header or the secret). While it exists every ACP page says so, with what the reason
+  points at: the stored secret, the server's clock, or a header that is not the gateway's
+  (anyone who knows the webhook address can send one). The next verified delivery and a
+  newly saved secret remove it; so does the uninstall.
 - Switched off, the task notes it in the datacache entry `minos_switched_off`, and so
   does a deactivation. The first run after the plugin is on again moves every
   `pending`/`retry` row back to `retry` with `submitted_at = retry_at = now` (a fresh
@@ -342,9 +349,10 @@ a `release` environment with a required reviewer on the `publish` job.
 ## Composer
 
 `composer.json` requires `minos-moderation/client-php` at `dev-main` from its GitHub
-repository (a `vcs` repository entry); `composer.lock` pins the commit. When the client is
-tagged, `dev-main` will be replaced by `^0.1`, and the `repositories` entry by Packagist
-if it is published there. The plugin never forks the client's verification.
+repository (a `vcs` repository entry); `composer.lock` pins the commit: `e5df7d6d`, the
+commit the client's `v0.2.0` tag is to name (`Signature::check`). When the tag exists,
+`dev-main` will be replaced by `^0.2`, and the `repositories` entry by Packagist if it is
+published there. The plugin never forks the client's verification.
 
 ## MyBB 1.8 APIs
 

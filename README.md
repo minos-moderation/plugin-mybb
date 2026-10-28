@@ -265,6 +265,12 @@ numer postu — nigdy treść błędu.
   (czego brakuje), gdy brama odrzuciła ostatnią wysyłkę z powodu błędu konfiguracji
   (kod błędu i czas) albo gdy brama nie przyjmuje postów do określonej godziny (wyczerpany
   dobowy limit klucza, przeciążenie — kod i godzina). Znika po pierwszej udanej wysyłce.
+  Także gdy webhook odrzuca doręczenia z nieprawidłowym podpisem: ile ich było od
+  ostatniego przyjętego doręczenia, kiedy przyszło ostatnie i na co wskazuje powód — zły
+  sekret webhooka, zegar serwera przesunięty o ponad 5 minut albo nagłówek podpisu, który
+  nie pochodzi od bramy. Dzięki temu literówkę w sekrecie widać bez zaglądania do logów
+  serwera (brama dostaje tylko odpowiedź `401`, bez powodu). Ten komunikat znika po
+  pierwszym doręczeniu z poprawnym podpisem albo po zapisaniu nowego sekretu.
 - **Narzędzia i konserwacja → Dzienniki → Minos — dziennik**: stan konfiguracji, adres
   webhooka, posty wymagające uwagi (zatrzymane w kolejce, czekające na werdykt, opublikowane
   bez oceny w trybie fail-open, rozstrzygnięte przez człowieka przed werdyktem i oznaczone
