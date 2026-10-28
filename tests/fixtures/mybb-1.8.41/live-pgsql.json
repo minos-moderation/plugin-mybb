@@ -461,6 +461,32 @@
             "affected_first": 1,
             "affected_second": 0
         },
-        "activation_adds_a_missing_column": true
+        "activation_adds_a_missing_column": true,
+        "k43_late_after_timeout": {
+            "held_by_the_task": {
+                "late": [
+                    "held",
+                    "timeout",
+                    0
+                ],
+                "decided": [
+                    "held",
+                    "timeout",
+                    0
+                ]
+            },
+            "after_the_late_verdict": {
+                "late": [
+                    "published",
+                    "bezpieczne",
+                    1
+                ],
+                "decided": [
+                    "held",
+                    "timeout",
+                    1
+                ]
+            }
+        }
     }
 }

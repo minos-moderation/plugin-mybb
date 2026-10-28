@@ -152,6 +152,8 @@ insert ─► retry ──202──► pending ──webhook──► applying �
             └─ other 4xx, a redirect: failure mode (config_error, the code or http_<n>); ACP notice
 pending/retry older than the timeout (≥ 20 min) ─► failure mode (timeout)
 fail-open ─► published + auto_published ──late webhook──► applying ─► held | censored | published
+fail-closed timeout ─► held (timeout) ──late webhook, post still in the queue──► applying ─► as on time
+  (a moderator approved, deleted or edited it, or an author's edit started a new revision ─► nothing)
 a "retry" answer ─► the shared pause: nothing sent before its end (below)
 an author's edit while retry/pending, or of a post held as timeout/config_error/text_error/no_text,
   that changes the text to send ─► rev + 1, retry due now, a fresh timeout
@@ -192,6 +194,18 @@ applying for more than 5 min ─► back to claimed_from (the task)
   (`zablokowane` → `unapprove`, `ocenzurowane` → by setting). A moderator's action (the
   post's visibility changed) or an edit (the update hook clears the mark) makes the human
   decision final.
+- Shared rule D9.10 (A6): a post the failure mode held for its timeout (`fail-closed`:
+  `held` with `timeout`) still takes a verdict that comes late, applied by
+  `Applier::verdict` as if it had come in time (`bezpieczne` publishes, `zablokowane` and
+  `ocenzurowane` by setting, `nieocenione` the failure mode again, a post cut at 3000
+  characters as on time). The receiver claims such a row only while its post is still in
+  the queue (`visible = 0`; `Platform::claimTimedOut`, one conditional `UPDATE` on
+  `status = 'held' AND verdict = 'timeout'` and the revision). A moderator who approved or
+  deleted the post decided: the row stays as the failure mode left it. A moderator's edit
+  marks it `superseded` (`edited`), an author's edit starts a new revision (the late
+  verdict is about the old one), and a text changed past the edit hook fails the digest
+  (`text_changed`, the post stays held). A row held for any other reason (a verdict, a
+  configuration error, a limit) takes no later verdict; no verdict can come for those.
 - A publishing verdict (`bezpieczne`) for a post cut at 3000 characters goes to the failure
   mode (`truncated`): the verdict judged the beginning only.
 - Rule D9.3(a): a refusal whose `ponow_za_s` (as the gateway gave it) ends after the row's
@@ -231,8 +245,9 @@ applying for more than 5 min ─► back to claimed_from (the task)
   receiver accepts `mybb:<pid>` and `mybb:<pid>.<n>` (n ≥ 1, no leading zero) and applies a
   verdict only to the row's current revision: its claim names the revision, so an edit
   between the receiver's read and its claim wins. A verdict for another revision gets `200`
-  and nothing else. A moderator's edit of a waiting post leaves it to humans: `superseded`
-  with `edited`, nothing sent, listed on the ACP page. Edits of published posts are not
+  and nothing else. A moderator's edit of a waiting post, or of one held for its timeout,
+  leaves it to humans: `superseded` with `edited`, nothing sent, no late verdict applied,
+  listed on the ACP page. Edits of published posts are not
   assessed again (shared rule D9.2, not adopted yet).
 - Who can edit a post in the moderation queue, in MyBB 1.8.41: its forum's moderators, and
   its author only while the board setting `showownunapproved` ("Access Own Unapproved
@@ -474,7 +489,9 @@ Recorded on PHP 8.3.6, MySQL 8.0.46 and PostgreSQL 16.15; both engines gave the 
 answers. The smoke run on both: install and activate through the ACP, the key and secret
 saved through the plugin's fields (the page shows prefixes only); an author's reply held
 and sent once to the gateway; the signed verdict publishes it (`visible = 1`); a censored
-reply published with its mask; a forged signature `401` and named in the ACP; switched
+reply published with its mask; a late verdict for a reply MyBB's `task.php` held after the
+fail-closed timeout applied as on time, and one for a reply a moderator approved in the
+ModCP meanwhile changing nothing (`k43_late_after_timeout`); a forged signature `401` and named in the ACP; switched
 off or deactivated `404`, and a deactivated plugin holds and sends nothing; uninstall
 "No" keeps the rows, "Yes" drops the tables. The approval inside the webhook's request
 took 36–75 ms end to end (audit measurement C-39).

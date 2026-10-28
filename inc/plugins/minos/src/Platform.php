@@ -544,6 +544,26 @@ final class Platform
     }
 
     /**
+     * Takes a row the failure mode held because its verdict did not come in time (`held`
+     * with `timeout`), for a verdict that comes late after all (shared rule D9.10, A6 of
+     * client-php's `docs/plugin-behaviour.md`): one conditional `UPDATE`, as
+     * {@see claimPending}, recording `held` as the status it was claimed from.
+     *
+     * @param int      $pid The post.
+     * @param int      $now Unix seconds.
+     * @param int|null $rev Only while the row is at this revision.
+     * @return bool True for the one caller that changed it.
+     */
+    public function claimTimedOut(int $pid, int $now, ?int $rev = null): bool
+    {
+        $this->db->update_query(self::PENDING_TABLE, [
+            'status' => Status::APPLYING, 'claimed_from' => Status::HELD, 'claimed_at' => $now,
+        ], "pid='" . $pid . "' AND status='" . Status::HELD . "' AND verdict='" . Status::REASON_TIMEOUT . "'"
+            . ($rev !== null ? " AND rev='" . $rev . "'" : ''));
+        return (int)$this->db->affected_rows() === 1;
+    }
+
+    /**
      * Gives back claims older than a moment: the process that took them died between the
      * claim and the outcome. The row returns to the status it was claimed from.
      *

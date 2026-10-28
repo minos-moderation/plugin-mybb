@@ -255,8 +255,10 @@ final class Submitter
      *   waits for the verdict (`pending`, `retry`) or after the failure mode held the post
      *   because no verdict came ({@see Status::REVISED_REASONS}): a new revision
      *   ({@see Platform::revise}). The task sends it, not the editor's request.
-     * - By a moderator, while the plugin waits: a human is dealing with the post, so it is
-     *   left to them (`superseded`, listed on the ACP page) and nothing is sent.
+     * - By a moderator, while the plugin waits or after the failure mode held the post for its
+     *   timeout (a verdict may still come late, D9.10): a human is dealing with the post, so
+     *   it is left to them (`superseded`, listed on the ACP page), nothing is sent and no
+     *   verdict is applied any more.
      * - A post the failure mode published (`fail-open`): a late verdict would judge text that
      *   is gone, so it no longer applies ({@see Applier::late}). Edits of published posts
      *   are not assessed again.
@@ -318,7 +320,9 @@ final class Submitter
         $post = $this->platform->post($pid);
         $moderator = $post !== null && $this->platform->isModerator($post['fid'], $this->platform->currentUserId());
         if ($moderator) {
-            if ($this->platform->claimPending($pid, $now)) {
+            // Waiting, or held for its timeout with a verdict that may still come late: a
+            // human is dealing with it now, and that verdict is no longer applied.
+            if ($this->platform->claimPending($pid, $now) || $this->platform->claimTimedOut($pid, $now)) {
                 $this->platform->updatePending($pid, [
                     'status' => Status::SUPERSEDED, 'verdict' => Status::REASON_EDITED, 'decided_at' => $now,
                 ]);

@@ -17,11 +17,11 @@ final class LiveFixturesTest extends TestCase
 {
     private const DIR = __DIR__ . '/../fixtures/mybb-1.8.41';
 
-    /** The answers every engine's file holds: the seven questions and the smoke run's. */
+    /** The answers every engine's file holds: the seven questions, the smoke run's and the S7d items'. */
     private const ANSWERS = [
         'q1_pcre', 'q2_notifications', 'q3_polls', 'q4_edit_own_unapproved', 'q5_reply_subject',
         'q6_counters', 'q7_schema', 'q7_claim', 'c39_webhook_request_ms', 'html_forum_page',
-        'activation_adds_a_missing_column',
+        'activation_adds_a_missing_column', 'k43_late_after_timeout',
     ];
 
     /**

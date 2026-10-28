@@ -204,6 +204,8 @@ zastosowania, więc:
 - gdy post poprawia moderator, decyduje człowiek: wtyczka niczego nie wysyła, a post
   zostaje w kolejce moderacji i na liście „Posty, które wymagają uwagi” (stan
   „Rozstrzygnięty przez człowieka”, powód „edytowany przez moderatora przed werdyktem”).
+  Tak samo, gdy moderator poprawi post, który tryb awaryjny zostawił w kolejce, bo werdykt
+  nie nadszedł w czasie: spóźniony werdykt nie jest już stosowany.
 
 Własny post w kolejce moderacji autor może poprawić tylko wtedy, gdy forum na to pozwala
 (ustawienie MyBB `showownunapproved`, domyślnie wyłączone); poza tym poprawiają go
@@ -237,7 +239,12 @@ werdyktu nie ma:
   tytułu wątku, a w dzienniku zapisuje zdarzenie z numerem postu;
 - post był dłuższy niż 3000 znaków, a brama uznała jego początek za bezpieczny.
 
-**fail-closed** (domyślnie) zostawia taki post w kolejce moderacji dla człowieka.
+**fail-closed** (domyślnie) zostawia taki post w kolejce moderacji dla człowieka. Jeśli
+wtyczka wstrzymała go dlatego, że werdykt nie nadszedł w czasie oczekiwania, a werdykt
+przyjdzie później, wtyczka stosuje go tak, jakby przyszedł na czas (np. `bezpieczne`
+publikuje post) — o ile post wciąż czeka w kolejce: jeśli moderator w tym czasie go
+zatwierdził, usunął albo poprawił, decyzja człowieka jest ostateczna, a poprawka autora
+wysyła post do oceny jeszcze raz (werdykt o wcześniejszej wersji jest pomijany).
 **fail-open** publikuje go bez oceny — a jeśli werdykt przyjdzie później, wtyczka nadal go
 zastosuje, dopóki nikt nie ruszył postu: `zablokowane` odsyła post z powrotem do kolejki
 moderacji, `ocenzurowane` postępuje według ustawienia „Post ocenzurowany”. Jeśli w tym czasie

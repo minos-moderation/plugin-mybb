@@ -280,6 +280,43 @@ final class LiveForumTest extends TestCase
     }
 
     /**
+     * A late verdict for a post the failure mode held after its timeout (K-43, shared rule
+     * D9.10): fail-closed, the gateway accepted the reply, its verdict did not come in time
+     * and MyBB's task (`task.php`) held it; the mock then delivers it through the real
+     * webhook and it is applied as on time. A reply a moderator approved in the ModCP queue
+     * meanwhile is left as the moderator decided.
+     */
+    public function testALateVerdictIsAppliedToAPostHeldForItsTimeout(): void
+    {
+        $board = self::$board;
+        $author = $board->login(self::AUTHOR, self::$passwords[self::AUTHOR]);
+        // A thread of its own, so the other scenarios' thread keeps its pages.
+        $tid = $board->thread($board->admin(), 'Wątek spóźnionych werdyktów', 'Pierwszy post administratora.')['tid'];
+        $late = $board->reply($author, $tid, 'Odpowiedź, której werdykt się spóźni.');
+        $decided = $board->reply($author, $tid, 'Odpowiedź, o której zdecyduje moderator.');
+        // The verdicts are late: the gateway accepted both 21 minutes ago (the timeout is 20).
+        $board->exec('UPDATE {p}minos_pending SET accepted_at=? WHERE pid IN (?, ?)', [time() - 21 * 60, $late, $decided]);
+        $board->task('minos');
+        $held = [];
+        foreach (['late' => $late, 'decided' => $decided] as $name => $pid) {
+            $held[$name] = [$board->pending($pid)['status'], $board->pending($pid)['verdict'], (int)$board->post($pid)['visible']];
+        }
+        $this->approveInModcp($decided);
+
+        $lines = $board->deliver();
+        self::assertMatchesRegularExpression('/mybb:' . $late . ' dostarczony 200/', $lines);
+        self::assertMatchesRegularExpression('/mybb:' . $decided . ' dostarczony 200/', $lines);
+        $after = [];
+        foreach (['late' => $late, 'decided' => $decided] as $name => $pid) {
+            $after[$name] = [$board->pending($pid)['status'], $board->pending($pid)['verdict'], (int)$board->post($pid)['visible']];
+        }
+        self::$answers['k43_late_after_timeout'] = ['held_by_the_task' => $held, 'after_the_late_verdict' => $after];
+        self::assertSame(['held', 'timeout', 0], $held['late'], 'held by the failure mode');
+        self::assertSame(['published', 'bezpieczne', 1], $after['late'], 'applied as on time');
+        self::assertSame(['held', 'timeout', 1], $after['decided'], 'the moderator\'s decision stays');
+    }
+
+    /**
      * Question 2: subscribers of the thread (e-mail, private message) and of the forum, and
      * what each kind of publication queues for them — a post visible at once (the plugin
      * off: the control), a post the plugin publishes through the webhook, and a post a

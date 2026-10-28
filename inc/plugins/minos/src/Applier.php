@@ -30,7 +30,9 @@ use Minos\Client\WebhookPayload;
  *
  * A verdict that arrives AFTER the failure mode published a post ({@see late}) is still
  * applied while the post is public and untouched: `zablokowane` sends it back to the
- * queue, `ocenzurowane` follows the setting.
+ * queue, `ocenzurowane` follows the setting. One that arrives after the failure mode held
+ * the post for its timeout (`fail-closed`) is applied by {@see verdict} as if it had come in
+ * time, while the post is still in the queue and untouched (shared rule D9.10).
  *
  * A verdict applies only to the text that was sent. Before any verdict is applied, the
  * post is rendered again ({@see Text::forPost}, with its forum's current options) and its
@@ -67,7 +69,9 @@ final class Applier
     }
 
     /**
-     * Applies a delivered payload to a row that was waiting for it.
+     * Applies a delivered payload to a row that was waiting for it — or that the failure mode
+     * held for its timeout, the verdict coming late ({@see Receiver}): the same rules, as on
+     * time.
      *
      * @param array<string,mixed>                                                                $row      The claimed row.
      * @param array{status:string,kwalifikacja:?string,kategorie:array<int,string>,ocenzurowany:?string,wsparcie:bool} $payload  From `WebhookPayload::parse`.
@@ -227,7 +231,7 @@ final class Applier
             if ($this->platform->countFailure($pid) < self::MAX_FAILURES) {
                 return;
             }
-            if ($this->platform->claimPending($pid, $now)) {
+            if ($this->platform->claimPending($pid, $now) || $this->platform->claimTimedOut($pid, $now)) {
                 $this->platform->updatePending($pid,
                     ['status' => Status::HELD, 'verdict' => Status::REASON_APPLY_ERROR, 'decided_at' => $now]);
             } elseif ($this->platform->claimPending($pid, $now, [Status::PUBLISHED], true)) {
