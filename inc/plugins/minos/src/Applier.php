@@ -32,13 +32,23 @@ use Minos\Client\WebhookPayload;
  * applied while the post is public and untouched: `zablokowane` sends it back to the
  * queue, `ocenzurowane` follows the setting.
  *
- * The masked text replaces the message only when it is the whole post: not when the text
- * sent was cut at 3000 characters, not when its length differs from what was sent, not
- * when a mask falls in a new thread's subject (the plugin does not rewrite titles), and not
- * when nothing but the subject remains. Such a post stays in the queue, and so does one
- * whose message could not be replaced — the original is never published on that verdict.
- * A published masked post is plain text: its MyCode formatting is gone, because the
- * gateway masks the text it was sent. The original message is kept in the row.
+ * A verdict applies only to the text that was sent. Before any verdict is applied, the
+ * post is rendered again ({@see Text::forPost}, with its forum's current options) and its
+ * SHA-256 compared with the one the row kept at submission: a text changed past the edit
+ * hook (or a row from before digests were kept) does not match, and the verdict is not
+ * applied — on time the post stays in the queue for a human (`text_changed`), late
+ * nothing happens.
+ *
+ * The masked text replaces the message only when it stands for the whole post, character
+ * by character: not when the text sent was cut at 3000 characters; not unless every
+ * character of the mask is the one that was sent or `█` ({@see Text::maskFits}); not when
+ * a mask falls in a new thread's subject (the plugin does not rewrite titles); not when
+ * nothing but the subject remains; and not unless the body that was sent IS the message as
+ * stored (line endings aside) — a post with MyCode, HTML or entities renders to another
+ * text, and publishing its mask would revive or drop markup. Such a post stays in the
+ * queue with the mask kept in `masked_text` for the ACP page, and so does one whose
+ * message could not be replaced — the original is never published on that verdict. The
+ * original message is kept in the row of a published masked post.
  * No PHP 8 syntax.
  */
 final class Applier
@@ -66,34 +76,41 @@ final class Applier
         if ($payload['status'] !== WebhookPayload::ASSESSED || $payload['kwalifikacja'] === null) {
             return $this->failure($row, 'nieocenione', $settings, $now, $record);
         }
-        if ($payload['kwalifikacja'] === 'bezpieczne' && (int)$row['truncated'] === 1) {
-            unset($record['verdict']);
-            return $this->failure($row, Status::REASON_TRUNCATED, $settings, $now, $record);
-        }
 
         $post = $this->platform->post((int)$row['pid']);
         $status = self::untouchable($post, 0);
         if ($status === null) {
-            switch ($payload['kwalifikacja']) {
-                case 'bezpieczne':
-                    $this->platform->approve($post);
-                    $status = Status::PUBLISHED;
-                    break;
-                case 'ocenzurowane':
-                    $status = $this->censor($row, $post, $payload['ocenzurowany'], $settings)
-                        ? $this->approved($post, Status::CENSORED)
-                        : Status::HELD;
-                    break;
-                default: // 'zablokowane' — parse() admits nothing else
-                    if ($settings->softDeleteBlocked()) {
-                        $this->platform->softDelete($post);
-                        $status = Status::DELETED;
-                    } else {
-                        $status = Status::HELD;
-                    }
+            $sent = $this->sentText($row, $post);
+            if ($sent === null) {
+                // Not the text that was assessed: the verdict judged another one.
+                $record['verdict'] = Status::REASON_TEXT_CHANGED;
+                $status = Status::HELD;
+            } elseif ($payload['kwalifikacja'] === 'bezpieczne' && (int)$row['truncated'] === 1) {
+                unset($record['verdict']);
+                return $this->failure($row, Status::REASON_TRUNCATED, $settings, $now, $record);
+            } else {
+                switch ($payload['kwalifikacja']) {
+                    case 'bezpieczne':
+                        $this->platform->approve($post);
+                        $status = Status::PUBLISHED;
+                        break;
+                    case 'ocenzurowane':
+                        $status = $this->censor($row, $post, $payload['ocenzurowany'], $sent, $settings)
+                            ? $this->approved($post, Status::CENSORED)
+                            : Status::HELD;
+                        break;
+                    default: // 'zablokowane' — parse() admits nothing else
+                        if ($settings->softDeleteBlocked()) {
+                            $this->platform->softDelete($post);
+                            $status = Status::DELETED;
+                        } else {
+                            $status = Status::HELD;
+                        }
+                }
             }
         }
-        $this->platform->updatePending((int)$row['pid'], $record + ['status' => $status, 'decided_at' => $now]);
+        $this->platform->updatePending((int)$row['pid'],
+            $record + self::maskKept($status, $payload) + ['status' => $status, 'decided_at' => $now]);
         return $status;
     }
 
@@ -154,6 +171,12 @@ final class Applier
             $this->platform->updatePending($pid, ['status' => $status, 'auto_published' => 0]);
             return $status;
         }
+        $sent = $this->sentText($row, $post);
+        if ($sent === null) {
+            // Not the text that was assessed: nothing is applied, and no later verdict will be.
+            $this->platform->updatePending($pid, ['status' => Status::PUBLISHED, 'auto_published' => 0]);
+            return Status::PUBLISHED;
+        }
         if ($qualification === null || ($qualification === 'bezpieczne' && (int)$row['truncated'] === 1)) {
             $this->platform->updatePending($pid, ['status' => Status::PUBLISHED]);
             return Status::PUBLISHED;
@@ -162,13 +185,13 @@ final class Applier
         $record = self::record($payload) + ['auto_published' => 0, 'decided_at' => $now];
         if ($qualification === 'bezpieczne') {
             $status = Status::PUBLISHED;
-        } elseif ($qualification === 'ocenzurowane' && $this->censor($row, $post, $payload['ocenzurowany'], $settings)) {
+        } elseif ($qualification === 'ocenzurowane' && $this->censor($row, $post, $payload['ocenzurowany'], $sent, $settings)) {
             $status = Status::CENSORED;
         } else {
             $this->platform->unapprove($post);
             $status = Status::HELD;
         }
-        $this->platform->updatePending($pid, $record + ['status' => $status]);
+        $this->platform->updatePending($pid, $record + self::maskKept($status, $payload) + ['status' => $status]);
         return $status;
     }
 
@@ -186,6 +209,36 @@ final class Applier
             'categories' => substr(implode(',', $payload['kategorie']), 0, 255),
             'support'    => $payload['wsparcie'] ? 1 : 0,
         ];
+    }
+
+    /**
+     * The text the plugin would send for the post now, when it is the text that was sent.
+     *
+     * @param array<string,mixed> $row  The row, with the digest kept at submission.
+     * @param array<string,mixed> $post The post as it is now ({@see Platform::post}).
+     * @return string|null The text; null when it differs from what was sent, cannot be read,
+     *     or the row kept no digest (sent before digests were kept).
+     */
+    private function sentText(array $row, array $post): ?string
+    {
+        $digest = (string)($row['sent_sha256'] ?? '');
+        if (strlen($digest) !== 64) {
+            return null;
+        }
+        $text = Text::forPost($post['message'], (int)$row['is_thread'] === 1 ? $post['subject'] : '',
+            $this->platform->forumParsing($post['fid']));
+        return !$text['error'] && hash_equals($digest, hash('sha256', $text['tekst'])) ? $text['tekst'] : null;
+    }
+
+    /**
+     * The mask of a post the plugin keeps in the queue, for the ACP page.
+     *
+     * @param array{ocenzurowany:?string} $payload
+     * @return array<string,string> `masked_text`, or nothing.
+     */
+    private static function maskKept(string $status, array $payload): array
+    {
+        return $status === Status::HELD && $payload['ocenzurowany'] !== null ? ['masked_text' => $payload['ocenzurowany']] : [];
     }
 
     /**
@@ -221,14 +274,15 @@ final class Applier
      * @param array<string,mixed> $row      The row.
      * @param array<string,mixed> $post     The post.
      * @param string|null         $masked   `ocenzurowany`.
+     * @param string              $sent     The text that was sent (checked by its digest).
      * @param Settings            $settings The settings.
      * @return bool True when the message now IS the masked text (checked by reading it
      *     back); false leaves the post as it was.
      */
-    private function censor(array $row, array $post, ?string $masked, Settings $settings): bool
+    private function censor(array $row, array $post, ?string $masked, string $sent, Settings $settings): bool
     {
         if (!$settings->publishCensored() || $masked === null || (int)$row['truncated'] === 1
-            || Text::length($masked) !== (int)$row['text_len']) {
+            || !Text::maskFits($sent, $masked)) {
             return false;
         }
         $prefix = (int)$row['prefix_len'];
@@ -237,6 +291,12 @@ final class Applier
         }
         $body = Text::tail($masked, $prefix);
         if (trim($body) === '') {
+            return false;
+        }
+        // The body that was sent must be the message as stored, so the mask maps onto it
+        // character by character; MyCode, HTML or an entity render to another text. Only
+        // line endings may differ: the text normalises CRLF, which readers never see.
+        if (Text::tail($sent, $prefix) !== str_replace(["\r\n", "\r"], "\n", $post['message'])) {
             return false;
         }
         // The original goes into the row first, so it survives whatever happens next.

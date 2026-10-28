@@ -128,11 +128,22 @@ w kolejce z uwagą „wpis dłuższy niż 3000 znaków — oceniono początek”
 opublikowany). Werdykt `zablokowane` działa normalnie, a `ocenzurowane` zawsze zostawia
 taki post w kolejce.
 
-Opublikowany post ocenzurowany jest **zwykłym tekstem**: traci formatowanie MyCode, bo brama
-maskuje tekst, który zobaczyli czytelnicy. Oryginał zostaje w tabeli wtyczki (przez 90 dni).
-Post ocenzurowany zawsze zostaje w kolejce, gdy: był dłuższy niż 3000 znaków, brama
-zamaskowała coś w tytule wątku, zamaskowany tekst ma inną długość niż wysłany, brama nie
-przysłała zamaskowanego tekstu albo nie udało się zapisać zamaskowanej treści.
+Brama maskuje tekst, który zobaczyli czytelnicy, więc wtyczka publikuje zamaskowany tekst
+tylko wtedy, gdy jest on **dokładnie** tym, co wysłała, z niektórymi znakami zastąpionymi
+przez `█`, a post jest zwykłym tekstem. **Post z formatowaniem (MyCode, cytat, link)
+zostaje w kolejce, a zamaskowany tekst widać w dzienniku** (Minos — dziennik, kolumna
+„Tekst zamaskowany przez bramę”). Oryginał opublikowanego postu zostaje w tabeli wtyczki
+(przez 90 dni). Post ocenzurowany zawsze zostaje w kolejce, gdy: był dłuższy niż 3000
+znaków, brama zamaskowała coś w tytule wątku, zamaskowany tekst różni się od wysłanego
+czymś innym niż znaki `█` (inna długość, inne litery), brama nie przysłała zamaskowanego
+tekstu albo nie udało się zapisać zamaskowanej treści.
+
+Werdykt dotyczy tylko tekstu, który wtyczka wysłała: przed zastosowaniem każdego werdyktu
+wtyczka porównuje skrót (SHA-256) wysłanego tekstu z tekstem postu w tej chwili — sam
+tekst nie jest przechowywany. Jeśli treść zmieniła się z pominięciem edycji (np. przez inną
+wtyczkę), werdykt nie jest stosowany: post zostaje w kolejce dla człowieka („tekst postu
+inny niż wysłany do oceny”), a post opublikowany wcześniej w trybie fail-open zostaje taki,
+jaki jest.
 
 Jeśli moderator zdąży zatwierdzić albo usunąć post, zanim nadejdzie werdykt, wtyczka go nie
 rusza — decyzja człowieka wygrywa. Edycja postu czekającego na werdykt też zostawia go
@@ -171,7 +182,8 @@ zadanie ponawia wysyłkę po czasie wskazanym przez bramę albo po coraz dłużs
   (kod błędu i czas). Znika po pierwszej udanej wysyłce.
 - **Narzędzia i konserwacja → Dzienniki → Minos — dziennik**: stan konfiguracji, adres
   webhooka, posty wymagające uwagi (zatrzymane w kolejce, czekające na werdykt, opublikowane
-  bez oceny w trybie fail-open i oznaczone jako potrzebujące wsparcia) oraz dziennik
+  bez oceny w trybie fail-open i oznaczone jako potrzebujące wsparcia; przy poście
+  ocenzurowanym zatrzymanym w kolejce — tekst zamaskowany przez bramę) oraz dziennik
   zdarzeń. Dziennik zawiera wyłącznie kody i
   numery postów — nigdy treść, klucz ani sekret. Wpisy starsze niż 30 dni są usuwane.
 

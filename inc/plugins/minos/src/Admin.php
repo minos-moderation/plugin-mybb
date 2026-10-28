@@ -15,7 +15,8 @@ namespace Minos\MyBB;
  *   error (its code — never content).
  * - A page under Tools & Maintenance → Logs → "Minos — dziennik": the configuration's
  *   state, the posts that need a look (held, waiting, and those the gateway flagged with
- *   `wsparcie` — the author may need support), and the log of codes.
+ *   `wsparcie` — the author may need support) with the gateway's masked text of a censored
+ *   post the plugin kept in the queue, and the log of codes.
  *
  * Everything shown is escaped here; the texts are the Polish language file's.
  * No PHP 8 syntax.
@@ -189,13 +190,14 @@ final class Admin
                     ? 'minos_status_auto_published' : 'minos_status_' . $row['status']),
                 $this->verdictLabel((string)$row['verdict']),
                 (string)$row['categories'],
+                (string)($row['masked_text'] ?? ''),
                 (int)$row['support'] === 1 ? $this->platform->lang('minos_acp_support_yes') : '',
                 date('Y-m-d H:i', (int)$row['submitted_at']),
             ];
         }
         $html .= self::table($this->platform->lang('minos_acp_attention'), [
             'minos_acp_col_post', 'minos_acp_col_status', 'minos_acp_col_verdict',
-            'minos_acp_col_categories', 'minos_acp_col_support', 'minos_acp_col_time',
+            'minos_acp_col_categories', 'minos_acp_col_masked', 'minos_acp_col_support', 'minos_acp_col_time',
         ], $rows, $this->platform->lang('minos_acp_attention_desc'), $this->platform);
 
         $rows = [];

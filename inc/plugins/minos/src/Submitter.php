@@ -152,6 +152,7 @@ final class Submitter
             'truncated'    => $text['truncated'] ? 1 : 0,
             'prefix_len'   => $text['prefix_len'],
             'text_len'     => $text['text_len'],
+            'sent_sha256'  => self::digest($text),
         ];
         $this->platform->addPending($row);
         $row = $this->platform->pending($pid) ?? $row;
@@ -237,7 +238,10 @@ final class Submitter
                 $this->decideWithout($row, Status::REASON_NO_TEXT, $settings, $now);
                 continue;
             }
-            $shape = ['truncated' => $text['truncated'] ? 1 : 0, 'prefix_len' => $text['prefix_len'], 'text_len' => $text['text_len']];
+            $shape = [
+                'truncated' => $text['truncated'] ? 1 : 0, 'prefix_len' => $text['prefix_len'],
+                'text_len' => $text['text_len'], 'sent_sha256' => self::digest($text),
+            ];
             $this->platform->updatePending($pid, $shape, Status::RETRY);
             $batch[] = [
                 'row'  => $shape + $row,
@@ -275,6 +279,18 @@ final class Submitter
             $meta['author_first_post'] = (bool)$meta['author_first_post'];
         }
         return ['id' => self::ID_PREFIX . $pid, 'tekst' => $text, 'profil' => $profile, 'meta' => $meta];
+    }
+
+    /**
+     * What the row keeps of the text it sends: its SHA-256, never the text. A verdict is
+     * applied only while the post still renders to that text ({@see Applier}).
+     *
+     * @param array{tekst:string,error:bool} $text From {@see Text::forPost}.
+     * @return string 64 hex characters; '' when nothing can be sent.
+     */
+    public static function digest(array $text): string
+    {
+        return $text['error'] || $text['tekst'] === '' ? '' : hash('sha256', $text['tekst']);
     }
 
     /**

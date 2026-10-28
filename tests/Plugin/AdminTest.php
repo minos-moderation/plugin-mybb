@@ -95,6 +95,8 @@ final class AdminTest extends PluginTestCase
 
         $supported = $this->heldReply();
         $this->forum->deliver(self::payload($supported, ['kategorie' => ['samookaleczenie'], 'wsparcie' => true]));
+        $masked = $this->heldReply('[b]abc[/b] <zły>');
+        $this->forum->deliver(self::payload($masked, ['kwalifikacja' => 'ocenzurowane', 'ocenzurowany' => 'abc <███>']));
         $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(403, 'profil_niedozwolony', null, 0)]));
         $refused = $this->heldReply('<script>alert(1)</script>');
 
@@ -109,6 +111,7 @@ final class AdminTest extends PluginTestCase
         }
         self::assertStringContainsString('#' . $supported, $html);
         self::assertStringContainsString('okaż autorowi wsparcie', $html);
+        self::assertStringContainsString('abc &lt;███&gt;', $html, 'the mask of a post kept in the queue, escaped');
         self::assertStringContainsString('#' . $refused, $html);
         self::assertStringContainsString('profil_niedozwolony', $html);
         self::assertStringNotContainsString('<script>', $html);

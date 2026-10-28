@@ -32,6 +32,29 @@ final class Platform
     /** The plugin's entry in MyBB's datacache (`$cache`): a small array of state. */
     public const STATE_CACHE = 'minos';
 
+    /**
+     * The pending table's columns, name → type ({@see columnSql}). A column added in a later
+     * version goes at the end: activation adds it to a table that lacks it.
+     */
+    private const PENDING_COLUMNS = [
+        'pid' => 'int', 'tid' => 'int', 'is_thread' => 'flag', 'status' => 'varchar(20)',
+        'submitted_at' => 'int', 'accepted_at' => 'int', 'retry_at' => 'int',
+        'attempts' => 'small', 'truncated' => 'flag', 'prefix_len' => 'small',
+        'text_len' => 'small', 'verdict' => 'varchar(20)', 'categories' => 'varchar(255)',
+        'support' => 'flag', 'error_code' => 'varchar(40)', 'decided_at' => 'int',
+        'auto_published' => 'flag', 'claimed_at' => 'int', 'claimed_from' => 'varchar(20)',
+        'original_text' => 'text',
+        // The SHA-256 of the text sent (never the text itself) and the masked text of a post
+        // the plugin kept in the queue.
+        'sent_sha256' => 'varchar(64)', 'masked_text' => 'text',
+    ];
+
+    /** The log table's columns. */
+    private const LOG_COLUMNS = [
+        'lid' => 'serial', 'dateline' => 'int', 'event' => 'varchar(20)',
+        'code' => 'varchar(40)', 'pid' => 'int',
+    ];
+
     /** @var object MyBB's `$mybb`. */
     private $mybb;
 
@@ -413,7 +436,8 @@ final class Platform
             'accepted_at' => 0, 'retry_at' => 0, 'attempts' => 0, 'truncated' => 0,
             'prefix_len' => 0, 'text_len' => 0, 'verdict' => '', 'categories' => '',
             'support' => 0, 'error_code' => '', 'decided_at' => 0, 'auto_published' => 0,
-            'claimed_at' => 0, 'claimed_from' => '', 'original_text' => '',
+            'claimed_at' => 0, 'claimed_from' => '', 'original_text' => '', 'sent_sha256' => '',
+            'masked_text' => '',
         ]));
     }
 
@@ -622,31 +646,26 @@ final class Platform
     }
 
     /**
-     * Creates the plugin's tables (MySQL/MariaDB, PostgreSQL or SQLite, as MyBB runs on).
+     * Creates the plugin's tables (MySQL/MariaDB, PostgreSQL or SQLite, as MyBB runs on),
+     * and brings a table kept from an earlier version (an uninstall that kept the data, an
+     * upgrade: deactivate, replace the files, activate) up to date: every column it lacks is
+     * added with `ALTER TABLE … ADD`, its rows kept.
      */
     public function createTables(): void
     {
         $engine = (string)($this->db->type ?? 'mysqli');
-        $tables = [
-            self::PENDING_TABLE => [
-                'pid' => 'int', 'tid' => 'int', 'is_thread' => 'flag', 'status' => 'varchar(20)',
-                'submitted_at' => 'int', 'accepted_at' => 'int', 'retry_at' => 'int',
-                'attempts' => 'small', 'truncated' => 'flag', 'prefix_len' => 'small',
-                'text_len' => 'small', 'verdict' => 'varchar(20)', 'categories' => 'varchar(255)',
-                'support' => 'flag', 'error_code' => 'varchar(40)', 'decided_at' => 'int',
-                'auto_published' => 'flag', 'claimed_at' => 'int', 'claimed_from' => 'varchar(20)',
-                'original_text' => 'text',
-            ],
-            self::LOG_TABLE => [
-                'lid' => 'serial', 'dateline' => 'int', 'event' => 'varchar(20)',
-                'code' => 'varchar(40)', 'pid' => 'int',
-            ],
-        ];
+        $tables = [self::PENDING_TABLE => self::PENDING_COLUMNS, self::LOG_TABLE => self::LOG_COLUMNS];
         $keys = [self::PENDING_TABLE => 'pid', self::LOG_TABLE => 'lid'];
         foreach ($tables as $table => $columns) {
             if (!$this->db->table_exists($table)) {
                 $this->db->write_query(self::createTable($engine, $this->prefix . $table, $columns, $keys[$table],
                     (string)$this->db->build_create_table_collation()));
+                continue;
+            }
+            foreach ($columns as $name => $type) {
+                if ($type !== 'serial' && !$this->db->field_exists($name, $table)) {
+                    $this->db->add_column($table, $name, self::columnSql($engine, $type));
+                }
             }
         }
         $index = $this->prefix . self::PENDING_TABLE . '_status';
@@ -981,19 +1000,7 @@ final class Platform
                 $lines[] = $name . ($pg ? ' serial' : ($sqlite ? ' INTEGER PRIMARY KEY' : ' int unsigned NOT NULL auto_increment'));
                 continue;
             }
-            if ($type === 'text') {
-                $lines[] = $name . ' text' . ($pg || $sqlite ? " NOT NULL default ''" : ' NOT NULL');
-                continue;
-            }
-            if (strncmp($type, 'varchar', 7) === 0) {
-                $lines[] = $name . ' ' . $type . " NOT NULL default ''";
-                continue;
-            }
-            $sql = ['int' => 'int unsigned', 'small' => 'smallint unsigned', 'flag' => 'tinyint(1)'][$type];
-            if ($pg || $sqlite) {
-                $sql = ['int' => 'int', 'small' => 'smallint', 'flag' => 'smallint'][$type];
-            }
-            $lines[] = $name . ' ' . $sql . " NOT NULL default '0'";
+            $lines[] = $name . ' ' . self::columnSql($engine, $type);
         }
         if (!$sqlite || $columns[$key] !== 'serial') {
             $lines[] = 'PRIMARY KEY (' . $key . ')';
@@ -1004,5 +1011,29 @@ final class Platform
         // No ENGINE clause: the server's default (InnoDB on current MySQL and MariaDB).
         return 'CREATE TABLE ' . $table . " (\n  " . implode(",\n  ", $lines) . "\n)"
             . ($pg || $sqlite ? '' : $collation);
+    }
+
+    /**
+     * One column's definition for one engine, for `CREATE TABLE` and for `ALTER TABLE … ADD`
+     * (every one is NOT NULL with a default, so rows that exist when it is added get it).
+     *
+     * @param string $type `int`, `small`, `flag`, `text` or `varchar(n)`.
+     */
+    private static function columnSql(string $engine, string $type): string
+    {
+        $pg = in_array($engine, ['pgsql', 'pgsql_pdo'], true);
+        $sqlite = $engine === 'sqlite';
+        if ($type === 'text') {
+            // MySQL gives TEXT no default; it fills existing rows with ''.
+            return 'text' . ($pg || $sqlite ? " NOT NULL default ''" : ' NOT NULL');
+        }
+        if (strncmp($type, 'varchar', 7) === 0) {
+            return $type . " NOT NULL default ''";
+        }
+        $sql = ['int' => 'int unsigned', 'small' => 'smallint unsigned', 'flag' => 'tinyint(1)'][$type];
+        if ($pg || $sqlite) {
+            $sql = ['int' => 'int', 'small' => 'smallint', 'flag' => 'smallint'][$type];
+        }
+        return $sql . " NOT NULL default '0'";
     }
 }

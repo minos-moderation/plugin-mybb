@@ -172,14 +172,99 @@ final class ReceiverTest extends PluginTestCase
 
     public function testCensoredIsPublishedWithTheMaskedTextAndTheOriginalKept(): void
     {
+        $pid = $this->heldReply("No to jest głupi\r\npomysł");
+        $this->forum->deliver(self::payload($pid, [
+            'kwalifikacja' => 'ocenzurowane', 'kategorie' => ['wulgaryzmy'], 'ocenzurowany' => "No to jest █████\npomysł",
+        ]));
+        self::assertSame(["No to jest █████\npomysł", 1], [$this->forum->post($pid)['message'], (int)$this->forum->post($pid)['visible']]);
+        $row = $this->forum->row($pid);
+        self::assertSame([Status::CENSORED, "No to jest głupi\r\npomysł", 'wulgaryzmy', ''],
+            [$row['status'], $row['original_text'], $row['categories'], $row['masked_text']]);
+    }
+
+    /**
+     * A post with MyCode renders to another text than it stores: its mask cannot stand for
+     * it, so it stays in the queue, untouched, with the mask kept for the ACP page.
+     */
+    public function testACensoredPostWithFormattingStaysHeldWithItsMaskKept(): void
+    {
         $pid = $this->heldReply('No to jest [b]głupi[/b] pomysł');
         $this->forum->deliver(self::payload($pid, [
             'kwalifikacja' => 'ocenzurowane', 'kategorie' => ['wulgaryzmy'], 'ocenzurowany' => 'No to jest █████ pomysł',
         ]));
-        self::assertSame(['No to jest █████ pomysł', 1], [$this->forum->post($pid)['message'], (int)$this->forum->post($pid)['visible']]);
+        self::assertSame([0, 'No to jest [b]głupi[/b] pomysł'], [(int)$this->forum->post($pid)['visible'], $this->forum->post($pid)['message']]);
         $row = $this->forum->row($pid);
-        self::assertSame([Status::CENSORED, 'No to jest [b]głupi[/b] pomysł', 'wulgaryzmy'],
-            [$row['status'], $row['original_text'], $row['categories']]);
+        self::assertSame([Status::HELD, 'ocenzurowane', 'No to jest █████ pomysł', ''],
+            [$row['status'], $row['verdict'], $row['masked_text'], $row['original_text']]);
+        self::assertSame([], self::moderation());
+    }
+
+    /**
+     * The audit's probe M7: a mask of a post whose `[img]` sits inside `[code]` would turn
+     * it into a live image.
+     */
+    public function testAMaskThatWouldReviveMyCodeIsNotPublished(): void
+    {
+        $message = "[code][img]https://tracker.example/p.png[/img][/code]\nTo jest głupi pomysł.";
+        $pid = $this->heldReply($message);
+        $sent = $this->forum->transport->lastBody()['elementy'][0]['tekst'];
+        $masked = str_replace('głupi', '█████', $sent);
+        $this->forum->deliver(self::payload($pid, ['kwalifikacja' => 'ocenzurowane', 'ocenzurowany' => $masked]));
+
+        self::assertSame([0, $message, Status::HELD],
+            [(int)$this->forum->post($pid)['visible'], $this->forum->post($pid)['message'], $this->forum->row($pid)['status']]);
+        self::assertSame($masked, $this->forum->row($pid)['masked_text']);
+    }
+
+    /**
+     * A verdict applies only to the text that was sent: a text changed past the edit hook
+     * gets no verdict applied.
+     *
+     * @dataProvider changedPastTheHook
+     * @param array<string,mixed> $fields
+     */
+    public function testAVerdictForATextThatChangedSinceItWasSentIsNotApplied(bool $thread, array $fields): void
+    {
+        $this->forum->set(['minos_blocked' => 'soft-delete']);
+        $pid = (int)$this->forum->write($thread, 'Pierwotna treść.', ['subject' => 'Pierwotny tytuł'])->return_values['pid'];
+        $change = $thread ? ['subject' => 'Inny tytuł'] : ['message' => 'Zupełnie inna treść.'];
+        $this->forum->db->update_query('posts', $change, "pid='" . $pid . "'");
+
+        self::assertSame(200, $this->forum->deliver(self::payload($pid, $fields)));
+
+        self::assertSame([0, Status::HELD, Status::REASON_TEXT_CHANGED],
+            [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status'], $this->forum->row($pid)['verdict']]);
+        self::assertSame([], self::moderation());
+    }
+
+    /** @return array<string,array{0:bool,1:array<string,mixed>}> */
+    public function changedPastTheHook(): array
+    {
+        return [
+            'bezpieczne, the body'      => [false, []],
+            'zablokowane, the body'     => [false, ['kwalifikacja' => 'zablokowane']],
+            'bezpieczne, the subject'   => [true, []],
+            'ocenzurowane, the subject' => [true, ['kwalifikacja' => 'ocenzurowane', 'ocenzurowany' => "Pierwotny tytuł\n\n████████ treść."]],
+        ];
+    }
+
+    public function testAForumThatChangedHowItRendersPostsGetsNoVerdictApplied(): void
+    {
+        $pid = $this->heldReply('Tekst [b]pogrubiony[/b].');
+        $GLOBALS['minos_test']['forums'][Forum::FID] = ['allowmycode' => 0];
+        $this->forum->deliver(self::payload($pid));
+        self::assertSame([0, Status::REASON_TEXT_CHANGED], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['verdict']],
+            'readers now see another text than the one assessed');
+    }
+
+    public function testARowWithoutADigestGetsNoVerdictApplied(): void
+    {
+        // A row sent before the plugin kept digests.
+        $pid = $this->heldReply();
+        $this->forum->platform()->updatePending($pid, ['sent_sha256' => '']);
+        $this->forum->deliver(self::payload($pid));
+        self::assertSame([0, Status::HELD, Status::REASON_TEXT_CHANGED],
+            [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status'], $this->forum->row($pid)['verdict']]);
     }
 
     public function testACensoredThreadKeepsItsSubjectAndGetsItsBody(): void
@@ -205,17 +290,22 @@ final class ReceiverTest extends PluginTestCase
         self::assertSame(Status::HELD, $this->forum->row($pid)['status']);
         self::assertSame([0, $message], [(int)$this->forum->post($pid)['visible'], $this->forum->post($pid)['message']]);
         self::assertSame([], self::moderation());
+        self::assertSame((string)$masked, $this->forum->row($pid)['masked_text'], 'the mask is kept for the ACP page');
     }
 
     /** @return array<string,array{0:bool,1:string,2:?string,3:array<string,string>}> */
     public function censoredButHeld(): array
     {
         return [
-            'the administrator keeps censored posts' => [false, 'abc zły', 'abc ███', ['minos_censored' => 'queue']],
-            'no ocenzurowany in the payload'         => [false, 'abc zły', null, []],
-            'the post was longer than what was sent' => [false, str_repeat('a', 3100), str_repeat('█', 3000), []],
-            'a length other than what was sent'      => [false, 'abc zły', 'abc ███ i więcej', []],
-            'a mask in the thread subject'           => [true, 'Treść', "███ tytuł\n\nTreść", []],
+            'the administrator keeps censored posts'   => [false, 'abc zły', 'abc ███', ['minos_censored' => 'queue']],
+            'no ocenzurowany in the payload'           => [false, 'abc zły', null, []],
+            'the post was longer than what was sent'   => [false, str_repeat('a', 3100), str_repeat('█', 3000), []],
+            'a length other than what was sent'        => [false, 'abc zły', 'abc ███ i więcej', []],
+            'a mask in the thread subject'             => [true, 'Treść', "███ tytuł\n\nTreść", []],
+            'the same length, other letters'           => [false, 'abc zły', 'xyz ███', []],
+            'the audit\'s probe M1'                    => [false, 'Ala ma kota.', 'Kup: zly.pl█', []],
+            'a post with formatting'                   => [false, '[i]abc[/i] zły', 'abc ███', []],
+            'a post with an entity'                    => [false, 'abc &#122;ły', 'abc ███', []],
         ];
     }
 
@@ -370,6 +460,21 @@ final class ReceiverTest extends PluginTestCase
         $this->forum->deliver(self::payload($pid, ['kwalifikacja' => 'ocenzurowane', 'ocenzurowany' => 'abc ███']));
         self::assertSame([0, 'abc zły', Status::HELD],
             [(int)$this->forum->post($pid)['visible'], $this->forum->post($pid)['message'], $this->forum->row($pid)['status']]);
+        self::assertSame('abc ███', $this->forum->row($pid)['masked_text']);
+    }
+
+    public function testALateVerdictForATextThatChangedSinceItWasSentDoesNothing(): void
+    {
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $pid = $this->autoPublished('Pierwotna treść.');
+        $this->forum->db->update_query('posts', ['message' => 'Zupełnie inna treść.'], "pid='" . $pid . "'");
+        $GLOBALS['minos_test']['moderation'] = [];
+
+        $this->forum->deliver(self::payload($pid, ['kwalifikacja' => 'zablokowane']));
+
+        self::assertSame([1, Status::PUBLISHED, '0'],
+            [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status'], (string)$this->forum->row($pid)['auto_published']]);
+        self::assertSame([], self::moderation());
     }
 
     public function testAModeratorsDecisionOnAnAutoPublishedPostStaysFinal(): void

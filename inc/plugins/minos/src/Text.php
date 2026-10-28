@@ -217,6 +217,34 @@ final class Text
     }
 
     /**
+     * Whether a masked text is the sent text with some characters replaced by the mask, one
+     * per character, as the contract masks: the same length, and every character either
+     * the one that was sent or {@see MASK}.
+     *
+     * @param string $sent   The text that was sent.
+     * @param string $masked The gateway's `ocenzurowany`.
+     * @return bool False for any other text, and when either cannot be read.
+     */
+    public static function maskFits(string $sent, string $masked): bool
+    {
+        try {
+            $sentChars = self::chars($sent);
+            $maskedChars = self::chars($masked);
+        } catch (TextError $e) {
+            return false;
+        }
+        if (count($sentChars) !== count($maskedChars)) {
+            return false;
+        }
+        foreach ($maskedChars as $i => $char) {
+            if ($char !== $sentChars[$i] && $char !== self::MASK) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
      * MyCode rendered as text, paired the way MyBB's parser pairs it.
      */
     private static function mycode(string $text, bool $video): string
@@ -459,6 +487,21 @@ final class Text
             throw self::failure();
         }
         return $result;
+    }
+
+    /**
+     * The characters of a UTF-8 string, checked.
+     *
+     * @return array<int,string>
+     * @throws TextError When PCRE fails (invalid UTF-8 included).
+     */
+    private static function chars(string $text): array
+    {
+        $chars = preg_split('//u', $text, -1, PREG_SPLIT_NO_EMPTY);
+        if (!is_array($chars)) {
+            throw self::failure();
+        }
+        return $chars;
     }
 
     /**

@@ -67,6 +67,12 @@ final class Status
     public const REASON_EDITED = 'edited';
 
     /**
+     * Recorded in `verdict` when a verdict came for a post whose text is not the one that
+     * was sent (changed past the edit hook, or no digest was kept): a human decides.
+     */
+    public const REASON_TEXT_CHANGED = 'text_changed';
+
+    /**
      * Recorded in `verdict` when a publishing verdict came for a post longer than what was
      * sent: it judged the beginning only, so the failure mode decides.
      */

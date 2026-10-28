@@ -137,12 +137,19 @@ applying for more than 5 min ─► back to claimed_from (the task)
   verdict that arrived before the `202` is not overwritten.
 - Before applying, the post is read again: gone → `gone`; no longer unapproved (a moderator
   acted) → `superseded`.
+- A verdict applies only to the text that was sent. The submission keeps the SHA-256 of
+  `tekst` in `sent_sha256` (never the text); before any verdict, on time or late, the post
+  is rendered again (`Text::forPost` with the forum's current options) and compared. No
+  match (a change past the edit hook, another rendering, a row without a digest) → on time
+  `held` with `text_changed`, late nothing (the late window closes).
 - The masked text replaces the message only when it stands for the whole post (see
-  `Applier`): not when the text sent was cut, not when its length differs from what was
-  sent (the contract masks one `█` per character), not when a mask falls in a new thread's
-  subject, and not when only the subject remains. The original goes into the row first,
-  and the new message is read back before the post is approved: a message that could not
-  be written keeps the post held.
+  `Applier`): not when the text sent was cut, not unless every character of the mask is
+  the one sent or `█` (`Text::maskFits`), not when a mask falls in a new thread's subject,
+  not when only the subject remains, and not unless the body sent IS the stored message
+  (CRLF aside): a post with MyCode, HTML or entities stays held. A held mask is kept in
+  `masked_text` and shown on the ACP page. The original goes into the row first, and the
+  new message is read back before the post is approved: a message that could not be
+  written keeps the post held.
 
 `PREFIX_minos_log` holds events with a code and a post id — never content, a key or a
 secret. Log entries are kept 30 days, decided rows 90 days.
@@ -278,7 +285,7 @@ reading the code, not by running a live forum:
 | `$lang->load($section, true, true)` with the `english` fallback, `{1}` placeholders | `inc/class_language.php` | `Platform::lang` |
 | `$cache->read('plugins')['active']` | `admin/modules/config/plugins.php` | `Platform::isPluginActive` |
 | `$cache->read($name)`, `update($name, $contents)` (`replace_query` on `datacache`, serialized), `delete($name)`; every `datacache` row is loaded with the page | `inc/class_datacache.php` | `Platform::state`, `setState`, `removeState` |
-| `$db` helpers: `simple_select`, `query`, `fetch_array`, `fetch_field`, `insert_query`, `update_query`, `delete_query`, `escape_string`, `affected_rows`, `table_exists`, `drop_table`, `write_query`, `build_create_table_collation`, `type` | `inc/db_mysqli.php`, `inc/db_pgsql.php`, `inc/db_sqlite.php`, `inc/AbstractPdoDbDriver.php`, `inc/init.php` | `Platform` |
+| `$db` helpers: `simple_select`, `query`, `fetch_array`, `fetch_field`, `insert_query`, `update_query`, `delete_query`, `escape_string`, `affected_rows`, `table_exists`, `drop_table`, `write_query`, `build_create_table_collation`, `type`; `field_exists($field, $table)` and `add_column($table, $column, $definition)` (prefix added; `ALTER TABLE … ADD`) in every driver, the PDO ones included | `inc/db_mysqli.php`, `inc/db_pgsql.php`, `inc/db_sqlite.php`, `inc/AbstractPdoDbDriver.php`, `inc/db_mysql_pdo.php`, `inc/db_pgsql_pdo.php`, `inc/init.php` | `Platform` |
 | the minimal bootstrap `IN_MYBB`, `NO_ONLINE`, `THIS_SCRIPT`, `inc/init.php` (database, settings, cache, plugins; no session) | `inc/init.php`, `task.php` | `minos-webhook.php` |
 
 Not verified — to check on a live forum before a release:
@@ -286,9 +293,9 @@ Not verified — to check on a live forum before a release:
 - The MySQL and PostgreSQL `CREATE TABLE` statements (no `ENGINE` clause: the server's
   default) and `CREATE INDEX IF NOT EXISTS` (PostgreSQL 9.5+): only the SQLite ones run in
   the tests.
-- The pending table gained `auto_published`, `claimed_at` and `claimed_from` before any
-  release; a table created by the unreleased first draft (`0146a3a`) lacks them — drop it
-  (uninstall with "Tak") before reinstalling.
+- Activation adds every pending-table column a kept table lacks (`$db->field_exists`,
+  `$db->add_column`, rows kept): only SQLite's `ALTER TABLE … ADD` runs in the tests; the
+  MySQL (`text NOT NULL` without a default) and PostgreSQL forms are to check.
 - `affected_rows()` after the claim's conditional `UPDATE` on MySQL (it counts changed
   rows; the claim always changes `status`, so it should read 1).
 - Other plugins hooked on `class_moderation_*`: in the webhook and the task there is no

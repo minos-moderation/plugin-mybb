@@ -160,6 +160,18 @@ final class TextTest extends TestCase
         self::assertSame([false, 'Widoczne SLOWO x (http://a.pl)'], [$closed['error'], $closed['tekst']]);
     }
 
+    public function testAMaskFitsOnlyWhereItReplacesCharactersOneForOne(): void
+    {
+        self::assertTrue(Text::maskFits('abc zły', 'abc ███'));
+        self::assertTrue(Text::maskFits('abc zły', 'abc zły'), 'nothing masked');
+        self::assertTrue(Text::maskFits('żółw', '████'));
+        self::assertFalse(Text::maskFits('abc zły', 'xyz ███'), 'the same length, other letters');
+        self::assertFalse(Text::maskFits('Ala ma kota.', 'Kup: zly.pl█'), 'the audit\'s probe M1');
+        self::assertFalse(Text::maskFits('abc zły', 'abc ██'), 'one mask character per character');
+        self::assertFalse(Text::maskFits('abc zły', 'abc ████'));
+        self::assertFalse(Text::maskFits("abc z\xC3", 'abc ██'), 'a text that cannot be read fits nothing');
+    }
+
     public function testBrokenUtf8BecomesValidText(): void
     {
         $sent = Text::forPost("zła sekwencja \xC3\x28 tutaj");
