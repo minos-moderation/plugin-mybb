@@ -1,6 +1,6 @@
 ---
 name: obserwator-ci
-description: Waits for a given GitHub Actions run id of a minos-moderation repository to finish and reports its conclusion with the names of failed jobs and steps. Use instead of polling CI from a main session.
+description: Waits for a given GitHub Actions run id of a minos-moderation repository to finish and reports its conclusion with the names of failed jobs and steps. Use instead of polling CI from a main session. Read-only by instruction; Bash runs gh.
 model: sonnet
 effort: low
 tools: Bash
