@@ -93,15 +93,17 @@ wpisana wartość i tak nie zostałaby zapisana.
 
 ## Które posty trafiają do oceny
 
-Nowe posty i wątki pisane przez użytkowników i gości na forum. Wtyczka **nie** dotyka:
-szkiców, edycji, postów moderatorów (gdy tak ustawiono), postów w forach spoza wyboru ani
+Nowe posty i wątki pisane przez użytkowników i gości na forum, a także poprawki postów, które
+czekają na werdykt (niżej). Wtyczka **nie** dotyka: szkiców, edycji opublikowanych postów,
+postów moderatorów (gdy tak ustawiono), postów w forach spoza wyboru ani
 postów, które MyBB i tak kieruje do ręcznej moderacji (forum moderuje nowe posty albo
 użytkownik jest pod moderacją) — o tych decydują ludzie, tak jak ustawiono forum.
 
 ## Co jest wysyłane, a czego wtyczka nigdy nie wysyła
 
 Wysyłane jest tylko:
-- identyfikator `mybb:<numer postu>` — bez żadnej treści;
+- identyfikator `mybb:<numer postu>` (po poprawce postu czekającego na werdykt:
+  `mybb:<numer postu>.<numer wersji>`) — bez żadnej treści;
 - tekst postu **taki, jaki widzą czytelnicy**, tylko pierwsze 3000 znaków (limit bramy);
   przy nowym wątku z tytułem na początku. Wtyczka odtwarza to, co MyBB pokazuje na stronie:
   - na forum bez HTML (domyślnie) znaki `<…>` są zwykłym tekstem i zostają w całości;
@@ -155,8 +157,24 @@ inny niż wysłany do oceny”), a post opublikowany wcześniej w trybie fail-op
 jaki jest.
 
 Jeśli moderator zdąży zatwierdzić albo usunąć post, zanim nadejdzie werdykt, wtyczka go nie
-rusza — decyzja człowieka wygrywa. Edycja postu czekającego na werdykt też zostawia go
-ludziom: werdykt dotyczyłby tekstu, którego już nie ma.
+rusza — decyzja człowieka wygrywa.
+
+**Poprawka postu czekającego na werdykt.** Werdykt o poprzednim tekście nie ma już
+zastosowania, więc:
+- gdy post poprawia jego autor (ktoś, kto nie jest moderatorem tego forum), wtyczka wysyła
+  poprawiony tekst do oceny jeszcze raz, jako kolejną wersję (`mybb:<numer postu>.1`,
+  `.2`…), z nowym czasem oczekiwania. Wysyła ją zadanie przy najbliższym przebiegu, nie
+  żądanie autora. Werdykt o wcześniejszej wersji, jeśli jeszcze nadejdzie, jest pomijany.
+  Tak samo po poprawce postu, który tryb awaryjny zostawił w kolejce, bo werdykt nie
+  nadszedł w czasie, brama odrzuciła wysyłkę z powodu błędu konfiguracji albo nie udało się
+  odczytać tekstu;
+- gdy post poprawia moderator, decyduje człowiek: wtyczka niczego nie wysyła, a post
+  zostaje w kolejce moderacji i na liście „Posty, które wymagają uwagi” (stan
+  „Rozstrzygnięty przez człowieka”, powód „edytowany przez moderatora przed werdyktem”).
+
+Własny post w kolejce moderacji autor może poprawić tylko wtedy, gdy forum na to pozwala
+(ustawienie MyBB `showownunapproved`, domyślnie wyłączone); poza tym poprawiają go
+moderatorzy.
 
 ## Tryb awaryjny: fail-open czy fail-closed
 
@@ -209,7 +227,8 @@ numer postu — nigdy treść błędu.
   dobowy limit klucza, przeciążenie — kod i godzina). Znika po pierwszej udanej wysyłce.
 - **Narzędzia i konserwacja → Dzienniki → Minos — dziennik**: stan konfiguracji, adres
   webhooka, posty wymagające uwagi (zatrzymane w kolejce, czekające na werdykt, opublikowane
-  bez oceny w trybie fail-open i oznaczone jako potrzebujące wsparcia; przy poście
+  bez oceny w trybie fail-open, rozstrzygnięte przez człowieka przed werdyktem i oznaczone
+  jako potrzebujące wsparcia; przy poście
   ocenzurowanym zatrzymanym w kolejce — tekst zamaskowany przez bramę) oraz dziennik
   zdarzeń. Dziennik zawiera wyłącznie kody i
   numery postów — nigdy treść, klucz ani sekret. Wpisy starsze niż 30 dni są usuwane.

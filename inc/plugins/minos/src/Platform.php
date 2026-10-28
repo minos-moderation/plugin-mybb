@@ -55,6 +55,9 @@ final class Platform
         'apply_errors' => 'small',
         // `author_first_post` as first sent, for a resubmission: '1', '0', or '' (a guest).
         'first_post' => 'varchar(1)',
+        // The revision being assessed: 0 is sent as `mybb:<pid>`, n as `mybb:<pid>.<n>`
+        // ({@see Submitter::itemId}); an author's edit of a waiting post adds one.
+        'rev' => 'small',
     ];
 
     /** The log table's columns. */
@@ -449,7 +452,7 @@ final class Platform
             'prefix_len' => 0, 'text_len' => 0, 'verdict' => '', 'categories' => '',
             'support' => 0, 'error_code' => '', 'decided_at' => 0, 'auto_published' => 0,
             'claimed_at' => 0, 'claimed_from' => '', 'original_text' => '', 'sent_sha256' => '',
-            'masked_text' => '', 'apply_errors' => 0, 'first_post' => '',
+            'masked_text' => '', 'apply_errors' => 0, 'first_post' => '', 'rev' => 0,
         ]));
     }
 
@@ -476,15 +479,19 @@ final class Platform
      * @param array<int,string> $from             The statuses it may be taken from.
      * @param bool              $autoPublishedOnly Only a row the plugin itself published
      *     in fail-open mode (`auto_published`).
+     * @param int|null          $rev              Only while the row is at this revision — how a
+     *     verdict for a revision an edit has since replaced is kept from being applied.
      * @return bool True for the one caller that changed it.
      */
-    public function claimPending(int $pid, int $now, array $from = Status::OPEN, bool $autoPublishedOnly = false): bool
+    public function claimPending(int $pid, int $now, array $from = Status::OPEN, bool $autoPublishedOnly = false,
+        ?int $rev = null): bool
     {
         foreach ($from as $status) {
             $this->db->update_query(self::PENDING_TABLE, [
                 'status' => Status::APPLYING, 'claimed_from' => $this->db->escape_string($status), 'claimed_at' => $now,
             ], "pid='" . $pid . "' AND status='" . $this->db->escape_string($status) . "'"
-                . ($autoPublishedOnly ? " AND auto_published='1'" : ''));
+                . ($autoPublishedOnly ? " AND auto_published='1'" : '')
+                . ($rev !== null ? " AND rev='" . $rev . "'" : ''));
             if ((int)$this->db->affected_rows() === 1) {
                 return true;
             }
@@ -540,6 +547,30 @@ final class Platform
     }
 
     /**
+     * Starts a new revision of a post an author edited while the plugin was waiting for its
+     * verdict (`pending`, `retry`) or after the failure mode held it because no verdict came
+     * ({@see Status::REVISED_REASONS}): one conditional `UPDATE`, so a verdict being applied
+     * at the same moment and the edit never both win. The row waits again as `retry`, due
+     * now, with a fresh receive timeout and nothing of the earlier attempt (its digest, its
+     * outcome); the task sends it under the next revision's id.
+     *
+     * @param int $pid The post.
+     * @param int $now Unix seconds.
+     * @return bool True when the row now waits as a new revision.
+     */
+    public function revise(int $pid, int $now): bool
+    {
+        $this->db->write_query('UPDATE ' . $this->prefix . self::PENDING_TABLE
+            . " SET rev=rev+1, status='" . Status::RETRY . "', submitted_at='" . $now . "', accepted_at='0',"
+            . " retry_at='" . $now . "', attempts='0', error_code='', verdict='', categories='', support='0',"
+            . " decided_at='0', auto_published='0', claimed_at='0', claimed_from='', sent_sha256='',"
+            . " masked_text='', apply_errors='0', truncated='0', prefix_len='0', text_len='0'"
+            . " WHERE pid='" . $pid . "' AND (status IN ('" . implode("','", Status::OPEN) . "')"
+            . " OR (status='" . Status::HELD . "' AND verdict IN ('" . implode("','", Status::REVISED_REASONS) . "')))");
+        return (int)$this->db->affected_rows() === 1;
+    }
+
+    /**
      * Makes every row still waiting for a verdict wait afresh: it is sent again at once and
      * gets a new receive timeout (the plugin was switched off while it waited, and its
      * verdict may have been refused and dropped meanwhile).
@@ -584,8 +615,9 @@ final class Platform
     }
 
     /**
-     * The newest rows a moderator should look at: held, flagged for support, waiting, or left
-     * to a human after a step kept failing.
+     * The newest rows a moderator should look at: held, flagged for support, waiting, decided
+     * by a human before the verdict came (a moderator's edit, say), or left to a human after a
+     * step kept failing.
      *
      * @param int $limit At most this many.
      * @return array<int,array<string,mixed>> Rows, newest first.
@@ -594,7 +626,7 @@ final class Platform
     {
         return $this->rows(self::PENDING_TABLE,
             "support='1' OR auto_published='1' OR verdict='" . Status::REASON_APPLY_ERROR . "' OR status IN ('"
-                . implode("','", [Status::HELD, Status::PENDING, Status::RETRY, Status::APPLYING]) . "')",
+                . implode("','", [Status::HELD, Status::PENDING, Status::RETRY, Status::APPLYING, Status::SUPERSEDED]) . "')",
             ['order_by' => 'submitted_at', 'order_dir' => 'DESC', 'limit' => $limit]);
     }
 

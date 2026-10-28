@@ -504,16 +504,4 @@ final class SubmissionTest extends PluginTestCase
         self::assertNull($this->forum->plugin->admin->notice());
         self::assertSame(['config_error', 'recovered'], array_column($this->logEntries(), 'event'));
     }
-
-    public function testAnEditBeforeTheVerdictLeavesThePostToAHuman(): void
-    {
-        $pid = $this->heldReply('Pierwsza wersja.');
-        $edit = new FakePostHandler('update', 'post', ['pid' => $pid, 'message' => 'Druga wersja.']);
-        $GLOBALS['plugins']->run_hooks('datahandler_post_update', $edit);
-
-        self::assertSame([Status::SUPERSEDED, Status::REASON_EDITED], [$this->forum->row($pid)['status'], $this->forum->row($pid)['verdict']]);
-        self::assertSame(200, $this->forum->deliver(self::payload($pid)));
-        self::assertSame(0, (int)$this->forum->post($pid)['visible'], 'the stale verdict is not applied');
-        self::assertSame([], self::moderation());
-    }
 }

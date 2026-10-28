@@ -197,6 +197,36 @@ final class Forum
     }
 
     /**
+     * The current user edits a post, the way MyBB 1.8.41's `PostDataHandler::update_post`
+     * runs: `pid`, `tid` and `fid` in the data, a first post's new subject written to its
+     * thread, the `datahandler_post_update` hook, and only then the post's new text.
+     *
+     * @param int         $pid     The post.
+     * @param string      $message The new message.
+     * @param string|null $subject A new subject, or null to keep it.
+     * @return FakePostHandler The handler.
+     */
+    public function edit(int $pid, string $message, ?string $subject = null): FakePostHandler
+    {
+        $post = $this->post($pid);
+        $data = ['pid' => $pid, 'tid' => (int)$post['tid'], 'fid' => (int)$post['fid'], 'message' => $message,
+            'edit_uid' => (int)$this->mybb->user['uid']];
+        if ($subject !== null) {
+            $data['subject'] = $subject;
+        }
+        $handler = new FakePostHandler('update', 'post', $data);
+        $fields = ['message' => $this->db->escape_string($message)];
+        if ($subject !== null) {
+            $fields['subject'] = $this->db->escape_string($subject);
+            $this->db->update_query('threads', ['subject' => $fields['subject']],
+                "tid='" . (int)$post['tid'] . "' AND firstpost='" . $pid . "'");
+        }
+        $GLOBALS['plugins']->run_hooks('datahandler_post_update', $handler);
+        $this->db->update_query('posts', $fields, "pid='" . $pid . "'");
+        return $handler;
+    }
+
+    /**
      * A published thread to reply to (made directly, without the plugin).
      *
      * @return int Its tid.

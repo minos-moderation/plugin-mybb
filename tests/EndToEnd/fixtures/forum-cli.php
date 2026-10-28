@@ -7,7 +7,9 @@
  * tree, and the real cURL transport talks to the mock gateway.
  *
  * Reads a JSON job on stdin — `install` (settings to store after installing and
- * activating), `user`, `posts` (`[thread, message, subject]`) — and prints the pids as JSON.
+ * activating), `user`, `posts` (`[thread, message, subject]`), `edits` (pid → new message,
+ * written as MyBB's `update_post` writes it) and `task` (run the plugin's task once) — and
+ * prints the pids as JSON.
  */
 
 define('IN_MYBB', 1);
@@ -30,5 +32,12 @@ $minosPids = [];
 foreach ((array)($minosJob['posts'] ?? []) as $name => $minosPost) {
     $minosPids[$name] = (int)$minosForum->write((bool)$minosPost[0], (string)$minosPost[1],
         isset($minosPost[2]) ? ['subject' => (string)$minosPost[2]] : [])->return_values['pid'];
+}
+foreach ((array)($minosJob['edits'] ?? []) as $minosPid => $minosMessage) {
+    $minosForum->edit((int)$minosPid, (string)$minosMessage);
+}
+if (!empty($minosJob['task'])) {
+    require_once MYBB_ROOT . 'inc/tasks/minos.php';
+    task_minos(['tid' => 1]);
 }
 echo json_encode(['pids' => $minosPids, 'plugin' => (new ReflectionClass(\Minos\MyBB\Plugin::class))->getFileName()]);

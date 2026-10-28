@@ -23,14 +23,19 @@ use SplObjectStorage;
  *    notice. A daily-limit or overload refusal is kept with the moment it ends, for the
  *    ACP notice ("the gateway does not accept until …"); the next `202` clears it.
  *
- * A post the plugin does not touch: a draft, an edit, a post in a forum it does not
- * cover, a moderator's post (by setting), a post MyBB holds anyway (the forum moderates
+ * An edit of a post still waiting for its verdict ({@see onUpdated}): by its author (anyone
+ * but a moderator of its forum), a new revision, sent by the task as `mybb:<pid>.<n>` — a
+ * verdict for an earlier revision is then acknowledged and not applied; by a moderator, a
+ * human is dealing with it, and nothing is sent.
+ *
+ * A post the plugin does not touch: a draft, an edit of a published post, a post in a forum
+ * it does not cover, a moderator's post (by setting), a post MyBB holds anyway (the forum moderates
  * new posts, or the user is under moderation — humans asked for those), a post written on
  * someone else's behalf, and every post while the plugin is switched off. Switched on but
  * unable to submit (no key or secret, an unusable gateway address), it holds the post and
  * applies the failure mode at once, without sending.
  *
- * What an item carries: `id` `mybb:<pid>`, `tekst` ({@see Text::forPost}: what readers of the
+ * What an item carries: `id` `mybb:<pid>` (`mybb:<pid>.<n>` for revision n ≥ 1), `tekst` ({@see Text::forPost}: what readers of the
  * post see), `profil`, and `meta` with `links`, `link_domains` and — for a registered author,
  * when MyBB knows it — `author_first_post`.
  * Never an e-mail, an IP address, a username or a user id ({@see item}).
@@ -40,6 +45,9 @@ final class Submitter
 {
     /** The item id's prefix: `mybb:<pid>`. The id carries no content. */
     public const ID_PREFIX = 'mybb:';
+
+    /** Between the post id and a revision ≥ 1 in an item id: `mybb:<pid>.<n>`. */
+    public const REVISION_SEPARATOR = '.';
 
     /** The only `meta` fields the plugin sends. */
     public const META_FIELDS = ['links', 'link_domains', 'author_first_post'];
@@ -193,9 +201,21 @@ final class Submitter
     }
 
     /**
-     * The update hook: an edit of a post still waiting for its verdict makes that verdict
-     * stale (it would judge text that is gone), so the post is left to a human. It stays in
-     * MyBB's queue — an edit keeps an unapproved post unapproved.
+     * The update hook (`datahandler_post_update`, run before MyBB writes the new text): an
+     * edit makes a verdict still to come stale — it would judge text that is gone.
+     *
+     * - By the post's author (anyone who is not a moderator of its forum), while the plugin
+     *   waits for the verdict (`pending`, `retry`) or after the failure mode held the post
+     *   because no verdict came ({@see Status::REVISED_REASONS}): a new revision
+     *   ({@see Platform::revise}). The task sends it, not the editor's request.
+     * - By a moderator, while the plugin waits: a human is dealing with the post, so it is
+     *   left to them (`superseded`, listed on the ACP page) and nothing is sent.
+     * - A post the failure mode published (`fail-open`): a late verdict would judge text that
+     *   is gone, so it no longer applies ({@see Applier::late}). Edits of published posts
+     *   are not assessed again.
+     *
+     * An edit keeps an unapproved post unapproved (MyBB's `update_post`), so the post stays
+     * in MyBB's queue throughout.
      *
      * @param object $handler MyBB's `PostDataHandler` in update mode.
      * @param int    $now     Unix seconds.
@@ -206,14 +226,29 @@ final class Submitter
         if ($pid <= 0) {
             return;
         }
-        if ($this->platform->claimPending($pid, $now)) {
-            $this->platform->updatePending($pid, [
-                'status' => Status::SUPERSEDED, 'verdict' => Status::REASON_EDITED, 'decided_at' => $now,
-            ]);
+        $this->edited($pid, $now);
+    }
+
+    /**
+     * An edit of a post by the current user ({@see onUpdated}).
+     *
+     * @param int $pid The post.
+     * @param int $now Unix seconds.
+     */
+    private function edited(int $pid, int $now): void
+    {
+        $post = $this->platform->post($pid);
+        $moderator = $post !== null && $this->platform->isModerator($post['fid'], $this->platform->currentUserId());
+        if ($moderator) {
+            if ($this->platform->claimPending($pid, $now)) {
+                $this->platform->updatePending($pid, [
+                    'status' => Status::SUPERSEDED, 'verdict' => Status::REASON_EDITED, 'decided_at' => $now,
+                ]);
+                return;
+            }
+        } elseif ($this->platform->revise($pid, $now)) {
             return;
         }
-        // A post the failure mode published and someone then edited: a late verdict would
-        // judge text that is gone, so it no longer applies ({@see Applier::late}).
         $this->platform->updatePending($pid, ['auto_published' => 0], Status::PUBLISHED);
     }
 
@@ -298,7 +333,8 @@ final class Submitter
         $this->platform->updatePending($pid, $shape, Status::RETRY);
         return [
             'row'  => $shape + $row,
-            'item' => self::item($pid, $text['tekst'], (string)$settings->profile(), $signals + self::firstPost($row)),
+            'item' => self::item($pid, $text['tekst'], (string)$settings->profile(), $signals + self::firstPost($row),
+                (int)$row['rev']),
         ];
     }
 
@@ -321,9 +357,10 @@ final class Submitter
      * @param string              $text    Its text ({@see Text::forPost}).
      * @param string              $profile The profile.
      * @param array<string,mixed> $meta    Spam signals; only {@see META_FIELDS} are kept.
+     * @param int                 $rev     The revision ({@see itemId}).
      * @return array{id:string,tekst:string,profil:string,meta:array<string,mixed>}
      */
-    public static function item(int $pid, string $text, string $profile, array $meta): array
+    public static function item(int $pid, string $text, string $profile, array $meta, int $rev = 0): array
     {
         $meta = array_intersect_key($meta, array_flip(self::META_FIELDS));
         if (isset($meta['links'])) {
@@ -338,7 +375,20 @@ final class Submitter
         if (isset($meta['author_first_post'])) {
             $meta['author_first_post'] = (bool)$meta['author_first_post'];
         }
-        return ['id' => self::ID_PREFIX . $pid, 'tekst' => $text, 'profil' => $profile, 'meta' => $meta];
+        return ['id' => self::itemId($pid, $rev), 'tekst' => $text, 'profil' => $profile, 'meta' => $meta];
+    }
+
+    /**
+     * An item's id (a wire string, never renamed): `mybb:<pid>` for the post as first sent,
+     * `mybb:<pid>.<n>` for its revision n ≥ 1. It carries no content.
+     *
+     * @param int $pid The post.
+     * @param int $rev The revision.
+     * @return string The id.
+     */
+    public static function itemId(int $pid, int $rev): string
+    {
+        return self::ID_PREFIX . $pid . ($rev > 0 ? self::REVISION_SEPARATOR . $rev : '');
     }
 
     /**

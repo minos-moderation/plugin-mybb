@@ -103,7 +103,9 @@ insert ─► retry ──202──► pending ──webhook──► applying �
             └─ other 4xx, a 2xx but 202: failure mode (config_error, http_<n>); ACP notice
 pending/retry older than the timeout (≥ 20 min) ─► failure mode (timeout)
 fail-open ─► published + auto_published ──late webhook──► applying ─► held | censored | published
-an edit while retry/pending ─► superseded (the post stays in MyBB's queue)
+an author's edit while retry/pending, or of a post held as timeout/config_error/text_error
+  ─► rev + 1, retry due now, a fresh timeout (sent by the task as mybb:<pid>.<rev>)
+a moderator's edit while retry/pending ─► superseded (the post stays in MyBB's queue)
 an edit of an auto-published post ─► auto_published = 0 (a late verdict no longer applies)
 applying for more than 5 min ─► back to claimed_from (the task)
 ```
@@ -145,6 +147,25 @@ applying for more than 5 min ─► back to claimed_from (the task)
   verdict that arrived before the `202` is not overwritten.
 - Before applying, the post is read again: gone → `gone`; no longer unapproved (a moderator
   acted) → `superseded`.
+- An edit of a waiting post (`datahandler_post_update`, which MyBB runs before it writes the
+  new text) makes the coming verdict stale. By anyone who is not a moderator of the post's
+  forum (`is_moderator($fid, '', <current user>)`, the check `update_post` itself makes),
+  the row starts a new revision (`Platform::revise`, one conditional `UPDATE`): `rev` + 1,
+  `retry` due now, `submitted_at` = now (a fresh timeout), nothing of the earlier attempt
+  kept (digest, attempts, outcome). The same for a row the failure mode held because no
+  verdict came for its text (`Status::REVISED_REASONS`: `timeout`, `config_error`,
+  `text_error`). The task sends it as `mybb:<pid>.<rev>`, never the editor's request. The
+  receiver accepts `mybb:<pid>` and `mybb:<pid>.<n>` (n ≥ 1, no leading zero) and applies a
+  verdict only to the row's current revision: its claim names the revision, so an edit
+  between the receiver's read and its claim wins. A verdict for another revision gets `200`
+  and nothing else. A moderator's edit of a waiting post leaves it to humans: `superseded`
+  with `edited`, nothing sent, listed on the ACP page. Edits of published posts are not
+  assessed again (shared rule D9.2, not adopted yet).
+- Who can edit a post in the moderation queue, in MyBB 1.8.41: its forum's moderators, and
+  its author only while the board setting `showownunapproved` ("Access Own Unapproved
+  Threads / Posts", off by default) is on — `editpost.php` and the quick edit
+  (`xmlhttp.php`, `edit_post`) refuse the author otherwise. Read in the source, not tried
+  on a live forum.
 - One row that throws never stops the others: `try/catch (\Throwable $e)` around one row
   of the task's timeout loop, one row's item in a resubmission, each batch's send, and the
   webhook's `verdict()`/`late()`. `Applier::failedStep` logs `error` with the step as its

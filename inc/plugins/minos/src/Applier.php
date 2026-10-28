@@ -11,9 +11,9 @@ use Minos\Client\WebhookPayload;
  * when it said nothing — to the post, and records the outcome in its row.
  *
  * The caller has claimed the row ({@see Platform::claimPending}), so each post is applied
- * once. Before touching the post it is read again: a post that is gone, or that a moderator
- * (or its author, by editing it) already dealt with, is left alone — a human decision beats
- * the plugin's.
+ * once (and, for a verdict, only at the revision it is about). Before touching the post it
+ * is read again: a post that is gone, or that a moderator already dealt with, is left alone —
+ * a human decision beats the plugin's.
  *
  * The rules, from the contract's receiving checklist:
  * - `bezpieczne` → publish (approve);
