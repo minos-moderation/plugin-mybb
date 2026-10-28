@@ -45,6 +45,32 @@ final class PauseTest extends PluginTestCase
             array_column($this->forum->transport->lastBody()['elementy'], 'id'));
     }
 
+    /**
+     * A retry the plugin times itself (a 503 without `ponow_za_s`: 60 s doubling) never waits
+     * past the post's timeout: `retry_at` is cut to it, and the task then gives the post the
+     * failure mode on time instead of after the back-off (review of S7b, gap B) — here as
+     * `gateway_limit`, because the shared pause of that 503 ends after the timeout.
+     */
+    public function testAnOwnBackOffIsCutToThePostsTimeout(): void
+    {
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(503, 'kolejka_niedostepna')]));
+        $pid = $this->heldReply('Czeka na bramę.');
+        self::assertSame(TIME_NOW + 60, (int)$this->forum->row($pid)['retry_at'], 'the first back-off: 60 s');
+
+        $deadline = (int)$this->forum->row($pid)['submitted_at'] + 20 * 60;
+        $late = $deadline - 30;
+        $this->forum->plugin->task->run($late);
+
+        self::assertCount(2, $this->forum->transport->requests, 'the task sent it again');
+        self::assertSame([Status::RETRY, 2], [$this->forum->row($pid)['status'], (int)$this->forum->row($pid)['attempts']]);
+        self::assertGreaterThan($deadline, $late + 120, 'the guard: the second back-off (120 s) ends after the timeout');
+        self::assertSame($deadline, (int)$this->forum->row($pid)['retry_at'], 'cut to the timeout');
+
+        $this->forum->plugin->task->run($deadline);
+        self::assertSame([Status::HELD, Status::REASON_GATEWAY_LIMIT], [$this->forum->row($pid)['status'], $this->forum->row($pid)['verdict']]);
+        self::assertCount(2, $this->forum->transport->requests, 'nothing more sent');
+    }
+
     /** @return array<string,array{0:array{status:int,body:string},1:int}> */
     public function retryAnswers(): array
     {

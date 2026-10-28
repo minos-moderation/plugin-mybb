@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Minos\MyBB\Tests\Plugin;
 
 use Minos\MyBB\Status;
+use Minos\MyBB\Text;
 use Minos\MyBB\Tests\Support\Forum;
 use Minos\MyBB\Tests\Support\PluginTestCase;
 use Minos\MyBB\Tests\Support\RecordingTransport;
@@ -174,6 +175,32 @@ final class PollAndSubjectTest extends PluginTestCase
 
         self::assertSame(200, $this->forum->deliver(self::payload($pid)));
         self::assertSame([1, Status::PUBLISHED], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
+    }
+
+    /**
+     * The decision is the row's, not the request's: a reply sent first with MyBB's default
+     * subject and refused (429) goes again from the task after the thread was renamed — still
+     * without the subject, so the verdict about that text applies (review of S7b, gap A).
+     */
+    public function testARetriedReplyKeepsTheSubjectDecisionOfItsFirstSend(): void
+    {
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(429, 'limit_minutowy_klucza', 45),
+            RecordingTransport::accepted()]));
+        $tid = $this->thread('Wątek');
+        $pid = (int)$this->forum->write(false, 'Zwykła odpowiedź.', ['subject' => 'RE: Wątek', 'tid' => $tid])->return_values['pid'];
+        self::assertSame([Status::RETRY, '0'], [$this->forum->row($pid)['status'], (string)$this->forum->row($pid)['own_subject']]);
+        $this->forum->db->update_query('threads', ['subject' => 'Wątek po zmianie tytułu'], "tid='" . $tid . "'");
+        self::assertTrue(Text::sendsOwnSubject($this->forum->platform()->post($pid)),
+            'the guard: decided now, "RE: Wątek" would be an own subject of the renamed thread');
+
+        $this->forum->plugin->task->run(TIME_NOW + 45);
+
+        self::assertCount(2, $this->forum->transport->requests, 'the retry went out from the task');
+        self::assertSame('Zwykła odpowiedź.', $this->forum->transport->lastBody()['elementy'][0]['tekst']);
+        self::assertSame(Status::PENDING, $this->forum->row($pid)['status']);
+        self::assertSame(200, $this->forum->deliver(self::payload($pid), null, TIME_NOW + 60, TIME_NOW + 60));
+        self::assertSame([1, Status::PUBLISHED, 'bezpieczne'],
+            [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status'], $this->forum->row($pid)['verdict']]);
     }
 
     /**

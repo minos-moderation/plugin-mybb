@@ -1,0 +1,608 @@
+{
+    "mybb": {
+        "version": "1.8.41",
+        "tag": "mybb_1841",
+        "commit": "cacad9f352043a1e36f21871c32beba46852f93e"
+    },
+    "php": "8.3.6",
+    "database": {
+        "engine": "mysqli",
+        "version": "8.0.46"
+    },
+    "recorded": "2026-10-28",
+    "source": "tests/Live/LiveForumTest.php through bin/verify-mybb-1841.sh",
+    "cases": {
+        "html-script": {
+            "forum": {
+                "allowhtml": 1,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "Miły tekst <script>obelga</script>",
+            "html": "Miły tekst &lt;script&gt;obelga&lt;/script&gt;",
+            "text": "Miły tekst <script>obelga</script>",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "html-style": {
+            "forum": {
+                "allowhtml": 1,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "<style>p { color: red }</style>Zwykły tekst",
+            "html": "&lt;style&gt;p { color: red }&lt;/style&gt;Zwykły tekst",
+            "text": "<style>p { color: red }</style>Zwykły tekst",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "html-comment": {
+            "forum": {
+                "allowhtml": 1,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "Widoczne zdanie <!-- ukryta obelga --> i dalej",
+            "html": "Widoczne zdanie <!-- ukryta obelga --> i dalej",
+            "text": "Widoczne zdanie i dalej",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "html-comment-open": {
+            "forum": {
+                "allowhtml": 1,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "Widoczne zdanie <!-- ukryta obelga do końca",
+            "html": "Widoczne zdanie <!-- ukryta obelga do końca",
+            "text": "Widoczne zdanie",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "html-comment-in-title": {
+            "forum": {
+                "allowhtml": 1,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "Miły tekst <b title=\"<!--\">obelga</b><b title=\"-->\">",
+            "html": "Miły tekst <b title=\"<!--\">obelga</b><b title=\"-->\">",
+            "text": "Miły tekst obelga",
+            "hints": [
+                "<!--",
+                "-->"
+            ],
+            "media": 0,
+            "has_text": true
+        },
+        "html-comment-in-alt": {
+            "forum": {
+                "allowhtml": 1,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "<img alt=\"<!--\" src=\"https://example.com/a.png\">obelga -->",
+            "html": "<img alt=\"<!--\" src=\"https://example.com/a.png\">obelga -->",
+            "text": "obelga -->",
+            "hints": [
+                "<!--"
+            ],
+            "media": 1,
+            "has_text": true
+        },
+        "html-img-alt": {
+            "forum": {
+                "allowhtml": 1,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "<img src=\"https://example.com/a.png\" alt=\"podpis obrazka\">",
+            "html": "<img src=\"https://example.com/a.png\" alt=\"podpis obrazka\">",
+            "text": "",
+            "hints": [
+                "podpis obrazka"
+            ],
+            "media": 1,
+            "has_text": false
+        },
+        "html-img-alt-text": {
+            "forum": {
+                "allowhtml": 1,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "Tekst obok <img src=\"https://example.com/a.png\" alt=\"podpis obrazka\" title=\"tytuł\">",
+            "html": "Tekst obok <img src=\"https://example.com/a.png\" alt=\"podpis obrazka\" title=\"tytuł\">",
+            "text": "Tekst obok",
+            "hints": [
+                "podpis obrazka",
+                "tytuł"
+            ],
+            "media": 1,
+            "has_text": true
+        },
+        "html-empty-link": {
+            "forum": {
+                "allowhtml": 1,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "<a href=\"https://example.com/\"> </a>",
+            "html": "<a href=\"https://example.com/\"> </a>",
+            "text": "",
+            "hints": [],
+            "media": 0,
+            "has_text": false
+        },
+        "html-off-tags": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "Miłego dnia <b obelga> <script>x</script>",
+            "html": "Miłego dnia &lt;b obelga&gt; &lt;script&gt;x&lt;/script&gt;",
+            "text": "Miłego dnia <b obelga> <script>x</script>",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "img": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[img]https://example.com/obrazek.png[/img]",
+            "html": "<img src=\"https://example.com/obrazek.png\" loading=\"lazy\"  alt=\"[Image: obrazek.png]\" class=\"mycode_img\" />",
+            "text": "",
+            "hints": [
+                "[Image: obrazek.png]"
+            ],
+            "media": 1,
+            "has_text": false
+        },
+        "img-size": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[img=100x50]https://example.com/obrazek.png[/img]",
+            "html": "<img src=\"https://example.com/obrazek.png\" loading=\"lazy\"  width=\"100\" height=\"50\" alt=\"[Image: obrazek.png]\" class=\"mycode_img\" />",
+            "text": "",
+            "hints": [
+                "[Image: obrazek.png]"
+            ],
+            "media": 1,
+            "has_text": false
+        },
+        "img-align": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[img align=left]https://example.com/obrazek.png[/img]",
+            "html": "<img src=\"https://example.com/obrazek.png\" loading=\"lazy\"  alt=\"[Image: obrazek.png]\" style=\"float: left;\" class=\"mycode_img\" /><br class=\"clear\" />",
+            "text": "",
+            "hints": [
+                "[Image: obrazek.png]"
+            ],
+            "media": 1,
+            "has_text": false
+        },
+        "img-with-text": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "Tekst przy obrazku [img]https://example.com/obrazek.png[/img]",
+            "html": "Tekst przy obrazku <img src=\"https://example.com/obrazek.png\" loading=\"lazy\"  alt=\"[Image: obrazek.png]\" class=\"mycode_img\" />",
+            "text": "Tekst przy obrazku",
+            "hints": [
+                "[Image: obrazek.png]"
+            ],
+            "media": 1,
+            "has_text": true
+        },
+        "img-imgcode-off": {
+            "forum": {
+                "allowimgcode": 0,
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[img]https://example.com/obrazek.png[/img]",
+            "html": "[Image: <a href=\"https://example.com/obrazek.png\" target=\"_blank\" rel=\"noopener\" class=\"mycode_url\">https://example.com/obrazek.png</a>]",
+            "text": "[Image: https://example.com/obrazek.png]",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "video": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[video=youtube]https://www.youtube.com/watch?v=dQw4w9WgXcQ[/video]",
+            "html": "<iframe width=\"560\" height=\"315\" src=\"//www.youtube-nocookie.com/embed/dQw4w9WgXcQ\" frameborder=\"0\" allowfullscreen=\"true\"></iframe>",
+            "text": "",
+            "hints": [],
+            "media": 1,
+            "has_text": false
+        },
+        "video-unknown-site": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[video=nieznany]https://example.com/film[/video]",
+            "html": "[video=nieznany]https://example.com/film[/video]",
+            "text": "[video=nieznany]https://example.com/film[/video]",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "video-videocode-off": {
+            "forum": {
+                "allowvideocode": 0,
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1
+            },
+            "message": "[video=youtube]https://www.youtube.com/watch?v=dQw4w9WgXcQ[/video]",
+            "html": "[Video: <a href=\"https://www.youtube.com/watch?v=dQw4w9WgXcQ\" target=\"_blank\" rel=\"noopener\" class=\"mycode_url\">https://www.youtube.com/watch?v=dQw4w9WgXcQ</a>]",
+            "text": "[Video: https://www.youtube.com/watch?v=dQw4w9WgXcQ]",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "url-blank-label": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[url=https://example.com/] [/url]",
+            "html": "<a href=\"https://example.com/\" target=\"_blank\" rel=\"noopener\" class=\"mycode_url\"> </a>",
+            "text": "",
+            "hints": [],
+            "media": 0,
+            "has_text": false
+        },
+        "url-image-label": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[url=https://example.com/][img]https://example.com/obrazek.png[/img][/url]",
+            "html": "<a href=\"https://example.com/\" target=\"_blank\" rel=\"noopener\" class=\"mycode_url\"><img src=\"https://example.com/obrazek.png\" loading=\"lazy\"  alt=\"[Image: obrazek.png]\" class=\"mycode_img\" /></a>",
+            "text": "",
+            "hints": [
+                "[Image: obrazek.png]"
+            ],
+            "media": 1,
+            "has_text": false
+        },
+        "url-bold-blank-label": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[url=https://example.com/][b] [/b][/url]",
+            "html": "<a href=\"https://example.com/\" target=\"_blank\" rel=\"noopener\" class=\"mycode_url\"><span style=\"font-weight: bold;\" class=\"mycode_b\"> </span></a>",
+            "text": "",
+            "hints": [],
+            "media": 0,
+            "has_text": false
+        },
+        "url-empty": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[url=https://example.com/][/url]",
+            "html": "[url=https://example.com/][/url]",
+            "text": "[url=https://example.com/][/url]",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "url-label": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[url=https://example.com/]opis linku[/url]",
+            "html": "<a href=\"https://example.com/\" target=\"_blank\" rel=\"noopener\" class=\"mycode_url\">opis linku</a>",
+            "text": "opis linku",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "url-bare-tag": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[url]https://example.com/strona[/url]",
+            "html": "<a href=\"https://example.com/strona\" target=\"_blank\" rel=\"noopener\" class=\"mycode_url\">https://example.com/strona</a>",
+            "text": "https://example.com/strona",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "url-bare": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "https://example.com/strona",
+            "html": "<a href=\"https://example.com/strona\" target=\"_blank\" rel=\"noopener\" class=\"mycode_url\">https://example.com/strona</a>",
+            "text": "https://example.com/strona",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "img-leading-space": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[img] https://example.com/ obelga obelga[/img]",
+            "html": "[img] <a href=\"https://example.com/\" target=\"_blank\" rel=\"noopener\" class=\"mycode_url\">https://example.com/</a> obelga obelga[/img]",
+            "text": "[img] https://example.com/ obelga obelga[/img]",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "img-two-newlines": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[img]\n\nhttps://example.com/obrazek.png[/img]",
+            "html": "[img]<br />\n<br />\n<a href=\"https://example.com/obrazek.png\" target=\"_blank\" rel=\"noopener\" class=\"mycode_url\">https://example.com/obrazek.png</a>[/img]",
+            "text": "[img] https://example.com/obrazek.png[/img]",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "img-one-newline": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[img]\nhttps://example.com/obrazek.png[/img]",
+            "html": "<img src=\"https://example.com/obrazek.png\" loading=\"lazy\"  alt=\"[Image: obrazek.png]\" class=\"mycode_img\" />",
+            "text": "",
+            "hints": [
+                "[Image: obrazek.png]"
+            ],
+            "media": 1,
+            "has_text": false
+        },
+        "video-newline": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[video=youtube]\nhttps://www.youtube.com/watch?v=dQw4w9WgXcQ[/video]",
+            "html": "[video=youtube]<br />\n<a href=\"https://www.youtube.com/watch?v=dQw4w9WgXcQ\" target=\"_blank\" rel=\"noopener\" class=\"mycode_url\">https://www.youtube.com/watch?v=dQw4w9WgXcQ</a>[/video]",
+            "text": "[video=youtube] https://www.youtube.com/watch?v=dQw4w9WgXcQ[/video]",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "video-no-id": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[video=youtube]https://www.youtube.com/[/video]",
+            "html": "[video=youtube]https://www.youtube.com/[/video]",
+            "text": "[video=youtube]https://www.youtube.com/[/video]",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "video-facebook-no-id": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[video=facebook]https://example.com/[/video]",
+            "html": "[video=facebook]https://example.com/[/video]",
+            "text": "[video=facebook]https://example.com/[/video]",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "video-id-other-host": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[video=youtube]https://example.com/obelga[/video]",
+            "html": "<iframe width=\"560\" height=\"315\" src=\"//www.youtube-nocookie.com/embed/obelga\" frameborder=\"0\" allowfullscreen=\"true\"></iframe>",
+            "text": "",
+            "hints": [],
+            "media": 1,
+            "has_text": false
+        },
+        "video-twitch-channel": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[video=twitch]https://example.com/[/video]",
+            "html": "<iframe src=\"https://player.twitch.tv/?channel=&amp;parent=127.0.0.1&amp;autoplay=false\" frameborder=\"0\" scrolling=\"no\" height=\"378\" width=\"620\"></iframe>",
+            "text": "",
+            "hints": [],
+            "media": 1,
+            "has_text": false
+        },
+        "video-site-case": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[video=YouTube]https://www.youtube.com/watch?v=dQw4w9WgXcQ[/video]",
+            "html": "[video=YouTube]https://www.youtube.com/watch?v=dQw4w9WgXcQ[/video]",
+            "text": "[video=YouTube]https://www.youtube.com/watch?v=dQw4w9WgXcQ[/video]",
+            "hints": [],
+            "media": 0,
+            "has_text": true
+        },
+        "img-zero-width-space": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[img]https://example.com/obrazek.png[/img]​",
+            "html": "<img src=\"https://example.com/obrazek.png\" loading=\"lazy\"  alt=\"[Image: obrazek.png]\" class=\"mycode_img\" />​",
+            "text": "​",
+            "hints": [
+                "[Image: obrazek.png]"
+            ],
+            "media": 1,
+            "has_text": false
+        },
+        "img-soft-hyphen-entity": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[img]https://example.com/obrazek.png[/img]&#173;",
+            "html": "<img src=\"https://example.com/obrazek.png\" loading=\"lazy\"  alt=\"[Image: obrazek.png]\" class=\"mycode_img\" />&#173;",
+            "text": "­",
+            "hints": [
+                "[Image: obrazek.png]"
+            ],
+            "media": 1,
+            "has_text": false
+        },
+        "img-shy-html-off": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[img]https://example.com/obrazek.png[/img]&shy;",
+            "html": "<img src=\"https://example.com/obrazek.png\" loading=\"lazy\"  alt=\"[Image: obrazek.png]\" class=\"mycode_img\" />&amp;shy;",
+            "text": "&shy;",
+            "hints": [
+                "[Image: obrazek.png]"
+            ],
+            "media": 1,
+            "has_text": true
+        },
+        "only-zero-width-space": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "​",
+            "html": "​",
+            "text": "​",
+            "hints": [],
+            "media": 0,
+            "has_text": false
+        },
+        "html-img-alt-zwsp": {
+            "forum": {
+                "allowhtml": 1,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "<img src=\"https://example.com/a.png\" alt=\"podpis\">&#8203;",
+            "html": "<img src=\"https://example.com/a.png\" alt=\"podpis\">&#8203;",
+            "text": "​",
+            "hints": [
+                "podpis"
+            ],
+            "media": 1,
+            "has_text": false
+        },
+        "html-title-shy": {
+            "forum": {
+                "allowhtml": 1,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "<a href=\"https://example.com/\" title=\"tytuł\">&shy;</a>",
+            "html": "<a href=\"https://example.com/\" title=\"tytuł\">&shy;</a>",
+            "text": "­",
+            "hints": [
+                "tytuł"
+            ],
+            "media": 0,
+            "has_text": false
+        }
+    }
+}

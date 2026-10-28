@@ -16,7 +16,10 @@ namespace Minos\MyBB;
  *   KEPT — `Miłego dnia <b obelga>` shows every word. Only decimal numeric entities
  *   (`&#65;`) are decoded, as MyBB's `htmlspecialchars_uni` lets them through. In a forum
  *   with HTML on, tags are removed but the text of their `alt` and `title` attributes is
- *   kept, `<script>` and `<style>` go with their content, and entities are decoded.
+ *   kept, and entities are decoded. MyBB escapes `<script>`, `<style>`, `<base>` and
+ *   `<meta>` there (`parse_message`), so readers see those tags and what is between them as
+ *   text, and so are they sent; an HTML comment is hidden from readers, and so is it from
+ *   the gateway (verified on MyBB 1.8.41: `tests/fixtures/mybb-1.8.41/reader-view.json`).
  * - MyCode (when the forum parses it): `[quote=NAME]` becomes "NAME napisał(a):" before the
  *   quoted text; `[url=X]Y[/url]` becomes "Y (X)"; `[img]X[/img]` and `[video=…]X[/video]`
  *   become the address X; `[code]` and `[php]` keep their content as written; formatting
@@ -30,7 +33,11 @@ namespace Minos\MyBB;
  * own subject, when its author changed MyBB's default "RE: <thread title>" ({@see ofPost}).
  * A title or a subject alone is not a text to assess (shared rule F7): a post whose body
  * shows no text and that carries no poll gets '' — nothing is sent. A poll is text: a first
- * post with an empty body and a poll sends the title and the poll.
+ * post with an empty body and a poll sends the title and the poll. Neither is an image, a
+ * video or a link whose label shows nothing (F7): a body that shows only `[img]` (with
+ * MyBB's image MyCode on), a `[video]` MyBB embeds, `[url=X] [/url]` or an `<img>`, even
+ * with its `alt` or `title`, shows no text ({@see shows}); a bare address the reader sees is
+ * text. Beside other text, an image's address or hint is still sent as before.
  *
  * Only the FIRST 3000 characters are sent; {@see Applier} does not publish a cut post on a
  * verdict about its beginning. Works without mbstring (PCRE with `/u`).
@@ -88,6 +95,23 @@ final class Text
         'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'me.uk', 'com.au', 'net.au', 'org.au', 'co.nz',
         'co.jp', 'co.kr', 'co.in', 'co.za', 'com.br', 'com.tr', 'com.ua', 'com.cn', 'com.mx', 'co.il',
     ];
+
+    /**
+     * What a reader does not see on its own (as plugin-wordpress's `Text::INVISIBLE`, plus
+     * marks): white space and separators (`\p{Z}`: U+3000, U+2028…), format characters
+     * (`\p{Cf}`: U+200B, U+2060, U+FEFF, the soft hyphen U+00AD…), controls (`\p{Cc}`),
+     * marks without a base (`\p{M}`: U+034F, U+FE0F — real text keeps its base letters),
+     * and the blank fillers some scripts carry (the Hangul fillers, the blank Braille
+     * pattern).
+     */
+    private const INVISIBLE = '/[\s\p{Z}\p{Cf}\p{Cc}\p{M}\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}]+/u';
+
+    /**
+     * A tag's attributes, quoted values whole (they may hold `<`, `>`, `<!--`). Possessive,
+     * a run of plain characters one step: no backtracking into it, and no step per
+     * character that a long attribute (10 000 characters) would exhaust PCRE's JIT stack with.
+     */
+    private const ATTRIBUTES = '(?:[^<>"\']++|"[^"]*+"|\'[^\']*+\')*+';
 
     /** Tags after which a reader sees a new line (HTML forums). */
     private const HTML_BLOCKS = ['br', 'p', 'div', 'li', 'tr', 'blockquote', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'table', 'ul', 'ol'];
@@ -238,8 +262,9 @@ final class Text
                 return $part !== '';
             })));
             $body = self::visible($message, $forum);
-            if ($body === '' && $pollText === '') {
-                // A title alone is not a text to assess (F7): nothing goes out, not even it.
+            if ($pollText === '' && ($body === '' || !self::shows($message, $forum))) {
+                // A title alone is not a text to assess (F7), nor an image, a video or a link
+                // without a label: nothing goes out, not even the title.
                 return ['tekst' => '', 'truncated' => false, 'prefix_len' => 0, 'text_len' => 0, 'error' => false];
             }
             if ($head === '') {
@@ -279,12 +304,61 @@ final class Text
      */
     public static function visible(string $message, array $forum = []): string
     {
+        return self::render($message, $forum, false);
+    }
+
+    /**
+     * Whether a reader sees any text in a message (shared rule F7): not when all it shows is
+     * an image (`[img]` with MyBB's image MyCode on, an `<img>` on an HTML forum — its `alt`
+     * or `title` notwithstanding), a video MyBB embeds (a known site, a valid address), an
+     * attachment, or a link whose label shows nothing (`[url=X] [/url]`, `[url=X][img]…`,
+     * `<a href="X"> </a>`), with nothing else that takes visible place — white space and
+     * invisible characters ({@see INVISIBLE}: a zero-width space, a soft hyphen…) do not. A bare address the
+     * reader sees (`https://…`, `[url]X[/url]`, an image or video tag MyBB does not render)
+     * is text. MyBB 1.8.41's reader view, recorded
+     * by the live run (`tests/fixtures/mybb-1.8.41/reader-view.json`), is the reference.
+     * When PCRE fails on this reading, the answer is yes: in doubt, the text is sent.
+     *
+     * @param string              $message The message as stored.
+     * @param array<string,mixed> $forum   The forum's parsing options.
+     */
+    public static function shows(string $message, array $forum = []): bool
+    {
+        try {
+            return !self::blank(self::render($message, $forum, true));
+        } catch (TextError $e) {
+            // Not knowing is no reason to send less: the post goes out as {@see visible}
+            // renders it (whose own failure is `error`, a separate matter).
+            return true;
+        }
+    }
+
+    /**
+     * Whether a text shows a reader nothing: only characters in {@see INVISIBLE}, which take
+     * no visible place on the page. When PCRE fails here the text is not blank: in doubt,
+     * it is sent.
+     */
+    private static function blank(string $text): bool
+    {
+        return preg_replace(self::INVISIBLE, '', $text) === '';
+    }
+
+    /**
+     * A message as text: as its readers see it ({@see visible}), or — `$textOnly` — only
+     * the text they see, without images, videos, labels-less links and hints
+     * ({@see shows}).
+     *
+     * @param array<string,mixed> $forum The forum's parsing options.
+     * @throws TextError When PCRE fails on it.
+     */
+    private static function render(string $message, array $forum, bool $textOnly): string
+    {
         $forum += self::DEFAULT_FORUM;
         $text = str_replace(["\r\n", "\r"], "\n", self::valid($message));
         if (!empty($forum['allowmycode'])) {
-            $text = self::mycode($text, !empty($forum['allowvideocode']));
+            $text = self::mycode($text, $forum, $textOnly);
         }
-        $text = !empty($forum['allowhtml']) ? self::html($text) : self::numericEntities($text);
+        $text = !empty($forum['allowhtml']) ? self::html($text, $textOnly) : self::numericEntities($text);
         return self::squeeze($text);
     }
 
@@ -417,8 +491,11 @@ final class Text
 
     /**
      * MyCode rendered as text, paired the way MyBB's parser pairs it.
+     *
+     * @param array<string,mixed> $forum The forum's parsing options.
+     * @param bool $textOnly Only the text a reader sees ({@see shows}).
      */
-    private static function mycode(string $text, bool $video): string
+    private static function mycode(string $text, array $forum, bool $textOnly): string
     {
         // [code] and [php] show their content as written, MyCode included.
         $blocks = [];
@@ -428,7 +505,21 @@ final class Text
         }, $text);
 
         $text = self::quotes($text);
+        $text = $textOnly ? self::shownMyCode($text, $forum) : self::inline($text, !empty($forum['allowvideocode']));
 
+        // PCRE's own `\x00` escape: PHP before 8.2 refuses a literal NUL byte in a pattern.
+        return self::replaceCallback('#\x00([0-9]+)\x00#', static function (array $m) use ($blocks): string {
+            return "\n" . $blocks[(int)$m[1]] . "\n";
+        }, $text);
+    }
+
+    /**
+     * The MyCode after quotes and code blocks, rendered as text the way MyBB's text renderer
+     * does (`text_parse_message`): an image or a video becomes its address, a link its label
+     * and its address.
+     */
+    private static function inline(string $text, bool $video): string
+    {
         $find = [
             '#\[(b|u|i|s|url|email)\](.*?)\[/\1\]#is'                                                  => '$2',
             '#\[email=[^\]\n]*\](.*?)\[/email\]#is'                                                   => '$1',
@@ -460,11 +551,146 @@ final class Text
                 break;
             }
         }
+        return $text;
+    }
 
-        // PCRE's own `\x00` escape: PHP before 8.2 refuses a literal NUL byte in a pattern.
-        return self::replaceCallback('#\x00([0-9]+)\x00#', static function (array $m) use ($blocks): string {
-            return "\n" . $blocks[(int)$m[1]] . "\n";
-        }, $text);
+    /**
+     * The MyCode after quotes and code blocks, reduced to the text a reader sees
+     * ({@see shows}): an image MyBB shows as an image is gone; a video MyBB embeds is gone;
+     * a link is its label — what the label shows, read by the same passes. What MyBB leaves
+     * on the page as typed stays, as in {@see inline}. No recursion: each pass is linear.
+     *
+     * @param array<string,mixed> $forum The forum's parsing options.
+     */
+    private static function shownMyCode(string $text, array $forum): string
+    {
+        $images = !empty($forum['allowimgcode']);
+        $video = !empty($forum['allowvideocode']);
+        for ($pass = 0; $pass < 20; $pass++) {
+            $before = $text;
+            // A link first, by its label, before the images: `[url=X][img]…[/img][/url]` is an
+            // image link, not the text "[url=X][/url]" that removing the image first would
+            // leave. MyBB shows a `data:` address instead of the link (`mycode_parse_url`).
+            foreach (['#\[url=((?!javascript)[a-z]+?://)([^\r\n"<]+?)\](.+?)\[/url\]#si' => [3, 1, 2],
+                '#\[url=((?!javascript:)[^\r\n"<&\(\)]+?)\](.+?)\[/url\]#si' => [2, 1, 1]] as $pattern => $parts) {
+                $text = self::replaceCallback($pattern, static function (array $m) use ($parts): string {
+                    $address = $parts[1] === $parts[2] ? $m[$parts[1]] : $m[$parts[1]] . $m[$parts[2]];
+                    return ' ' . (stripos($address, 'data:') === 0 ? $address : $m[$parts[0]]) . ' ';
+                }, $text);
+            }
+            // MyBB 1.8.41's own image patterns (`parse_mycode`): at most one line break before
+            // the address, nothing else; any other `[img]` stays on the page as typed.
+            if ($images) {
+                $text = self::replace('#\[img(?:=[1-9][0-9]*x[1-9][0-9]*)?(?: align=(?:left|right))?\](?:\r\n?|\n?)https?://[^<>"\']+?\[/img\]#is', ' ', $text);
+            }
+            // MyBB's video pattern (no line breaks), and only a video it embeds goes; one it
+            // leaves as typed stays text — and is kept as typed, not read again below.
+            if ($video) {
+                $text = self::replaceCallback('#\[video=(.*?)\](.*?)\[/video\]#i', static function (array $m): string {
+                    return self::embedsVideo($m[1], $m[2]) ? ' ' : $m[0];
+                }, $text);
+            }
+            $text = self::inline($text, false);
+            if ($text === $before) {
+                break;
+            }
+        }
+        return $text;
+    }
+
+    /**
+     * Whether MyBB 1.8.41 shows a `[video=SITE]URL[/video]` as an embedded player:
+     * `Postparser::mycode_parse_video`, step by step — a site it knows, a valid URL, and an
+     * id its rule for that site finds in the address. Anything else MyBB leaves on the page
+     * as typed (`[video=SITE]URL[/video]`), which is text.
+     */
+    private static function embedsVideo(string $video, string $url): bool
+    {
+        if (empty($video) || empty($url) || filter_var($url, FILTER_VALIDATE_URL) === false) {
+            return false;
+        }
+        $parsed = @parse_url(urldecode($url));
+        if ($parsed === false) {
+            return false;
+        }
+        $fragments = empty($parsed['fragment']) ? [] : explode('&', $parsed['fragment']);
+        if ($video === 'liveleak' && !empty($parsed['query'])) {
+            $parsed['query'] = 'i' . substr($parsed['query'], 1);
+        }
+        $input = [];
+        foreach (empty($parsed['query']) ? [] : explode('&', $parsed['query']) as $query) {
+            $pair = explode('=', $query);
+            if (count($pair) === 2) {
+                $input[str_replace('amp;', '', $pair[0])] = $pair[1];
+            }
+        }
+        $path = empty($parsed['path']) ? [] : explode('/', $parsed['path']);
+        $id = '';
+        switch ($video) {
+            case 'dailymotion':
+                if (!empty($path[2])) {
+                    $id = explode('_', $path[2], 2)[0];
+                } elseif (!empty($path[1])) {
+                    $id = $path[1];
+                }
+                break;
+            case 'metacafe':
+                $id = !empty($path[2]) ? $path[2] : '';
+                break;
+            case 'myspacetv':
+                $id = !empty($path[4]) ? $path[4] : '';
+                break;
+            case 'facebook':
+                if (!empty($input['v'])) {
+                    $id = $input['v'];
+                } elseif (!empty($path[3]) && substr($path[3], 0, 3) === 'vb.' && !empty($path[4])) {
+                    $id = $path[4];
+                } elseif (!empty($path[3])) {
+                    $id = $path[3];
+                }
+                break;
+            case 'mixer':
+                $id = !empty($path[1]) ? $path[1] : '';
+                break;
+            case 'liveleak':
+                $id = !empty($input['i']) ? $input['i'] : '';
+                break;
+            case 'yahoo':
+                if (!empty($path[2])) {
+                    $id = $path[2];
+                } elseif (!empty($path[1])) {
+                    $id = $path[1];
+                }
+                break;
+            case 'vimeo':
+                if (!empty($path[3])) {
+                    $id = $path[3];
+                } elseif (!empty($path[1])) {
+                    $id = $path[1];
+                }
+                break;
+            case 'youtube':
+                if (!empty($fragments[0])) {
+                    $id = str_replace('!v=', '', $fragments[0]);
+                } elseif (!empty($input['v'])) {
+                    $id = $input['v'];
+                } elseif (!empty($path[1])) {
+                    $id = $path[1];
+                }
+                break;
+            case 'twitch':
+                if (count($path) >= 3 && $path[1] === 'videos') {
+                    $id = 'video=v' . $path[2];
+                } elseif (count($path) >= 4 && $path[2] === 'v') {
+                    $id = 'video=v' . $path[3];
+                } elseif (count($path) >= 2) {
+                    $id = 'channel=' . $path[1];
+                }
+                break;
+            default:
+                return false;
+        }
+        return !empty($id);
     }
 
     /**
@@ -503,14 +729,33 @@ final class Text
     }
 
     /**
-     * HTML as its reader sees it: tags gone, `alt`/`title` text kept, entities decoded.
+     * HTML as its reader sees it: tags gone, `alt`/`title` text kept (not with
+     * `$textOnly`: {@see shows}), entities decoded.
+     *
+     * MyBB 1.8.41 escapes `<script>`, `<style>`, `<base>` and `<meta>` in a forum with HTML
+     * on (`Postparser::parse_message`, the same pattern): the reader sees them as text, with
+     * what is between them. A comment is hidden: `<!-->` and `<!--->` end at once (HTML's
+     * own parsing), any other ends at `-->` (or `--!>`), and one never closed hides the rest.
+     * Only where HTML opens a comment, though: one pass from left to right takes each tag
+     * whole (its quoted values may hold `<!--`, `-->`, `<` or `>`), and the content of an
+     * element HTML reads as text (`<textarea>`, `<title>`, `<xmp>`, `<plaintext>`,
+     * `<iframe>`, `<noembed>`, `<noframes>`, `<noscript>`) is kept as it is, as is what
+     * follows the open quote of a tag never closed. In doubt, the text stays.
      */
-    private static function html(string $text): string
+    private static function html(string $text, bool $textOnly = false): string
     {
-        $text = self::replace('#<(script|style)\b[^>]*>.*?</\1\s*>#is', ' ', $text);
-        $text = self::replaceCallback('#<([a-z][a-z0-9]*)\b([^<>]*)>#i', static function (array $m): string {
+        $text = self::replace('#<(/?)(base|meta|script|style)([^>]*)>#i', '&lt;$1$2$3&gt;', $text);
+        $text = self::replaceCallback('#<(textarea|title|xmp|iframe|noembed|noframes|noscript)\b' . self::ATTRIBUTES
+            . '>.*?(?:</\1\s*>|\z)|<plaintext\b.*\z|<!--(?:-?>|.*?(?:--!?>|\z))|</?[a-z][a-z0-9]*\b' . self::ATTRIBUTES . '>'
+            // A tag never closed, its last quote open to the end: what follows stays text.
+            . '|<[a-z][a-z0-9]*\b(?:[^<>"\']++|"[^"]*+"?|\'[^\']*+\'?)*+#is',
+            static function (array $m): string {
+                return strncmp($m[0], '<!--', 4) === 0 ? ' ' : $m[0];
+            }, $text);
+        $text = self::replaceCallback('#<([a-z][a-z0-9]*)\b(' . self::ATTRIBUTES . ')>#i', static function (array $m) use ($textOnly): string {
             $shown = [];
-            if (self::matchAll('#(?:^|\s)(?:alt|title)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'>]+))#i', $m[2], $attributes, PREG_SET_ORDER) > 0) {
+            // A hint goes with the words beside it; alone it is not a text (F7).
+            if (!$textOnly && self::matchAll('#(?:^|\s)(?:alt|title)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'>]+))#i', $m[2], $attributes, PREG_SET_ORDER) > 0) {
                 foreach ($attributes as $attribute) {
                     $value = trim(($attribute[1] ?? '') . ($attribute[2] ?? '') . ($attribute[3] ?? ''));
                     if ($value !== '') {
@@ -608,6 +853,11 @@ final class Text
     private static function replace($pattern, $replacement, string $subject): string
     {
         $result = preg_replace($pattern, $replacement, $subject);
+        if (!is_string($result) && self::jitGaveUp()) {
+            $result = self::withoutJit(static function () use ($pattern, $replacement, $subject) {
+                return preg_replace(self::interpreted($pattern), $replacement, $subject);
+            });
+        }
         if (!is_string($result)) {
             throw self::failure();
         }
@@ -622,6 +872,11 @@ final class Text
     private static function replaceCallback(string $pattern, callable $callback, string $subject): string
     {
         $result = preg_replace_callback($pattern, $callback, $subject);
+        if (!is_string($result) && self::jitGaveUp()) {
+            $result = self::withoutJit(static function () use ($pattern, $callback, $subject) {
+                return preg_replace_callback(self::interpreted($pattern), $callback, $subject);
+            });
+        }
         if (!is_string($result)) {
             throw self::failure();
         }
@@ -638,10 +893,62 @@ final class Text
     private static function matchAll(string $pattern, string $subject, &$matches = null, int $flags = PREG_PATTERN_ORDER): int
     {
         $result = preg_match_all($pattern, $subject, $matches, $flags);
+        if (!is_int($result) && self::jitGaveUp()) {
+            $result = self::withoutJit(static function () use ($pattern, $subject, &$matches, $flags) {
+                return preg_match_all(self::interpreted($pattern), $subject, $matches, $flags);
+            });
+        }
         if (!is_int($result)) {
             throw self::failure();
         }
         return $result;
+    }
+
+    /**
+     * Whether the last PCRE call failed for its JIT stack only — a limit of the compiled
+     * code, not of the match: the same pattern then runs again without JIT
+     * ({@see withoutJit}), so a text MyBB renders never becomes `text_error` for it.
+     */
+    private static function jitGaveUp(): bool
+    {
+        return preg_last_error() === PREG_JIT_STACKLIMIT_ERROR;
+    }
+
+    /**
+     * Runs a PCRE call with `pcre.jit` off, then puts the setting back. Where the host does
+     * not let it change, the call is not repeated (null: the failure stands).
+     *
+     * @return mixed The call's result, or null.
+     */
+    private static function withoutJit(callable $call)
+    {
+        if (!function_exists('ini_set') || !function_exists('ini_get')) {
+            return null;
+        }
+        $jit = ini_get('pcre.jit');
+        if (!is_string($jit) || @ini_set('pcre.jit', '0') === false) {
+            return null;
+        }
+        try {
+            return $call();
+        } finally {
+            ini_set('pcre.jit', $jit);
+        }
+    }
+
+    /**
+     * The same pattern under another key of PHP's pattern cache, so that it is compiled
+     * anew while `pcre.jit` is off (a cached pattern keeps its JIT code). The `S` modifier
+     * it adds changes nothing since PHP 7.3.
+     *
+     * @param string|array<int,string> $pattern
+     * @return string|array<int,string>
+     */
+    private static function interpreted($pattern)
+    {
+        return is_array($pattern) ? array_map(static function (string $one): string {
+            return $one . 'S';
+        }, $pattern) : $pattern . 'S';
     }
 
     /**

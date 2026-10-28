@@ -96,7 +96,7 @@ final class Installer
         }
         $this->platform->removeSettings();
         $this->platform->removeTask();
-        $this->platform->removeState([Task::SWITCHED_OFF, Submitter::REFUSAL, Submitter::PAUSE]);
+        $this->platform->removeState([Task::SWITCHED_OFF, Submitter::REFUSAL, Submitter::PAUSE, Receiver::REJECTED]);
         if ($this->platform->input('no') === null) {
             $this->platform->dropTables();
         }

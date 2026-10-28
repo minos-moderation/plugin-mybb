@@ -18,8 +18,9 @@ forum:
 | `inc/tasks/minos.php` | `task_minos($task)`, run every 5 minutes by MyBB's task system. |
 | `inc/languages/{polish,english}/minos.lang.php` | Polish texts, byte-identical: MyBB falls back to `english/` when the board's pack has no file, and the plugin serves Polish forums. |
 | `bin/build-zip.sh` | Builds `build/minos-mybb-<version>.zip` (`Upload/`, `README.md`, `LICENSE`). |
+| `bin/verify-mybb-1841.sh` | The plugin on a real MyBB 1.8.41 forum, MySQL or PostgreSQL (see "Verified on a live forum"). |
 | `.github/workflows/release.yml` | On a `v*` tag: builds the zip, proves it with `.github/scripts/check-release-archive.sh` and attaches it to the GitHub Release. |
-| `tests/` | PHPUnit: stand-ins for MyBB (`Stubs/`, `Support/`), unit tests (`Plugin/`), the end-to-end run (`EndToEnd/`), the Claude Code rules (`Repo/`). |
+| `tests/` | PHPUnit: stand-ins for MyBB (`Stubs/`, `Support/`), unit tests (`Plugin/`), the end-to-end run (`EndToEnd/`), the Claude Code rules (`Repo/`), the live run on a real forum (`Live/`, not in the plain run) and its recorded answers (`fixtures/mybb-1.8.41/`). |
 
 The classes:
 
@@ -31,11 +32,11 @@ The classes:
 | `TextError` | A PCRE failure inside `Text`: the text could not be read (`error: true`, never `''`). |
 | `Gateway` | `POST /api/v1/b2b/oceny` over cURL; reads answers into accepted (`202` only) / retry (429, 408, 5xx, no answer) / config error. |
 | `Submitter` | The hold (validate hooks), the submission (insert-end hooks), resubmission, edits. |
-| `Receiver` | The webhook's checklist: method, signature, payload, id, claim, apply. |
+| `Receiver` | The webhook's checklist: method, signature (`Signature::check`; a refusal counted with its reason only), payload, id, claim, apply. |
 | `Applier` | A verdict or the failure mode → approve, hold, soft-delete, or publish the masked text. |
 | `Task` | Timeouts, due retries, pruning. |
 | `Installer` | Settings group, tables, task; the lifecycle functions. |
-| `Admin` | Masked secrets on the settings page, the ACP notice (problems, a configuration error, a daily limit or overload until a given time), the Tools → Logs page with the last 7 days' verdict figures. |
+| `Admin` | Masked secrets on the settings page, the ACP notice (problems, a configuration error, a daily limit or overload until a given time, refused signatures), the Tools → Logs page with the last 7 days' verdict figures. |
 | `Plugin` | Builds the objects once per request. |
 
 ## How the plugin holds a post
@@ -65,7 +66,8 @@ block of `insert_post` and the forum-subscription block of `insert_thread`, only
 `visible == 1`); MyBB 1.8.41 has no function that sends them, and neither
 `Moderation::approve_*` nor `modcp.php`/`moderation.php` send any on approval — the same
 as for manually moderated posts. Sending them would mean copying that block (per-subscriber
-permissions, languages, `send_pm`, the mail queue); that is a separate decision.
+permissions, languages, `send_pm`, the mail queue); that is a separate decision. Verified
+on a live forum: question 2 below.
 
 ## What `tekst` is
 
@@ -75,10 +77,16 @@ The text readers SEE, following MyBB's own text renderer
 
 - HTML off (MyBB's default): `<…>` is literal on the page and stays; only decimal numeric
   entities are decoded (`htmlspecialchars_uni` lets them through). HTML on: tags go, the
-  text of `alt`/`title` stays, `<script>`/`<style>` go with their content, entities are
-  decoded.
+  text of `alt`/`title` stays, entities are decoded; `<script>`, `<style>`, `<base>` and
+  `<meta>` stay as text with what is between them (MyBB escapes them, `parse_message`),
+  and an HTML comment goes (`<!-->` and `<!--->` end at once, `-->` or `--!>` end any
+  other, one never closed hides the rest) — but only where HTML opens one: one pass from
+  left to right takes each tag whole, so `<!--` in a quoted attribute value opens nothing,
+  and the content of `<textarea>`, `<title>`, `<xmp>`, `<plaintext>`, `<iframe>`,
+  `<noembed>`, `<noframes>` and `<noscript>` stays — as the live run shows
+  (`reader-view.json`).
 - MyCode: `[quote=NAME]` → "NAME napisał(a):"; `[url=X]Y[/url]` → "Y (X)"; `[img]X[/img]`,
-  `[video=…]X[/video]` → X; `[code]`/`[php]` keep their content; formatting tags go; MyCode
+  `[video=…]X[/video]` → X beside other text; `[code]`/`[php]` keep their content; formatting tags go; MyCode
   MyBB would not parse stays literally.
 - What heads the post goes in front, a blank line between the parts (`Text::ofPost`): a
   new thread's subject (always escaped, never parsed), then its poll — the question
@@ -97,12 +105,36 @@ The text readers SEE, following MyBB's own text renderer
   poll, `tekst` is `''` and the post gets the failure mode at once as `no_text`, nothing
   sent (fail-open publishes it marked `auto_published`). A poll is text (S5): an empty body
   with a poll sends the title and the poll.
+- Neither is an image, a video or a link without a label (F7, `Text::shows`): a body whose
+  only visible content is `[img]`/`[img=WxH]`/`[img align=…]` as MyBB's own patterns take
+  it (with the forum's image MyCode on; at most one line break before the address), a
+  `[video=…]` MyBB embeds (`Text::embedsVideo` follows `mycode_parse_video` step by step:
+  a site it knows, a valid URL, an id its rule finds — any other stays as typed), an
+  attachment,
+  `[url=X]` around a label that shows nothing (blanks, an image, empty formatting), or on an
+  HTML forum an `<img>` — its `alt`/`title` notwithstanding — or an `<a>` without text, is
+  `no_text`; so is one whose only other characters take no visible place (`Text::INVISIBLE`,
+  as in the WordPress plugin, plus marks: white space, `\p{Z}` separators, `\p{Cf}` format
+  characters — U+200B, U+2060, U+FEFF, `&#173;`… —, `\p{Cc}` controls, `\p{M}` marks
+  without a base such as U+034F or U+FE0F, the Hangul fillers and the blank Braille
+  pattern). A bare address the reader sees is text (`https://…`, `[url]X[/url]`, an image
+  or video tag MyBB leaves as a link or as typed); beside other text, an image's address
+  and a hint are sent as before. The cases are MyBB 1.8.41's reader view as the live run
+  recorded it (`reader-view.json`, checked by `ReaderViewTest`). The reading is linear (a
+  link is replaced by its label, no recursion), and when PCRE gives up on it the body
+  counts as text: in doubt, the post is sent.
 - The link signals count the links of what is sent, head included (`Text::sourceOf`).
 - Every regular expression runs through one checked helper in `Text`: a PCRE failure (a
   post crafted to exhaust the backtrack limit, e.g. a few hundred unclosed `[url=` tags)
   throws `TextError`, and `Text::forPost` returns `error: true` — never `''`. The post then
   gets the failure mode as `text_error` with nothing sent, not even a new thread's subject
-  alone (`no_text` is for a post whose body shows no text and that has no poll).
+  alone (`no_text` is for a post whose body shows no text and that has no poll). Only a
+  failure of the match itself counts: a call that exhausts PCRE's JIT stack (a long
+  attribute, a 60 000-character quote — markup MyBB renders) runs again with `pcre.jit`
+  off, under another key of PHP's pattern cache, and the text is sent; the patterns over
+  long runs are possessive, so they need no JIT stack per character. What stays
+  `text_error` is a post on which PCRE gives up without JIT too, as on the unclosed
+  `[url=` tags MyBB itself shows as an empty body (question 1 below; shared rule F7).
 - `meta`: `links` (distinct links), `link_domains` (up to 10 registrable domains — the last
   two host labels, or three under a two-label public suffix from a short list; an
   approximation of the Public Suffix List), `author_first_post` for registered authors.
@@ -132,6 +164,13 @@ applying for more than 5 min ─► back to claimed_from (the task)
   answers `404` before the signature, the task gives back no claim, applies no failure
   mode and sends nothing (it only forgets old data), and no new post is held. What was
   held stays in MyBB's queue. No usable secret: `401`.
+- A delivery whose signature `Signature::check` refuses gets a bare `401`, and the refusal
+  is counted in the datacache entry `minos_signature_rejected` (`count`, the last
+  `reason` — `malformed`, `stale` or `mismatch` — and its moment `at`; never the body,
+  the header or the secret). While it exists every ACP page says so, with what the reason
+  points at: the stored secret, the server's clock, or a header that is not the gateway's
+  (anyone who knows the webhook address can send one). The next verified delivery and a
+  newly saved secret remove it; so does the uninstall.
 - Switched off, the task notes it in the datacache entry `minos_switched_off`, and so
   does a deactivation. The first run after the plugin is on again moves every
   `pending`/`retry` row back to `retry` with `submitted_at = retry_at = now` (a fresh
@@ -189,8 +228,8 @@ applying for more than 5 min ─► back to claimed_from (the task)
 - Who can edit a post in the moderation queue, in MyBB 1.8.41: its forum's moderators, and
   its author only while the board setting `showownunapproved` ("Access Own Unapproved
   Threads / Posts", off by default) is on — `editpost.php` and the quick edit
-  (`xmlhttp.php`, `edit_post`) refuse the author otherwise. Read in the source, not tried
-  on a live forum.
+  (`xmlhttp.php`, `edit_post`) refuse the author otherwise. `editpost.php` verified on a
+  live forum (question 4 below); the quick edit read in the source.
 - One row that throws never stops the others: `try/catch (\Throwable $e)` around one row
   of the task's timeout loop, one row's item in a resubmission, each batch's send, and the
   webhook's `verdict()`/`late()`. `Applier::failedStep` logs `error` with the step as its
@@ -261,16 +300,21 @@ staged root too, installs the plugin and posts through its hooks with the real c
 transport, so both sides run the distributable; the mock's worker delivers, including a
 censored post published over HTTP. CI runs everything on PHP 7.4 and 8.3.
 
+`tests/Live/` is not part of that run: it needs a real MyBB 1.8.41 forum and a database,
+and runs only through `bin/verify-mybb-1841.sh` (see "Verified on a live forum").
+`tests/Plugin/LiveFixturesTest.php` checks the answers it recorded, from the files alone.
+
 ## Continuous integration
 
 `.github/workflows/tests.yml` runs the syntax check and `vendor/bin/phpunit` on PHP 7.4 and
 8.3 and, on every pull request, the release build and its checks; `release.yml` runs on a
-`v*` tag. Every `uses:` in both is pinned to a full 40-character commit SHA with the
+`v*` tag; `live.yml` runs the plugin on a real MyBB 1.8.41 forum (see "Verified on a live
+forum"). Every `uses:` in all three is pinned to a full 40-character commit SHA with the
 version in a comment (`uses: actions/checkout@<sha>  # v5.0.0`), so a moved tag cannot
 change what runs. To refresh a pin, resolve the new tag to its commit —
 `git ls-remote https://github.com/<owner>/<action> 'refs/tags/<tag>*'`, taking the peeled
 `^{}` line of an annotated tag — check that the commit belongs to that release, and
-replace the SHA and the comment together, in both files.
+replace the SHA and the comment together, in every file that uses it.
 
 ## Against the mock gateway by hand
 
@@ -342,14 +386,15 @@ a `release` environment with a required reviewer on the `publish` job.
 ## Composer
 
 `composer.json` requires `minos-moderation/client-php` at `dev-main` from its GitHub
-repository (a `vcs` repository entry); `composer.lock` pins the commit. When the client is
-tagged, `dev-main` will be replaced by `^0.1`, and the `repositories` entry by Packagist
-if it is published there. The plugin never forks the client's verification.
+repository (a `vcs` repository entry); `composer.lock` pins the commit: `e5df7d6d`, the
+commit the client's `v0.2.0` tag is to name (`Signature::check`). When the tag exists,
+`dev-main` will be replaced by `^0.2`, and the `repositories` entry by Packagist if it is
+published there. The plugin never forks the client's verification.
 
 ## MyBB 1.8 APIs
 
-Checked against the MyBB 1.8.41 source (tag `mybb_1841` of `github.com/mybb/mybb`), by
-reading the code, not by running a live forum:
+Checked against the MyBB 1.8.41 source (tag `mybb_1841` of `github.com/mybb/mybb`) by
+reading the code; what the live run below goes through is verified on a real forum too:
 
 | API | Where in MyBB | Used by |
 |---|---|---|
@@ -381,42 +426,77 @@ reading the code, not by running a live forum:
 | `$db` helpers: `simple_select`, `query`, `fetch_array`, `fetch_field`, `insert_query`, `update_query`, `delete_query`, `escape_string`, `affected_rows`, `table_exists`, `drop_table`, `write_query`, `build_create_table_collation`, `type`; `field_exists($field, $table)` and `add_column($table, $column, $definition)` (prefix added; `ALTER TABLE … ADD`) in every driver, the PDO ones included | `inc/db_mysqli.php`, `inc/db_pgsql.php`, `inc/db_sqlite.php`, `inc/AbstractPdoDbDriver.php`, `inc/db_mysql_pdo.php`, `inc/db_pgsql_pdo.php`, `inc/init.php` | `Platform` |
 | the minimal bootstrap `IN_MYBB`, `NO_ONLINE`, `THIS_SCRIPT`, `inc/init.php` (database, settings, cache, plugins; no session) | `inc/init.php`, `task.php` | `minos-webhook.php` |
 
-Read in the 1.8.41 source — questions 3 to 5 of the live check (minos-moderation/minos#47),
-still to be confirmed by the job on a real forum:
+## Verified on a live forum
 
-- **3. Polls.** A poll is not part of `newthread.php`: with "post a poll" ticked, it
-  redirects to `polls.php?action=newpoll&tid=…` after `insert_thread`, and the poll is
-  created by `do_newpoll` (hooks `polls_do_newpoll_start`, `_process` before the insert,
-  `_end` after it and after `threads.poll` is set). The form (`newpoll`) refuses a thread
-  that is not visible to anyone but a moderator (`error_invalidthread`), so the author of a
-  thread the plugin holds cannot reach it; `do_newpoll` itself checks only the thread's
-  author (or `canmanagepolls`) and the forum's permissions, so a direct post still adds a
-  poll to a held thread. `showthread.php` offers the author "add poll" on a published
-  thread (within `polltimelimit` hours). Editing a poll (`do_editpoll`, hook
-  `polls_do_editpoll_end`) needs `canmanagepolls`: moderators only. So before the verdict a
-  poll exists only when a moderator or a direct post made it — the plugin then sends it as a
-  new revision (an author's) or leaves the thread to a human (a moderator's); a poll added
-  after publication is a change of a published post, not assessed (D9.2 not adopted).
-- **4. Who edits a post in the queue**: see "The row's life" — moderators, and its author
-  only with `showownunapproved` on.
-- **5. A reply's subject is shown**: the default theme's `showthread_threaded_bit` prints it
-  as the link text in the threaded view, `search_results_posts_post` in post search
-  results, `printthread_post` in the printable version, and `postbit_posturl` puts it in
-  the `title` of the post-number link in the linear view (`build_postbit` escapes it with
-  `htmlspecialchars_uni`). So an own subject is sent; the default one tells nothing new.
+`bin/verify-mybb-1841.sh` installs MyBB 1.8.41 from a checkout of its `mybb_1841` tag
+(commit `cacad9f3`) with MyBB's OWN installer (`install/index.php`, over HTTP), on MySQL
+(`mysqli`) or PostgreSQL (`pgsql`), copies the staged distributable into it
+(`bin/build-zip.sh --stage-only`), serves it and the mock gateway with PHP's built-in
+server and runs `tests/Live/LiveForumTest.php` through the forum's own pages: the ACP's
+plugin and settings pages, `member.php`, `newreply.php`, `newthread.php`, `polls.php`,
+`editpost.php`, `modcp.php`, `showthread.php`, `printthread.php`, `search.php` and the
+real `minos-webhook.php`, with deliveries signed by the mock's worker. The test reads the
+database to see what happened. It writes to it outside those pages only to set the stage:
+`tests/Live/fixtures/minos-live-cli.php` (copied into the forum, never shipped) changes
+board settings, a forum's parsing options and users through MyBB's own functions
+(`rebuild_settings`, `$cache->update_forums`, `UserDataHandler`), runs MyBB's parser, and
+runs the plugin's `Platform` on the real `$db` (the claim question, which puts the row's
+status back afterwards); the subscribers' `lastactive` is moved ahead (MyBB notifies once
+per visit), and the uninstall test drops a column of a kept table to stand for an older
+version's; `minoslive.php`, a
+watcher plugin of the test forum, logs the hooks that ran. `.github/workflows/live.yml`
+runs it on PHP 7.4 (MySQL 8.0) and PHP 8.3 (MySQL 8.0 and PostgreSQL 16) for pull
+requests that change `inc/`, the webhook, the lock, the build or the live files, and on
+demand; it uploads the answers and reports, as warnings, any that differ from the
+fixtures. Locally (an EMPTY database each time):
 
-Not verified — to check on a live forum before a release:
+```bash
+MYBB_DIR=/path/to/mybb-at-mybb_1841 MINOS_LIVE_DB_HOST=127.0.0.1 MINOS_LIVE_DB_NAME=mybb_live \
+  MINOS_LIVE_DB_USER=mybb_live MINOS_LIVE_DB_PASS=… bin/verify-mybb-1841.sh mysqli   # or pgsql
+```
 
-- The MySQL and PostgreSQL `CREATE TABLE` statements (no `ENGINE` clause: the server's
-  default) and `CREATE INDEX IF NOT EXISTS` (PostgreSQL 9.5+): only the SQLite ones run in
-  the tests.
-- Activation adds every pending-table column a kept table lacks (`$db->field_exists`,
-  `$db->add_column`, rows kept): only SQLite's `ALTER TABLE … ADD` runs in the tests; the
-  MySQL (`text NOT NULL` without a default) and PostgreSQL forms are to check.
-- `affected_rows()` after the claim's conditional `UPDATE` on MySQL (it counts changed
-  rows; the claim always changes `status`, so it should read 1).
+The run's answers are the fixtures in `tests/fixtures/mybb-1.8.41/` (`live-mysqli.json`,
+`live-pgsql.json`: the MyBB commit, the PHP and database versions, the answers;
+`reader-view.json`: what MyBB's parser shows of images, videos, links and HTML).
+Recorded on PHP 8.3.6, MySQL 8.0.46 and PostgreSQL 16.15; both engines gave the same
+answers. The smoke run on both: install and activate through the ACP, the key and secret
+saved through the plugin's fields (the page shows prefixes only); an author's reply held
+and sent once to the gateway; the signed verdict publishes it (`visible = 1`); a censored
+reply published with its mask; a forged signature `401` and named in the ACP; switched
+off or deactivated `404`, and a deactivated plugin holds and sends nothing; uninstall
+"No" keeps the rows, "Yes" drops the tables. The approval inside the webhook's request
+took 36–75 ms end to end (audit measurement C-39).
+
+The questions of the live check (minos-moderation/minos#47), answered:
+
+| # | Question | Answer (fixture key) |
+|---|---|---|
+| 1 | `Widoczne SLOWO` and n unclosed `[url=http://a.pl]x` (n = 340: 6 135 B; 1000: 18 015 B), reply and thread, default `pcre.backtrack_limit` (1 000 000, JIT on) | MyBB stores all four. Its own `[url=…]` patterns stop with `PREG_BACKTRACK_LIMIT_ERROR` (2), and `showthread.php` shows an EMPTY body — not even `SLOWO` — with or without the parser's output check. The plugin holds each as `text_error`, nothing sent. A reader sees nothing, so sending the raw message instead (audit R1, step 2) is not needed (`q1_pcre`). |
+| 2 | Subscribers (thread by e-mail, thread by PM, forum by e-mail) when a held post is approved | A post visible at once queues one e-mail, one PM, one forum e-mail (the control). A reply and a thread the plugin publishes through the webhook queue none; a reply a moderator approves in the ModCP queue, none either: MyBB 1.8.41 notifies only at insert time (`q2_notifications`). |
+| 3 | A poll on a thread that waits for its verdict | `newthread.php` with "post a poll" answers with its redirect page; the poll form (`polls.php?action=newpoll`) refuses the author: "The specified thread does not exist". A direct `do_newpoll` POST by the author still creates the poll (hooks `polls_newpoll_start`, `polls_do_newpoll_start`, `_process`, `_end`), and the plugin sends the thread again as revision `.1` with the poll (`q3_polls`). |
+| 4 | May a "Registered" author edit their own unapproved post | Not with MyBB's default `showownunapproved` = off (no permission); with it on, `editpost.php` shows the form and saves, and the plugin sends the edit as revision `.1` (`q4_edit_own_unapproved`). |
+| 5 | Is a reply's own subject shown | Yes: in the linear view, the threaded view, the printable version and post search results; the plugin sends it in front of the reply (`q5_reply_subject`). |
+| 6 | Counters around `approve_*` | A held reply adds nothing to the forum's posts, the thread's replies or the author's post count, and the approval adds one to each — exactly as a ModCP approval does. MyBB itself adds 2 to `threads.unapprovedposts` for a held reply and takes 1 away on approval, for any moderated reply (`insert_post` counts it twice); the plugin takes MyBB's own path, so the same happens with or without it (`q6_counters`). |
+| 7 | The tables on MySQL and PostgreSQL; `affected_rows()` after a claim | Created by the ACP's activation on both (`q7_schema`: MySQL's `SHOW CREATE TABLE`, PostgreSQL's columns); a kept table missing a column gets it back on activation, rows kept (`add_column`, `activation_adds_a_missing_column`); the claim's first conditional `UPDATE` reports 1 changed row, a second 0 (`q7_claim`). |
+
+Beside them: in a forum with HTML on, MyBB shows `<script>`/`<style>` as text (it escapes
+those tags, `inc/class_parser.php` `parse_message`) and hides HTML comments
+(`html_forum_page`, `reader-view.json`); an image (`[img]`, `[img=WxH]`, `[img align=…]`),
+a video of a known site and a link whose label shows nothing (`[url=X] [/url]`, an image
+inside the link) show no text, while a bare URL and `[url]X[/url]` show the address. For a
+moderator signal (K-41, K-42) MyBB 1.8.41 offers, read in the source and not exercised by
+the run: `add_report($report, $type = 'post')` (`inc/functions_modcp.php`: a
+`reportedcontent` row — `id` the post, `id2` its thread, `id3` its forum, `uid` the
+reporter, `reasonid`/`reason` — shown in the ModCP's report list, and with the board's
+`reportmethod` set to `email` or `pms` also sent to the moderators by `send_report`), and
+`send_pm($pm, -1, true)` (`inc/functions.php`: `subject`, `message`, `touid`,
+`receivepms`; `-1` sends as "MyBB Engine"), as `insert_post` uses it for subscriptions.
+
+Still not verified, and why:
+
 - Other plugins hooked on `class_moderation_*`: in the webhook and the task there is no
-  session user, as in MyBB's own `task.php`.
-- The ACP rendering of the settings page and the Tools → Logs page in a real browser
-  (the `php` setting type is tested by running MyBB's own evaluation line).
-- docs.mybb.com was not consulted; the source was.
+  session user, as in MyBB's own `task.php`. Which plugins a board runs is the board's;
+  the plugin's own failure isolation is tested on stand-ins (`FailureIsolationTest`).
+- The ACP pages in a real browser: the live run loads them over HTTP and checks what they
+  say; their look (MyBB's own CSS and scripts) is not checked — the plugin adds neither.
+- docs.mybb.com was not consulted; the source and the live forum were.

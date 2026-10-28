@@ -28,8 +28,56 @@ final class TextTest extends TestCase
     {
         self::assertSame('Miłego dnia', Text::visible(self::PROBE, self::HTML_ON), 'a tag is invisible on an HTML forum');
         $visible = Text::visible('<p>Obraz: <img src="https://example.com/a.png" alt="OBELGA_ALT"> i '
-            . '<a href="https://example.com" title=\'OBELGA_TITLE\'>link</a></p><script>ukryte()</script>', self::HTML_ON);
+            . '<a href="https://example.com" title=\'OBELGA_TITLE\'>link</a></p>', self::HTML_ON);
         self::assertSame("Obraz: OBELGA_ALT i OBELGA_TITLE link", $visible);
+    }
+
+    /**
+     * The review's probe on an HTML forum: MyBB 1.8.41 escapes `<script>` and `<style>`
+     * there, so its readers see "obelga" — and the gateway must assess it.
+     */
+    public function testOnAnHtmlForumScriptAndStyleAreTextAsMyBBShowsThem(): void
+    {
+        $sent = Text::forPost('Miły tekst <script>obelga</script>', '', self::HTML_ON)['tekst'];
+        self::assertSame('Miły tekst <script>obelga</script>', $sent);
+        self::assertSame('<style type="text/css">p { color: red }</style>Zwykły tekst',
+            Text::visible('<style type="text/css">p { color: red }</style>Zwykły tekst', self::HTML_ON));
+        self::assertSame('<meta x> <base y> tekst', Text::visible('<meta x> <base y> tekst', self::HTML_ON));
+    }
+
+    /**
+     * An HTML comment is hidden from readers, so it is not sent: closed, never closed (it
+     * hides the rest), and HTML's own early ends (`<!-->`, `<!--->`) that show what follows.
+     * What only looks like one — `<!--` inside a tag's quoted value, or inside an element
+     * HTML reads as text — opens nothing, and the words after it are sent.
+     *
+     * @dataProvider comments
+     */
+    public function testOnlyWhatHtmlReadsAsACommentIsLeftOut(string $message, string $tekst, int $html = 1): void
+    {
+        self::assertSame($tekst, Text::forPost($message, '', ['allowhtml' => $html])['tekst']);
+    }
+
+    /** @return array<string,array{0:string,1:string,2?:int}> */
+    public function comments(): array
+    {
+        return [
+            'closed'        => ['Widoczne zdanie <!-- ukryta obelga --> i dalej', 'Widoczne zdanie i dalej'],
+            'never closed'  => ['Widoczne zdanie <!-- ukryta obelga do końca', 'Widoczne zdanie'],
+            'over lines'    => ["Przed\n<!-- ukryta\nobelga -->\nPo", "Przed\n\nPo"],
+            '--!> ends it'  => ['a <!-- ukryta --!> b', 'a b'],
+            '<!--> ends at once'  => ['a <!-->widoczna--> b', 'a widoczna--> b'],
+            '<!---> ends at once' => ['a <!--->widoczna b', 'a widoczna b'],
+            'HTML off: shown as typed' => ['a <!-- widoczna --> b', 'a <!-- widoczna --> b', 0],
+            // Only where HTML opens a comment (the review of #7, major 3).
+            'a comment start in a title' => ['Miły tekst <b title="<!--">obelga</b><b title="-->">', 'Miły tekst <!-- obelga -->'],
+            'a comment start in an alt'  => ['<img alt="<!--" src="https://example.com/a.png">obelga -->', '<!-- obelga -->'],
+            'in single quotes'           => ["<b title='<!--'>obelga</b> -->", '<!-- obelga -->'],
+            'in a textarea'              => ['<textarea><!-- obelga --></textarea>', '<!-- obelga -->'],
+            'in an xmp, text after'      => ['<xmp><!-- obelga --></xmp> po', '<!-- obelga --> po'],
+            'in a plaintext'             => ['<plaintext><!-- obelga', '<!-- obelga'],
+            'a tag inside a comment'     => ['a <!-- x <b title="y"> --> b', 'a b'],
+        ];
     }
 
     public function testEntitiesAreDecodedAsMyBBShowsThem(): void

@@ -30,7 +30,10 @@ Minos.
 
 ## Wymagania
 
-- MyBB 1.8 (sprawdzone na 1.8.41) i PHP 7.4 lub nowszy z rozszerzeniami `curl` i `json`.
+- MyBB 1.8 (sprawdzone na 1.8.41: test automatyczny instaluje prawdziwe forum MyBB 1.8.41
+  na MySQL i PostgreSQL i przechodzi na nim całą drogę postu — wstrzymanie, wysyłkę,
+  podpisany werdykt, maskę, wyłączenie i odinstalowanie) i PHP 7.4 lub nowszy
+  z rozszerzeniami `curl` i `json`.
 - Forum pod adresem **HTTPS z nazwą domeny**, osiągalnym z internetu. Brama doręcza
   werdykty tylko na `https://`, tylko na nazwy hostów z listy klucza i nie podąża za
   przekierowaniami — adres webhooka musi odpowiadać bezpośrednio (bez przekierowania
@@ -130,8 +133,12 @@ Wysyłane jest tylko:
   stronie:
   - na forum bez HTML (domyślnie) znaki `<…>` są zwykłym tekstem i zostają w całości;
     na forum z HTML znaczniki znikają, ale tekst z atrybutów `alt` i `title` zostaje;
+    znaczniki `<script>` i `<style>` MyBB pokazuje tam jako zwykły tekst (razem z tym, co
+    między nimi), więc tak są wysyłane, a komentarzy HTML (`<!-- … -->`) czytelnik nie
+    widzi, więc nie są wysyłane;
   - cytat `[quote=NAZWA]` staje się „NAZWA napisał(a):” i cytowanym tekstem;
-    `[url=ADRES]opis[/url]` — „opis (ADRES)”; `[img]ADRES[/img]` i filmy — samym adresem;
+    `[url=ADRES]opis[/url]` — „opis (ADRES)”; `[img]ADRES[/img]` i filmy obok innego
+    tekstu — samym adresem;
   - MyCode, którego MyBB nie rozpozna (nieznany znacznik, znacznik bez pary, forum
     z wyłączonym MyCode), zostaje dosłownie — tak jak widzi go czytelnik;
 - profil oceny;
@@ -216,10 +223,17 @@ werdyktu nie ma:
   administratora;
 - wtyczka jest włączona, ale jej ustawienia są niekompletne (brak klucza albo sekretu,
   adres bramy bez `https://`, nieznany profil) — nic nie jest wysyłane;
-- post nie ma tekstu do oceny (np. sam załącznik) — także nowy wątek albo odpowiedź
-  z własnym tematem, jeśli ich treść nie ma tekstu: sam tytuł nie jest tekstem do oceny
-  i nie jest wysyłany. Pytanie i opcje ankiety są tekstem, więc wątek z ankietą i pustą
-  treścią jest wysyłany z tytułem i ankietą;
+- post nie ma tekstu do oceny — także nowy wątek albo odpowiedź z własnym tematem, jeśli
+  ich treść nie ma tekstu: sam tytuł nie jest tekstem do oceny i nie jest wysyłany. Tekstu
+  do oceny nie ma też post, którego czytelnik widzi tylko obrazek (`[img]`, a na forum
+  z HTML `<img>` — nawet z opisem `alt` albo `title`), film osadzony przez MyBB,
+  załącznik albo link bez widocznego opisu (`[url=ADRES] [/url]`, link wokół obrazka),
+  także gdy obok są tylko znaki niewidoczne (np. spacja o zerowej szerokości, miękki
+  dywiz):
+  brama nie ocenia obrazów, a adres, którego czytelnik nie widzi, nie jest treścią postu.
+  Goły adres widoczny dla czytelnika (`https://…`) jest tekstem i jest wysyłany. Pytanie
+  i opcje ankiety są tekstem, więc wątek z ankietą i pustą treścią jest wysyłany z tytułem
+  i ankietą;
 - nie udało się odczytać tekstu postu (np. treść tak zbudowana, że przetwarzanie wyrażeń
   regularnych przerywa się z błędem) — wtyczka nie wysyła wtedy niczego, nawet samego
   tytułu wątku, a w dzienniku zapisuje zdarzenie z numerem postu;
@@ -265,6 +279,12 @@ numer postu — nigdy treść błędu.
   (czego brakuje), gdy brama odrzuciła ostatnią wysyłkę z powodu błędu konfiguracji
   (kod błędu i czas) albo gdy brama nie przyjmuje postów do określonej godziny (wyczerpany
   dobowy limit klucza, przeciążenie — kod i godzina). Znika po pierwszej udanej wysyłce.
+  Także gdy webhook odrzuca doręczenia z nieprawidłowym podpisem: ile ich było od
+  ostatniego przyjętego doręczenia, kiedy przyszło ostatnie i na co wskazuje powód — zły
+  sekret webhooka, zegar serwera przesunięty o ponad 5 minut albo nagłówek podpisu, który
+  nie pochodzi od bramy. Dzięki temu literówkę w sekrecie widać bez zaglądania do logów
+  serwera (brama dostaje tylko odpowiedź `401`, bez powodu). Ten komunikat znika po
+  pierwszym doręczeniu z poprawnym podpisem albo po zapisaniu nowego sekretu.
 - **Narzędzia i konserwacja → Dzienniki → Minos — dziennik**: stan konfiguracji, adres
   webhooka, posty wymagające uwagi (zatrzymane w kolejce, czekające na werdykt, opublikowane
   bez oceny w trybie fail-open, rozstrzygnięte przez człowieka przed werdyktem i oznaczone

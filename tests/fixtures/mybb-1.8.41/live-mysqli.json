@@ -1,0 +1,266 @@
+{
+    "mybb": {
+        "version": "1.8.41",
+        "tag": "mybb_1841",
+        "commit": "cacad9f352043a1e36f21871c32beba46852f93e"
+    },
+    "php": "8.3.6",
+    "database": {
+        "engine": "mysqli",
+        "version": "8.0.46"
+    },
+    "recorded": "2026-10-28",
+    "source": "tests/Live/LiveForumTest.php through bin/verify-mybb-1841.sh",
+    "answers": {
+        "q7_schema": {
+            "engine": "mysqli",
+            "version": "8.0.46",
+            "tables": {
+                "minos_pending": "CREATE TABLE `mybb_minos_pending` (\n  `pid` int unsigned NOT NULL DEFAULT '0',\n  `tid` int unsigned NOT NULL DEFAULT '0',\n  `is_thread` tinyint(1) NOT NULL DEFAULT '0',\n  `status` varchar(20) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',\n  `submitted_at` int unsigned NOT NULL DEFAULT '0',\n  `accepted_at` int unsigned NOT NULL DEFAULT '0',\n  `retry_at` int unsigned NOT NULL DEFAULT '0',\n  `attempts` smallint unsigned NOT NULL DEFAULT '0',\n  `truncated` tinyint(1) NOT NULL DEFAULT '0',\n  `prefix_len` smallint unsigned NOT NULL DEFAULT '0',\n  `text_len` smallint unsigned NOT NULL DEFAULT '0',\n  `verdict` varchar(20) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',\n  `categories` varchar(255) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',\n  `support` tinyint(1) NOT NULL DEFAULT '0',\n  `error_code` varchar(40) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',\n  `decided_at` int unsigned NOT NULL DEFAULT '0',\n  `auto_published` tinyint(1) NOT NULL DEFAULT '0',\n  `claimed_at` int unsigned NOT NULL DEFAULT '0',\n  `claimed_from` varchar(20) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',\n  `original_text` text COLLATE utf8mb4_general_ci NOT NULL,\n  `sent_sha256` varchar(64) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',\n  `masked_text` text COLLATE utf8mb4_general_ci NOT NULL,\n  `apply_errors` smallint unsigned NOT NULL DEFAULT '0',\n  `first_post` varchar(1) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',\n  `rev` smallint unsigned NOT NULL DEFAULT '0',\n  `answer` varchar(20) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',\n  `answered_at` int unsigned NOT NULL DEFAULT '0',\n  `own_subject` tinyint(1) NOT NULL DEFAULT '0',\n  PRIMARY KEY (`pid`),\n  KEY `status` (`status`,`retry_at`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci",
+                "minos_log": "CREATE TABLE `mybb_minos_log` (\n  `lid` int unsigned NOT NULL AUTO_INCREMENT,\n  `dateline` int unsigned NOT NULL DEFAULT '0',\n  `event` varchar(20) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',\n  `code` varchar(40) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',\n  `pid` int unsigned NOT NULL DEFAULT '0',\n  PRIMARY KEY (`lid`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
+            }
+        },
+        "q6_counters": {
+            "approved_by_webhook": {
+                "before": {
+                    "forum_posts": 1,
+                    "forum_threads": 1,
+                    "forum_unapproved_posts": 0,
+                    "forum_unapproved_threads": 0,
+                    "thread_replies": 0,
+                    "thread_unapproved": 0,
+                    "author_postnum": 0
+                },
+                "held": {
+                    "forum_posts": 1,
+                    "forum_threads": 1,
+                    "forum_unapproved_posts": 1,
+                    "forum_unapproved_threads": 0,
+                    "thread_replies": 0,
+                    "thread_unapproved": 2,
+                    "author_postnum": 0
+                },
+                "approved": {
+                    "forum_posts": 2,
+                    "forum_threads": 1,
+                    "forum_unapproved_posts": 0,
+                    "forum_unapproved_threads": 0,
+                    "thread_replies": 1,
+                    "thread_unapproved": 1,
+                    "author_postnum": 1
+                }
+            },
+            "approved_in_modcp": {
+                "before": {
+                    "forum_posts": 2,
+                    "forum_threads": 1,
+                    "forum_unapproved_posts": 0,
+                    "forum_unapproved_threads": 0,
+                    "thread_replies": 1,
+                    "thread_unapproved": 1,
+                    "author_postnum": 1
+                },
+                "held": {
+                    "forum_posts": 2,
+                    "forum_threads": 1,
+                    "forum_unapproved_posts": 1,
+                    "forum_unapproved_threads": 0,
+                    "thread_replies": 1,
+                    "thread_unapproved": 3,
+                    "author_postnum": 1
+                },
+                "approved": {
+                    "forum_posts": 3,
+                    "forum_threads": 1,
+                    "forum_unapproved_posts": 0,
+                    "forum_unapproved_threads": 0,
+                    "thread_replies": 2,
+                    "thread_unapproved": 2,
+                    "author_postnum": 2
+                }
+            }
+        },
+        "c39_webhook_request_ms": 45,
+        "q2_notifications": {
+            "visible_at_once": {
+                "thread_mail": 1,
+                "forum_mail": 1,
+                "thread_pm": 1
+            },
+            "approved_by_webhook": {
+                "thread_mail": 0,
+                "forum_mail": 0,
+                "thread_pm": 0
+            },
+            "approved_in_modcp": {
+                "thread_mail": 0,
+                "forum_mail": 0,
+                "thread_pm": 0
+            }
+        },
+        "q3_polls": {
+            "newthread_with_poll_answer": "page: Forum testowe Minos",
+            "newpoll_form_for_the_author": "message: The specified thread does not exist.",
+            "direct_do_newpoll_created_a_poll": true,
+            "hooks": [
+                "newthread.php newthread_do_newthread_start",
+                "newthread.php datahandler_post_validate_thread",
+                "newthread.php datahandler_post_insert_thread_end",
+                "newthread.php newthread_do_newthread_end",
+                "polls.php polls_newpoll_start",
+                "polls.php polls_do_newpoll_start",
+                "polls.php polls_do_newpoll_process",
+                "polls.php polls_do_newpoll_end"
+            ],
+            "plugin_row_after_the_poll": {
+                "status": "retry",
+                "rev": 1
+            },
+            "sent_again_with_the_poll": true
+        },
+        "q4_edit_own_unapproved": {
+            "showownunapproved_off": "message: You do not have permission to access this page. This could be because of one of the following reasons: Your account has either been suspended or you have been banned from accessing this resource. You ",
+            "showownunapproved_on": "form",
+            "edit_saved": true,
+            "plugin_row_after_the_edit": {
+                "status": "retry",
+                "rev": 1
+            }
+        },
+        "q5_reply_subject": {
+            "sent_with_the_subject": true,
+            "linear": true,
+            "threaded": true,
+            "printable": true,
+            "search": true
+        },
+        "q1_pcre": {
+            "reply_340": {
+                "bytes": 6135,
+                "accepted_by_mybb": true,
+                "mybb_refusal": "",
+                "reader_sees_the_word": false,
+                "reader_body_chars": 0,
+                "parser_output_chars": 0,
+                "parser_sees_the_word": false,
+                "parser_preg_last_error": 0,
+                "parser_pattern_failures": [
+                    {
+                        "pattern": "#\\[url=((?!javascript)[a-z]+?://)([^\r\n\"<]+?)\\](.+?)\\[/url\\]#si",
+                        "error": 2
+                    },
+                    {
+                        "pattern": "#\\[url=((?!javascript:)[^\r\n\"<]+?)\\](.+?)\\[/url\\]#si",
+                        "error": 2
+                    }
+                ],
+                "parser_output_chars_without_its_output_check": 0,
+                "pcre": {
+                    "backtrack_limit": "1000000",
+                    "jit": "1"
+                },
+                "plugin": {
+                    "status": "held",
+                    "verdict": "text_error"
+                }
+            },
+            "thread_340": {
+                "bytes": 6135,
+                "accepted_by_mybb": true,
+                "mybb_refusal": "",
+                "reader_sees_the_word": false,
+                "reader_body_chars": 0,
+                "parser_output_chars": 0,
+                "parser_sees_the_word": false,
+                "parser_preg_last_error": 0,
+                "parser_pattern_failures": [
+                    {
+                        "pattern": "#\\[url=((?!javascript)[a-z]+?://)([^\r\n\"<]+?)\\](.+?)\\[/url\\]#si",
+                        "error": 2
+                    },
+                    {
+                        "pattern": "#\\[url=((?!javascript:)[^\r\n\"<]+?)\\](.+?)\\[/url\\]#si",
+                        "error": 2
+                    }
+                ],
+                "parser_output_chars_without_its_output_check": 0,
+                "pcre": {
+                    "backtrack_limit": "1000000",
+                    "jit": "1"
+                },
+                "plugin": {
+                    "status": "held",
+                    "verdict": "text_error"
+                }
+            },
+            "reply_1000": {
+                "bytes": 18015,
+                "accepted_by_mybb": true,
+                "mybb_refusal": "",
+                "reader_sees_the_word": false,
+                "reader_body_chars": 0,
+                "parser_output_chars": 0,
+                "parser_sees_the_word": false,
+                "parser_preg_last_error": 0,
+                "parser_pattern_failures": [
+                    {
+                        "pattern": "#\\[url=((?!javascript)[a-z]+?://)([^\r\n\"<]+?)\\](.+?)\\[/url\\]#si",
+                        "error": 2
+                    },
+                    {
+                        "pattern": "#\\[url=((?!javascript:)[^\r\n\"<]+?)\\](.+?)\\[/url\\]#si",
+                        "error": 2
+                    }
+                ],
+                "parser_output_chars_without_its_output_check": 0,
+                "pcre": {
+                    "backtrack_limit": "1000000",
+                    "jit": "1"
+                },
+                "plugin": {
+                    "status": "held",
+                    "verdict": "text_error"
+                }
+            },
+            "thread_1000": {
+                "bytes": 18015,
+                "accepted_by_mybb": true,
+                "mybb_refusal": "",
+                "reader_sees_the_word": false,
+                "reader_body_chars": 0,
+                "parser_output_chars": 0,
+                "parser_sees_the_word": false,
+                "parser_preg_last_error": 0,
+                "parser_pattern_failures": [
+                    {
+                        "pattern": "#\\[url=((?!javascript)[a-z]+?://)([^\r\n\"<]+?)\\](.+?)\\[/url\\]#si",
+                        "error": 2
+                    },
+                    {
+                        "pattern": "#\\[url=((?!javascript:)[^\r\n\"<]+?)\\](.+?)\\[/url\\]#si",
+                        "error": 2
+                    }
+                ],
+                "parser_output_chars_without_its_output_check": 0,
+                "pcre": {
+                    "backtrack_limit": "1000000",
+                    "jit": "1"
+                },
+                "plugin": {
+                    "status": "held",
+                    "verdict": "text_error"
+                }
+            }
+        },
+        "html_forum_page": {
+            "text": "Miły tekst <script>obelga</script> [minos:cisza]"
+        },
+        "q7_claim": {
+            "first": true,
+            "second": false,
+            "affected_first": 1,
+            "affected_second": 0
+        },
+        "activation_adds_a_missing_column": true
+    }
+}
