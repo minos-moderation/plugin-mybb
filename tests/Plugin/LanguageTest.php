@@ -44,8 +44,14 @@ final class LanguageTest extends TestCase
                 self::assertArrayHasKey($key, $strings, $name);
             }
         }
-        foreach (['config_error', 'retry', 'recovered', 'timeout'] as $event) {
-            self::assertArrayHasKey('minos_event_' . $event, $strings);
+        $events = [];
+        foreach (glob(self::ROOT . 'inc/plugins/minos/src/*.php') ?: [] as $file) {
+            preg_match_all("/->log\\('([a-z_]+)'/", (string)file_get_contents($file), $m);
+            $events = array_merge($events, $m[1]);
+        }
+        self::assertGreaterThanOrEqual(4, count(array_unique($events)), 'the scan found no logged events: it is broken');
+        foreach (array_unique($events) as $event) {
+            self::assertArrayHasKey('minos_event_' . $event, $strings, "the log page shows {$event}");
         }
     }
 

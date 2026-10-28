@@ -54,18 +54,24 @@ Minos.
    Zainstaluj i aktywuj**. Instalacja tworzy grupę ustawień, dwie tabele
    (`<prefiks>minos_pending`, `<prefiks>minos_log`) i zadanie.
 4. **Konfiguracja → Ustawienia → Minos — moderacja postów**: wpisz klucz API i sekret
-   webhooka, wybierz profil oceny i tryb awaryjny.
+   webhooka, wybierz profil oceny i tryb awaryjny, a na końcu ustaw **Włączona = tak**.
+   Świeża instalacja startuje wyłączona.
 5. Przekaż operatorowi bramy adres webhooka do zapisania przy kluczu:
    `https://<adres-forum>/minos-webhook.php`. Wtyczka pokazuje go w opisie wtyczki,
    w opisie grupy ustawień i przy polu sekretu.
 6. Napisz próbny post jako zwykły użytkownik. Stan każdego wysłanego postu widać
    w **Narzędzia i konserwacja → Dzienniki → Minos — dziennik**.
 
+**Aktualizacja do nowej wersji**: dezaktywuj wtyczkę, podmień pliki i aktywuj ją ponownie.
+Aktywacja dodaje do tabel wtyczki kolumny, których wymaga nowa wersja (dane zostają); bez
+niej nowa wersja nie zapisze postów do tabeli. Posty, które czekały na werdykt w czasie
+dezaktywacji, wtyczka wysyła ponownie przy pierwszym przebiegu zadania.
+
 ## Ustawienia
 
 | Ustawienie | Znaczenie | Domyślnie |
 |---|---|---|
-| Włączona | Wyłączona wtyczka nie zatrzymuje nowych postów; werdykty dla postów wysłanych wcześniej są nadal stosowane. | tak |
+| Włączona | Wyłączona wtyczka nic nie robi: nie zatrzymuje nowych postów, nie stosuje werdyktów ani trybu awaryjnego. Posty już zatrzymane zostają w kolejce moderacji dla ludzi, a werdykty doręczone w tym czasie przepadają. | nie |
 | Adres bramy | Adres bramy Wergiliusza. Musi zaczynać się od `https://` (`http://` tylko dla atrapy bramy na tym samym komputerze). | `https://gateway.wergiliusz.app` |
 | Klucz API | Klucz B2B `wgb2b_…`. Po zapisaniu panel pokazuje tylko jego początek. Puste pole przy zapisie zostawia zapisany klucz; pole „Usuń zapisaną wartość” go kasuje. | — |
 | Sekret webhooka | Sekret do sprawdzania podpisu werdyktów. Zapisywany i pokazywany jak klucz. | — |
@@ -77,8 +83,9 @@ Minos.
 | Fora | Fora, w których wtyczka moderuje nowe posty. | wszystkie |
 | Pomijaj moderatorów | Posty moderatorów, supermoderatorów i administratorów trafiają na forum bez oceny. | tak |
 
-Gdy wtyczka jest włączona, ale czegoś brakuje (klucza, sekretu, poprawnego adresu bramy),
-nie zatrzymuje nowych postów, a każda strona panelu administratora mówi, czego brakuje.
+Gdy wtyczka jest włączona, ale czegoś brakuje (klucza, sekretu, poprawnego adresu bramy,
+znanego profilu), nie wysyła postów do oceny: każdy nowy post od razu dostaje tryb
+awaryjny, a każda strona panelu administratora mówi, czego brakuje.
 
 **Klucz i sekret zapisuj przy aktywnej wtyczce.** Zapisuje je kod wtyczki, więc przy
 dezaktywowanej wtyczce pola klucza i sekretu są wyłączone (z informacją, dlaczego) —
@@ -126,11 +133,26 @@ w kolejce z uwagą „wpis dłuższy niż 3000 znaków — oceniono początek”
 opublikowany). Werdykt `zablokowane` działa normalnie, a `ocenzurowane` zawsze zostawia
 taki post w kolejce.
 
-Opublikowany post ocenzurowany jest **zwykłym tekstem**: traci formatowanie MyCode, bo brama
-maskuje tekst, który zobaczyli czytelnicy. Oryginał zostaje w tabeli wtyczki (przez 90 dni).
-Post ocenzurowany zawsze zostaje w kolejce, gdy: był dłuższy niż 3000 znaków, brama
-zamaskowała coś w tytule wątku, zamaskowany tekst ma inną długość niż wysłany, brama nie
-przysłała zamaskowanego tekstu albo nie udało się zapisać zamaskowanej treści.
+Brama maskuje tekst, który zobaczyli czytelnicy, więc wtyczka publikuje zamaskowany tekst
+tylko wtedy, gdy jest on **dokładnie** tym, co wysłała, z niektórymi znakami zastąpionymi
+przez `█`, a post jest zwykłym tekstem. **Post z formatowaniem (MyCode, cytat, link)
+zostaje w kolejce, a zamaskowany tekst widać w dzienniku** (Minos — dziennik, kolumna
+„Tekst zamaskowany przez bramę”). Tak samo zostaje w kolejce zwykły tekst z nadmiarowymi
+białymi znakami — podwójnymi spacjami, tabulatorami, twardymi spacjami, spacjami na
+początku lub końcu wiersza albo więcej niż jednym pustym wierszem z rzędu: wtyczka wysyła
+go z takimi odstępami ściśniętymi, więc maska nie odpowiada zapisanej treści znak w znak
+(różnica samych końców wiersza CR/LF nie przeszkadza). Oryginał opublikowanego postu zostaje w tabeli wtyczki
+(przez 30 dni). Post ocenzurowany zawsze zostaje w kolejce, gdy: był dłuższy niż 3000
+znaków, brama zamaskowała coś w tytule wątku, zamaskowany tekst różni się od wysłanego
+czymś innym niż znaki `█` (inna długość, inne litery), brama nie przysłała zamaskowanego
+tekstu albo nie udało się zapisać zamaskowanej treści.
+
+Werdykt dotyczy tylko tekstu, który wtyczka wysłała: przed zastosowaniem każdego werdyktu
+wtyczka porównuje skrót (SHA-256) wysłanego tekstu z tekstem postu w tej chwili — sam
+tekst nie jest przechowywany. Jeśli treść zmieniła się z pominięciem edycji (np. przez inną
+wtyczkę), werdykt nie jest stosowany: post zostaje w kolejce dla człowieka („tekst postu
+inny niż wysłany do oceny”), a post opublikowany wcześniej w trybie fail-open zostaje taki,
+jaki jest.
 
 Jeśli moderator zdąży zatwierdzić albo usunąć post, zanim nadejdzie werdykt, wtyczka go nie
 rusza — decyzja człowieka wygrywa. Edycja postu czekającego na werdykt też zostawia go
@@ -142,9 +164,18 @@ Wtyczka nigdy nie zgaduje werdyktu. Tryb awaryjny rozstrzyga, co zrobić z poste
 werdyktu nie ma:
 - brama odpowiedziała `nieocenione` (nie zdążyła ocenić albo nie rozpoznała odpowiedzi);
 - werdykt nie nadszedł w czasie oczekiwania;
+- brama odmówiła przyjęcia postu do chwili, która wypada po końcu jego czasu oczekiwania
+  (np. wyczerpany dobowy limit klucza albo przeciążenie) — tryb awaryjny od razu;
 - brama odrzuciła wysyłkę z powodu błędu konfiguracji (np. zły klucz, profil spoza listy
-  klucza, brak zapisanego webhooka) — kod błędu pojawia się w panelu administratora;
+  klucza, brak zapisanego webhooka) albo odpowiedziała czymś innym niż przyjęciem `202`
+  (np. stroną dostawcy hostingu z kodem `200`) — kod błędu pojawia się w panelu
+  administratora;
+- wtyczka jest włączona, ale jej ustawienia są niekompletne (brak klucza albo sekretu,
+  adres bramy bez `https://`, nieznany profil) — nic nie jest wysyłane;
 - post nie ma tekstu do oceny (np. sam załącznik);
+- nie udało się odczytać tekstu postu (np. treść tak zbudowana, że przetwarzanie wyrażeń
+  regularnych przerywa się z błędem) — wtyczka nie wysyła wtedy niczego, nawet samego
+  tytułu wątku, a w dzienniku zapisuje zdarzenie z numerem postu;
 - post był dłuższy niż 3000 znaków, a brama uznała jego początek za bezpieczny.
 
 **fail-closed** (domyślnie) zostawia taki post w kolejce moderacji dla człowieka.
@@ -153,20 +184,39 @@ zastosuje, dopóki nikt nie ruszył postu: `zablokowane` odsyła post z powrotem
 moderacji, `ocenzurowane` postępuje według ustawienia „Post ocenzurowany”. Jeśli w tym czasie
 moderator zdecydował o poście albo post został edytowany, decyzja człowieka jest ostateczna.
 
-Gdy brama jest chwilowo przeciążona albo niedostępna (lub nie ma połączenia), post czeka:
-zadanie ponawia wysyłkę po czasie wskazanym przez bramę albo po coraz dłuższej przerwie
-(od 1 minuty do 1 godziny). Jeśli do końca czasu oczekiwania się nie uda — tryb awaryjny.
+Gdy brama jest chwilowo przeciążona albo niedostępna (lub nie ma połączenia albo
+połączenie przekroczyło czas — `408`), post czeka: zadanie ponawia wysyłkę po czasie
+wskazanym przez bramę albo po coraz dłuższej przerwie (od 1 minuty do 1 godziny). Jeśli do końca czasu oczekiwania się nie uda — tryb awaryjny.
+Gdy czas wskazany przez bramę kończy się dopiero po czasie oczekiwania postu (np. po
+wyczerpaniu dobowego limitu klucza brama odmawia do końca doby), post od razu dostaje tryb
+awaryjny, bez czekania. Przy wyczerpanym dobowym limicie i przy przeciążeniu bramy każda
+strona panelu administratora pokazuje, do której godziny brama nie przyjmuje postów;
+komunikat znika po pierwszej przyjętej wysyłce albo po tej godzinie. W tym czasie wtyczka
+nadal próbuje wysłać każdy nowy post, a brama mu odmawia.
+
+Gdy obsługa jednego postu kończy się błędem (np. wyjątkiem innej wtyczki podpiętej pod
+moderację MyBB), pozostałe posty są obsługiwane normalnie. Webhook odpowiada wtedy błędem
+`500`, więc brama doręcza werdykt ponownie, a zadanie próbuje znowu przy następnym
+przebiegu. Po trzech nieudanych próbach wtyczka nie robi już nic z postem: zostaje on dla
+człowieka z uwagą „błąd przy stosowaniu werdyktu (3 próby)”. Dziennik zapisuje krok i
+numer postu — nigdy treść błędu.
 
 ## Panel administratora
 
 - **Komunikat na każdej stronie panelu**, gdy wtyczka jest włączona, ale nie może działać
-  (czego brakuje), albo gdy brama odrzuciła ostatnią wysyłkę z powodu błędu konfiguracji
-  (kod błędu i czas). Znika po pierwszej udanej wysyłce.
+  (czego brakuje), gdy brama odrzuciła ostatnią wysyłkę z powodu błędu konfiguracji
+  (kod błędu i czas) albo gdy brama nie przyjmuje postów do określonej godziny (wyczerpany
+  dobowy limit klucza, przeciążenie — kod i godzina). Znika po pierwszej udanej wysyłce.
 - **Narzędzia i konserwacja → Dzienniki → Minos — dziennik**: stan konfiguracji, adres
   webhooka, posty wymagające uwagi (zatrzymane w kolejce, czekające na werdykt, opublikowane
-  bez oceny w trybie fail-open i oznaczone jako potrzebujące wsparcia) oraz dziennik
+  bez oceny w trybie fail-open i oznaczone jako potrzebujące wsparcia; przy poście
+  ocenzurowanym zatrzymanym w kolejce — tekst zamaskowany przez bramę) oraz dziennik
   zdarzeń. Dziennik zawiera wyłącznie kody i
   numery postów — nigdy treść, klucz ani sekret. Wpisy starsze niż 30 dni są usuwane.
+- **Jak długo wtyczka przechowuje dane postu**: wiersz rozstrzygniętego postu — z werdyktem,
+  kategoriami, oryginałem opublikowanego postu ocenzurowanego i zamaskowanym tekstem
+  postu zatrzymanego w kolejce — jest usuwany 30 dni po rozstrzygnięciu. Sam wysłany
+  tekst nie jest przechowywany (tylko jego skrót SHA-256).
 
 ## Ograniczenia
 
@@ -185,8 +235,13 @@ zadanie ponawia wysyłkę po czasie wskazanym przez bramę albo po coraz dłużs
   `inc/settings.php`, jawnym tekstem. Panel administratora pokazuje tylko ich początek
   (a strony „Edytuj ustawienie” MyBB dla nich nie otwiera), ale zobaczy je każdy, kto ma
   dostęp do bazy, jej kopii zapasowych albo do plików forum.
-- Gdy wtyczka jest dezaktywowana, webhook odpowiada błędem i nie stosuje werdyktów; posty
-  już zatrzymane zostają w kolejce moderacji dla ludzi.
+- Gdy wtyczka jest dezaktywowana albo wyłączona („Włączona = nie”), webhook odpowiada
+  `404` i nie stosuje werdyktów, a zadanie nie stosuje trybu awaryjnego ani nie ponawia
+  wysyłki; posty już zatrzymane zostają w kolejce moderacji dla ludzi. Brama ponawia
+  doręczenie werdyktu najwyżej przez kilkanaście minut, potem go porzuca. Po ponownym
+  włączeniu (albo aktywacji) pierwszy przebieg zadania wysyła jeszcze raz posty, które
+  wciąż czekały na werdykt, z nowym czasem oczekiwania — zamiast hurtem stosować do nich
+  tryb awaryjny.
 
 ## Odinstalowanie
 

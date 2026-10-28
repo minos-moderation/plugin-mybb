@@ -83,11 +83,12 @@ function minos_activate()
 }
 
 /**
- * Switches the task off. Posts already held stay in MyBB's moderation queue.
+ * Switches the task off. Posts already held stay in MyBB's moderation queue; the first task
+ * run after a later activation sends again what was waiting.
  */
 function minos_deactivate()
 {
-    \Minos\MyBB\Plugin::instance()->installer->deactivate();
+    \Minos\MyBB\Plugin::instance()->installer->deactivate(TIME_NOW);
 }
 
 /**

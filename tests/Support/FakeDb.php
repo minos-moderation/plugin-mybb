@@ -123,6 +123,24 @@ final class FakeDb
         return $this->fetch_array($query) !== null;
     }
 
+    /** MyBB's SQLite driver: `PRAGMA table_info` of the prefixed table. */
+    public function field_exists($field, $table)
+    {
+        $query = $this->query("PRAGMA table_info('" . $this->escape_string($this->table_prefix . $table) . "')");
+        while ($row = $this->fetch_array($query)) {
+            if ($row['name'] === $field) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** MyBB's SQLite driver: `ALTER TABLE <prefix><table> ADD <column> <definition>`. */
+    public function add_column($table, $column, $definition)
+    {
+        return $this->write_query('ALTER TABLE ' . $this->table_prefix . $table . ' ADD ' . $column . ' ' . $definition);
+    }
+
     public function drop_table($table, $hard = false, $tablePrefix = true)
     {
         $this->write_query('DROP TABLE IF EXISTS ' . ($tablePrefix ? $this->table_prefix : '') . $table);

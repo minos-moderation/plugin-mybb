@@ -79,7 +79,8 @@ final class Forum
         $GLOBALS['cache'] = $forum->cache;
         $GLOBALS['lang'] = $forum->lang;
         $GLOBALS['page'] = $forum->page;
-        $GLOBALS['minos_test'] = ['moderators' => [], 'forum_permissions' => [], 'moderation' => [], 'task_log' => []];
+        $GLOBALS['minos_test'] = ['moderators' => [], 'forum_permissions' => [], 'moderation' => [], 'task_log' => [],
+            'throw_on' => [], 'throw_after' => []];
         if (!$fresh) {
             rebuild_settings();
         }

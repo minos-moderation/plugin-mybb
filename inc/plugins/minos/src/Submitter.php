@@ -16,13 +16,19 @@ use SplObjectStorage;
  *    verdict that arrives before the gateway's `202` finds it.
  * 3. The gateway's answer ({@see send}): `202` → wait for the webhook; `429`/`503`/no
  *    answer → the task sends it again after `ponow_za_s`, or after a backoff doubling from
- *    60 s; any other refusal → a configuration error: the failure mode is applied, the
- *    code (never the content) is logged, and the ACP shows a notice.
+ *    60 s — unless `ponow_za_s` (as the gateway gave it) ends after the post's receive
+ *    timeout: then the failure mode applies at once (shared rule D9.3a), since the post
+ *    could not be assessed in time anyway; any other refusal → a configuration error: the
+ *    failure mode is applied, the code (never the content) is logged, and the ACP shows a
+ *    notice. A daily-limit or overload refusal is kept with the moment it ends, for the
+ *    ACP notice ("the gateway does not accept until …"); the next `202` clears it.
  *
  * A post the plugin does not touch: a draft, an edit, a post in a forum it does not
  * cover, a moderator's post (by setting), a post MyBB holds anyway (the forum moderates
  * new posts, or the user is under moderation — humans asked for those), a post written on
- * someone else's behalf, and every post while the plugin is off or misconfigured.
+ * someone else's behalf, and every post while the plugin is switched off. Switched on but
+ * unable to submit (no key or secret, an unusable gateway address), it holds the post and
+ * applies the failure mode at once, without sending.
  *
  * What an item carries: `id` `mybb:<pid>`, `tekst` ({@see Text::forPost}: what readers of the
  * post see), `profil`, and `meta` with `links`, `link_domains` and — for a registered author,
@@ -43,6 +49,15 @@ final class Submitter
 
     /** The longest retry pause, in seconds. */
     public const MAX_BACKOFF_S = 3600;
+
+    /** The state key ({@see Platform::state}) of the gateway's last long refusal, for the ACP. */
+    public const REFUSAL = 'refusal';
+
+    /** The refusal that means "the key's allowance for the day is spent". */
+    public const DAILY_LIMIT = 'limit_dobowy_klucza';
+
+    /** Refusals that mean "the gateway is overloaded" (not this key's doing). */
+    public const OVERLOADED = ['limit_globalny_b2b', 'kolejka_pelna'];
 
     /** @var Platform */
     private $platform;
@@ -85,7 +100,7 @@ final class Submitter
             return;
         }
         $settings = new Settings($this->platform->settings());
-        if (!$settings->active()) {
+        if (!$settings->enabled()) {
             return;
         }
         $uid = (int)($data['uid'] ?? 0);
@@ -137,6 +152,9 @@ final class Submitter
         $message = (string)($data['message'] ?? '');
         $subject = $thread ? (string)($data['subject'] ?? '') : '';
         $text = Text::forPost($message, $subject, $this->platform->forumParsing((int)($data['fid'] ?? 0)));
+        $signals = $text['error'] ? null : self::linkSignals($subject . "\n" . $message);
+        // Read now, in the author's request: a resubmission (the task) has no author.
+        $first = $this->platform->currentUserHasNoPosts();
         $row = [
             'pid'          => $pid,
             'tid'          => $thread ? (int)($values['tid'] ?? 0) : (int)($data['tid'] ?? 0),
@@ -149,20 +167,27 @@ final class Submitter
             'truncated'    => $text['truncated'] ? 1 : 0,
             'prefix_len'   => $text['prefix_len'],
             'text_len'     => $text['text_len'],
+            'sent_sha256'  => self::digest($text),
+            'first_post'   => $first === null ? '' : ($first ? '1' : '0'),
         ];
         $this->platform->addPending($row);
         $row = $this->platform->pending($pid) ?? $row;
 
         $settings = new Settings($this->platform->settings());
+        if (!$settings->active()) {
+            // Switched on, but nothing can be sent: the failure mode, at once.
+            $this->decideWithout($row, Status::REASON_NOT_CONFIGURED, $settings, $now);
+            return;
+        }
+        if ($signals === null) {
+            $this->unreadable($row, $settings, $now);
+            return;
+        }
         if ($text['tekst'] === '') {
             $this->decideWithout($row, Status::REASON_NO_TEXT, $settings, $now);
             return;
         }
-        $meta = self::linkSignals($subject . "\n" . $message);
-        $first = $this->platform->currentUserHasNoPosts();
-        if ($first !== null) {
-            $meta['author_first_post'] = $first;
-        }
+        $meta = $signals + self::firstPost($row);
         $this->send([['row' => $row, 'item' => self::item($pid, $text['tekst'], (string)$settings->profile(), $meta)]],
             $settings, $now);
     }
@@ -195,6 +220,10 @@ final class Submitter
     /**
      * Sends waiting rows again (the task), in batches of at most {@see Gateway::MAX_ITEMS}.
      *
+     * A row that throws while its item is built, and a batch that throws while it is sent,
+     * are logged by step and post id and left for the next run; the other rows and batches
+     * go on ({@see Applier::failedStep}).
+     *
      * @param array<int,array<string,mixed>> $rows     Rows due for a retry.
      * @param Settings                       $settings The settings (active).
      * @param int                            $now      Unix seconds.
@@ -204,34 +233,85 @@ final class Submitter
     {
         $batch = [];
         foreach ($rows as $row) {
-            $pid = (int)$row['pid'];
-            $post = $this->platform->post($pid);
-            if ($post === null || $post['visible'] !== 0) {
-                if ($this->platform->claimPending($pid, $now)) {
-                    $this->platform->updatePending($pid, [
-                        'status' => $post === null ? Status::GONE : Status::SUPERSEDED, 'decided_at' => $now,
-                    ]);
-                }
+            try {
+                $entry = $this->element($row, $settings, $now);
+            } catch (\Throwable $e) {
+                $this->applier->failedStep((int)$row['pid'], 'resubmit', $now);
                 continue;
             }
-            $text = Text::forPost($post['message'], (int)$row['is_thread'] === 1 ? $post['subject'] : '',
-                $this->platform->forumParsing($post['fid']));
-            if ($text['tekst'] === '') {
-                $this->decideWithout($row, Status::REASON_NO_TEXT, $settings, $now);
-                continue;
+            if ($entry !== null) {
+                $batch[] = $entry;
             }
-            $shape = ['truncated' => $text['truncated'] ? 1 : 0, 'prefix_len' => $text['prefix_len'], 'text_len' => $text['text_len']];
-            $this->platform->updatePending($pid, $shape, Status::RETRY);
-            $batch[] = [
-                'row'  => $shape + $row,
-                'item' => self::item($pid, $text['tekst'], (string)$settings->profile(),
-                    self::linkSignals($post['subject'] . "\n" . $post['message'])),
-            ];
         }
+        $sent = 0;
         foreach (array_chunk($batch, Gateway::MAX_ITEMS) as $chunk) {
-            $this->send($chunk, $settings, $now);
+            try {
+                $this->send($chunk, $settings, $now);
+                $sent += count($chunk);
+            } catch (\Throwable $e) {
+                // Its rows stay `retry`, due: the next run sends them again. The failure is
+                // the batch's, not its first row's, so no row's count grows.
+                try {
+                    $this->platform->log('error', 'send', (int)$chunk[0]['row']['pid'], $now);
+                } catch (\Throwable $ignored) {
+                    // The database refuses even this; the rows wait as they are.
+                }
+            }
         }
-        return count($batch);
+        return $sent;
+    }
+
+    /**
+     * One row's entry of a resubmission, or null when the row was decided instead (the post
+     * is gone, a human acted, or it has no text that can be sent).
+     *
+     * @param array<string,mixed> $row
+     * @return array{row:array<string,mixed>,item:array<string,mixed>}|null
+     */
+    private function element(array $row, Settings $settings, int $now): ?array
+    {
+        $pid = (int)$row['pid'];
+        $post = $this->platform->post($pid);
+        if ($post === null || $post['visible'] !== 0) {
+            if ($this->platform->claimPending($pid, $now)) {
+                $this->platform->updatePending($pid, [
+                    'status' => $post === null ? Status::GONE : Status::SUPERSEDED, 'decided_at' => $now,
+                ]);
+            }
+            return null;
+        }
+        $text = Text::forPost($post['message'], (int)$row['is_thread'] === 1 ? $post['subject'] : '',
+            $this->platform->forumParsing($post['fid']));
+        $signals = $text['error'] ? null : self::linkSignals($post['subject'] . "\n" . $post['message']);
+        if ($signals === null) {
+            $this->unreadable($row, $settings, $now);
+            return null;
+        }
+        if ($text['tekst'] === '') {
+            $this->decideWithout($row, Status::REASON_NO_TEXT, $settings, $now);
+            return null;
+        }
+        $shape = [
+            'truncated' => $text['truncated'] ? 1 : 0, 'prefix_len' => $text['prefix_len'],
+            'text_len' => $text['text_len'], 'sent_sha256' => self::digest($text),
+        ];
+        $this->platform->updatePending($pid, $shape, Status::RETRY);
+        return [
+            'row'  => $shape + $row,
+            'item' => self::item($pid, $text['tekst'], (string)$settings->profile(), $signals + self::firstPost($row)),
+        ];
+    }
+
+    /**
+     * `author_first_post` as the row kept it at the first send.
+     *
+     * @param array<string,mixed> $row
+     * @return array<string,bool> The signal, or nothing (a guest, or a row from before it was kept).
+     */
+    private static function firstPost(array $row): array
+    {
+        $first = (string)($row['first_post'] ?? '');
+        return $first === '1' || $first === '0' ? ['author_first_post' => $first === '1'] : [];
     }
 
     /**
@@ -262,14 +342,30 @@ final class Submitter
     }
 
     /**
+     * What the row keeps of the text it sends: its SHA-256, never the text. A verdict is
+     * applied only while the post still renders to that text ({@see Applier}).
+     *
+     * @param array{tekst:string,error:bool} $text From {@see Text::forPost}.
+     * @return string 64 hex characters; '' when nothing can be sent.
+     */
+    public static function digest(array $text): string
+    {
+        return $text['error'] || $text['tekst'] === '' ? '' : hash('sha256', $text['tekst']);
+    }
+
+    /**
      * The link signals of a post: `links`, and `link_domains` when it has any.
      *
-     * @return array<string,mixed>
+     * @return array<string,mixed>|null Null when the text could not be read (a PCRE failure).
      */
-    private static function linkSignals(string $text): array
+    private static function linkSignals(string $text): ?array
     {
-        $signals = ['links' => Text::links($text)];
-        $domains = Text::linkDomains($text);
+        try {
+            $signals = ['links' => Text::links($text)];
+            $domains = Text::linkDomains($text);
+        } catch (TextError $e) {
+            return null;
+        }
         if ($domains !== []) {
             $signals['link_domains'] = $domains;
         }
@@ -299,16 +395,27 @@ final class Submitter
             if ($last !== null && $last['event'] === 'config_error') {
                 $this->platform->log('recovered', '', 0, $now);
             }
+            $this->platform->setState(self::REFUSAL, null);
             return;
         }
 
         if ($result['outcome'] === Gateway::RETRY) {
+            $retryS = $result['ponow_za_s'];
+            if ($retryS !== null && ($result['kod'] === self::DAILY_LIMIT || in_array($result['kod'], self::OVERLOADED, true))) {
+                $this->platform->setState(self::REFUSAL, ['kod' => $result['kod'], 'since' => $now, 'until' => $now + $retryS]);
+            }
             foreach ($batch as $entry) {
                 $attempts = (int)$entry['row']['attempts'] + 1;
-                $pause = $result['ponow_za_s'] ?? min(self::MAX_BACKOFF_S, self::BACKOFF_S * (2 ** min(10, $attempts - 1)));
+                $pause = $retryS ?? min(self::MAX_BACKOFF_S, self::BACKOFF_S * (2 ** min(10, $attempts - 1)));
                 $this->platform->updatePending((int)$entry['row']['pid'], [
                     'retry_at' => $now + max(1, $pause), 'attempts' => $attempts, 'error_code' => $result['kod'],
                 ], Status::RETRY);
+                // Rule D9.3(a): the gateway refuses beyond the post's timeout — its
+                // `ponow_za_s` as given, not a pause of the plugin's own — so no verdict can
+                // come in time: the failure mode now, not after the wait.
+                if ($retryS !== null && $now + $retryS > (int)$entry['row']['submitted_at'] + $settings->timeoutS()) {
+                    $this->decideWithout($entry['row'], Status::REASON_GATEWAY_LIMIT, $settings, $now);
+                }
             }
             $this->platform->log('retry', $result['kod'], (int)$batch[0]['row']['pid'], $now);
             return;
@@ -326,6 +433,19 @@ final class Submitter
             $this->platform->updatePending((int)$entry['row']['pid'], ['error_code' => $result['kod']], Status::RETRY);
             $this->decideWithout($entry['row'], Status::REASON_CONFIG_ERROR, $settings, $now);
         }
+    }
+
+    /**
+     * A post whose text could not be read: logged with its id (never its content), and the
+     * failure mode applies — nothing is sent, not even a new thread's subject alone, and no
+     * verdict can ever publish it.
+     *
+     * @param array<string,mixed> $row
+     */
+    private function unreadable(array $row, Settings $settings, int $now): void
+    {
+        $this->platform->log('text_error', '', (int)$row['pid'], $now);
+        $this->decideWithout($row, Status::REASON_TEXT_ERROR, $settings, $now);
     }
 
     /**

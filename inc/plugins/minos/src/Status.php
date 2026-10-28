@@ -48,15 +48,46 @@ final class Status
 
     /** Reasons recorded in `verdict` when no verdict came (besides `nieocenione`). */
     public const REASON_TIMEOUT = 'timeout';
+
+    /**
+     * Recorded in `verdict` when the gateway refused the post (a limit, an overload) until
+     * after its receive timeout (shared rule D9.3a): the failure mode at once.
+     */
+    public const REASON_GATEWAY_LIMIT = 'gateway_limit';
     public const REASON_CONFIG_ERROR = 'config_error';
+
+    /**
+     * Recorded in `verdict` when the plugin is switched on but its settings cannot submit
+     * anything (no key or secret, an unusable gateway address, an unknown profile).
+     */
+    public const REASON_NOT_CONFIGURED = 'not_configured';
     public const REASON_NO_TEXT = 'no_text';
+
+    /**
+     * Recorded in `verdict` when the post's text could not be read (a PCRE failure in
+     * {@see Text}): not an empty text, so nothing was sent and the failure mode decides.
+     */
+    public const REASON_TEXT_ERROR = 'text_error';
 
     /** Recorded in `verdict` when the post was edited before its verdict came. */
     public const REASON_EDITED = 'edited';
+
+    /**
+     * Recorded in `verdict` when a verdict came for a post whose text is not the one that
+     * was sent (changed past the edit hook, or no digest was kept): a human decides.
+     */
+    public const REASON_TEXT_CHANGED = 'text_changed';
 
     /**
      * Recorded in `verdict` when a publishing verdict came for a post longer than what was
      * sent: it judged the beginning only, so the failure mode decides.
      */
     public const REASON_TRUNCATED = 'truncated';
+
+    /**
+     * Recorded in `verdict` when applying a verdict or the failure mode threw
+     * {@see Applier::MAX_FAILURES} times for the post: nothing more is done to it, and a
+     * human decides.
+     */
+    public const REASON_APPLY_ERROR = 'apply_error';
 }

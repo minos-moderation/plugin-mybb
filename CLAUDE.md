@@ -6,7 +6,7 @@ the gateway delivers to a signed webhook. Part of Minos; its backlog item is
 
 ## The boundary
 - The plugin talks only to the gateway, over HTTPS, with the forum's key. The key and the
-  webhook secret never reach a log, a page or a public file.
+  webhook secret never reach a log, a page (beyond a prefix) or a public file.
 - The gateway decides and the plugin applies. It never guesses a verdict: `nieocenione`
   goes to the administrator's fail-open or fail-closed setting.
 - The contract is `docs/contract.md` in `minos-moderation/client-php`; its receiving

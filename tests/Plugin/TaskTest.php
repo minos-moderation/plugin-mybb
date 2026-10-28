@@ -4,7 +4,12 @@ declare(strict_types=1);
 
 namespace Minos\MyBB\Tests\Plugin;
 
+use ArrayObject;
+use Minos\MyBB\Gateway;
+use Minos\MyBB\Platform;
+use Minos\MyBB\Plugin;
 use Minos\MyBB\Status;
+use Minos\MyBB\Tests\Support\FakeCache;
 use Minos\MyBB\Tests\Support\PluginTestCase;
 use Minos\MyBB\Tests\Support\RecordingTransport;
 
@@ -100,21 +105,152 @@ final class TaskTest extends PluginTestCase
         self::assertSame(TIME_NOW, (int)$this->forum->row($first)['retry_at'], 'the other item goes again next run');
     }
 
-    public function testNothingIsResentWhileThePluginIsOffButTimeoutsStillApply(): void
+    /**
+     * @dataProvider failureModes
+     */
+    public function testASwitchedOffPluginSweepsNothing(string $mode): void
     {
+        // Under fail-open a sweep would publish the held posts: switching off must release nothing.
+        $this->forum->set(['minos_failure_mode' => $mode]);
         $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(503, 'kolejka_niedostepna')]));
         $due = $this->heldReply();
-        $late = $this->heldReply();
-        $this->forum->platform()->updatePending($due, ['retry_at' => TIME_NOW - 1]);
-        $this->forum->platform()->updatePending($late, ['submitted_at' => TIME_NOW - 21 * 60]);
+        $neverAccepted = $this->heldReply();
+        $this->forum->plugin(new RecordingTransport());
+        $accepted = $this->heldReply();
+        $claimed = $this->heldReply();
+        $platform = $this->forum->platform();
+        $platform->updatePending($due, ['retry_at' => TIME_NOW - 1]);
+        $platform->updatePending($neverAccepted, ['submitted_at' => TIME_NOW - 21 * 60]);
+        $this->age($accepted, 21 * 60);
+        self::assertTrue($platform->claimPending($claimed, TIME_NOW - 6 * 60));
         $this->forum->set(['minos_enabled' => '0']);
+        $this->forum->plugin(new RecordingTransport());
+        $logged = $this->logEntries();
+
+        task_minos(['tid' => 1]);
+
+        self::assertSame([], $this->forum->transport->requests, 'nothing is sent');
+        self::assertSame([], self::moderation(), 'no post is touched');
+        foreach ([$due => Status::RETRY, $neverAccepted => Status::RETRY, $accepted => Status::PENDING, $claimed => Status::APPLYING] as $pid => $status) {
+            self::assertSame([0, $status], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']], "post {$pid}");
+        }
+        self::assertSame($logged, $this->logEntries(), 'no timeout, no error');
+    }
+
+    /** @return array<string,array{0:string}> */
+    public function failureModes(): array
+    {
+        return ['fail-closed' => ['fail-closed'], 'fail-open' => ['fail-open']];
+    }
+
+    public function testASwitchedOffPluginStillForgetsOldData(): void
+    {
+        $platform = $this->forum->platform();
+        $platform->log('retry', 'kolejka_pelna', 0, TIME_NOW - 31 * 86400);
+        $this->forum->set(['minos_enabled' => '0']);
+
+        task_minos(['tid' => 1]);
+
+        self::assertSame([], $this->logEntries());
+    }
+
+    /**
+     * Switching the plugin on again sends what was waiting when it was switched off, with a
+     * fresh timeout — instead of the failure mode for the whole backlog at once (under
+     * fail-open: publishing every one of them unassessed).
+     */
+    public function testSwitchingBackOnSendsAgainWhatWasWaitingWithAFreshTimeout(): void
+    {
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(503, 'kolejka_niedostepna'), RecordingTransport::accepted()]));
+        $retry = $this->heldReply('Czekał na ponowną wysyłkę.');
+        $pending = $this->heldReply('Czekał na werdykt.');
+        self::assertSame([Status::RETRY, Status::PENDING], [$this->forum->row($retry)['status'], $this->forum->row($pending)['status']]);
+        $this->forum->set(['minos_enabled' => '0']);
+        task_minos(['tid' => 1]);
+        // Three hours pass while it is off.
+        $this->age($pending, 3 * 3600);
+        $this->forum->platform()->updatePending($retry, ['submitted_at' => TIME_NOW - 3 * 3600, 'retry_at' => TIME_NOW - 3 * 3600]);
+        $this->forum->set(['minos_enabled' => '1']);
+        $this->forum->plugin(new RecordingTransport());
+
+        task_minos(['tid' => 1]);
+        task_minos(['tid' => 1]);
+
+        self::assertCount(1, $this->forum->transport->requests, 'sent again once, in one batch');
+        self::assertSame(['mybb:' . $retry, 'mybb:' . $pending], array_column($this->forum->transport->lastBody()['elementy'], 'id'));
+        foreach ([$retry, $pending] as $pid) {
+            $row = $this->forum->row($pid);
+            self::assertSame([0, Status::PENDING, TIME_NOW, TIME_NOW],
+                [(int)$this->forum->post($pid)['visible'], $row['status'], (int)$row['submitted_at'], (int)$row['accepted_at']],
+                'waiting again, with a fresh timeout');
+        }
+        self::assertContains('resumed', array_column($this->logEntries(), 'event'));
+        self::assertSame([], self::moderation(), 'nothing published unassessed');
+    }
+
+    public function testActivationAfterADeactivationSendsAgainWhatWasWaiting(): void
+    {
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $pid = $this->heldReply('Czekał podczas dezaktywacji.');
+        minos_deactivate();
+        $this->age($pid, 3 * 3600);
+        minos_activate();
         $this->forum->plugin(new RecordingTransport());
 
         task_minos(['tid' => 1]);
 
-        self::assertSame([], $this->forum->transport->requests);
-        self::assertSame(Status::RETRY, $this->forum->row($due)['status']);
-        self::assertSame(Status::HELD, $this->forum->row($late)['status'], 'never accepted, and waited too long');
+        self::assertSame(['mybb:' . $pid], array_column($this->forum->transport->lastBody()['elementy'] ?? [], 'id'));
+        self::assertSame([0, Status::PENDING], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
+    }
+
+    /**
+     * A deactivation and a refused submission in two requests that both began before
+     * either wrote: neither write may drop the other's state (here: the "switched off" mark,
+     * without which the backlog is never sent again).
+     */
+    public function testARefusalDuringADeactivationKeepsTheSwitchedOffMark(): void
+    {
+        $waiting = $this->heldReply('Czekał podczas dezaktywacji.');
+        $datacache = self::datacache();
+        $deactivating = $this->request($datacache);
+        $posting = $this->request($datacache, new RecordingTransport([RecordingTransport::refused(429, 'limit_dobowy_klucza', 36000)]));
+
+        $deactivating->installer->deactivate(TIME_NOW);
+        $this->heldReply('Wysłany w tej samej chwili.');
+        self::assertSame($posting, Plugin::instance(), 'the post went through the second request');
+
+        $sent = new RecordingTransport();
+        $later = $this->request($datacache, $sent);
+        self::assertStringContainsString(date('Y-m-d H:i', TIME_NOW + 36000), (string)$later->admin->notice(TIME_NOW),
+            'the refusal survived the deactivation too');
+        $later->installer->activate();
+        $later->task->run(TIME_NOW);
+        self::assertSame(['mybb:' . $waiting], array_column($sent->lastBody()['elementy'] ?? [], 'id'), 'the backlog is sent again');
+    }
+
+    /**
+     * The task's run that sends the backlog again and clears the mark, beside a refused
+     * submission that began before it: the mark must not come back (the backlog would be
+     * sent twice).
+     */
+    public function testARefusalDuringTheResendDoesNotReviveTheSwitchedOffMark(): void
+    {
+        $waiting = $this->heldReply('Czekał podczas wyłączenia.');
+        $datacache = self::datacache();
+        $this->request($datacache)->installer->deactivate(TIME_NOW);
+        $sent = new RecordingTransport();
+        $resending = $this->request($datacache, $sent);
+        $this->request($datacache, new RecordingTransport([RecordingTransport::refused(429, 'kolejka_pelna', 60)]));
+
+        $resending->task->run(TIME_NOW);
+        $this->heldReply('Wysłany w tej samej chwili.');
+        $this->request($datacache, $sent)->task->run(TIME_NOW);
+
+        $sends = array_filter($sent->requests, static function (array $request) use ($waiting): bool {
+            return in_array('mybb:' . $waiting, array_column(json_decode($request['body'], true)['elementy'], 'id'), true);
+        });
+        self::assertCount(1, $sends, 'sent again once, not twice');
     }
 
     public function testAResendOfAPostAHumanDecidedIsDropped(): void
@@ -131,19 +267,28 @@ final class TaskTest extends PluginTestCase
         self::assertSame(Status::SUPERSEDED, $this->forum->row($pid)['status']);
     }
 
-    public function testOldLogEntriesAndDecisionsAreForgotten(): void
+    public function testOldLogEntriesAndDecisionsAreForgottenAfterThirtyDays(): void
     {
         $platform = $this->forum->platform();
         $platform->log('retry', 'kolejka_pelna', 0, TIME_NOW - 31 * 86400);
         $platform->log('retry', 'kolejka_pelna', 0, TIME_NOW - 86400);
-        $old = $this->heldReply();
-        $this->forum->deliver(self::payload($old));
-        $platform->updatePending($old, ['decided_at' => TIME_NOW - 91 * 86400]);
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $old = $this->heldReply('abc zły');
+        $this->forum->deliver(self::payload($old, ['kwalifikacja' => 'ocenzurowane', 'ocenzurowany' => 'abc ███']));
+        self::assertSame('abc zły', $this->forum->row($old)['original_text'], 'an original the row keeps');
+        $recent = $this->heldReply();
+        $this->forum->deliver(self::payload($recent));
+        $waiting = $this->heldReply();
+        $platform->updatePending($old, ['decided_at' => TIME_NOW - 31 * 86400]);
+        $platform->updatePending($recent, ['decided_at' => TIME_NOW - 29 * 86400]);
+        $platform->updatePending($waiting, ['submitted_at' => TIME_NOW - 60, 'accepted_at' => TIME_NOW - 60]);
 
         task_minos(['tid' => 1]);
 
         self::assertCount(1, $this->logEntries());
-        self::assertNull($this->forum->row($old));
+        self::assertNull($this->forum->row($old), 'a decision older than 30 days is forgotten, its original with it');
+        self::assertNotNull($this->forum->row($recent));
+        self::assertNotNull($this->forum->row($waiting), 'an undecided row is never forgotten');
     }
 
     public function testATimeoutBelowTwentyMinutesIsRaisedToTwenty(): void
@@ -175,6 +320,28 @@ final class TaskTest extends PluginTestCase
         self::assertSame(Status::APPLYING, $this->forum->row($fresh)['status']);
         self::assertSame(200, $this->forum->deliver(self::payload($stale)));
         self::assertSame(Status::PUBLISHED, $this->forum->row($stale)['status'], 'a released row takes its verdict again');
+    }
+
+    /**
+     * MyBB's `datacache` table, shared by the requests of {@see request}.
+     *
+     * @return ArrayObject<string,mixed>
+     */
+    private static function datacache(): ArrayObject
+    {
+        return new ArrayObject(['plugins' => ['active' => ['minos' => 'minos']]]);
+    }
+
+    /**
+     * One more request to this forum: the plugin over its own copy of the datacache, loaded
+     * now (as MyBB loads it when a request begins), made the request's instance.
+     *
+     * @param ArrayObject<string,mixed> $datacache
+     */
+    private function request(ArrayObject $datacache, ?RecordingTransport $transport = null): Plugin
+    {
+        $platform = new Platform($this->forum->mybb, $this->forum->db, new FakeCache($datacache), $this->forum->lang, MYBB_ROOT, TABLE_PREFIX);
+        return Plugin::build($platform, new Gateway($transport ?? new RecordingTransport()));
     }
 
     private function age(int $pid, int $seconds): void

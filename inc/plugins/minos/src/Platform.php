@@ -29,6 +29,40 @@ final class Platform
     /** The settings group's name. */
     public const SETTING_GROUP = 'minos';
 
+    /**
+     * The prefix of the plugin's entries in MyBB's datacache (`$cache`): one entry per value
+     * of state (`minos_switched_off`, `minos_refusal`), so requests that change different
+     * values never overwrite each other's.
+     */
+    public const STATE_PREFIX = 'minos_';
+
+    /**
+     * The pending table's columns, name → type ({@see columnSql}). A column added in a later
+     * version goes at the end: activation adds it to a table that lacks it.
+     */
+    private const PENDING_COLUMNS = [
+        'pid' => 'int', 'tid' => 'int', 'is_thread' => 'flag', 'status' => 'varchar(20)',
+        'submitted_at' => 'int', 'accepted_at' => 'int', 'retry_at' => 'int',
+        'attempts' => 'small', 'truncated' => 'flag', 'prefix_len' => 'small',
+        'text_len' => 'small', 'verdict' => 'varchar(20)', 'categories' => 'varchar(255)',
+        'support' => 'flag', 'error_code' => 'varchar(40)', 'decided_at' => 'int',
+        'auto_published' => 'flag', 'claimed_at' => 'int', 'claimed_from' => 'varchar(20)',
+        'original_text' => 'text',
+        // The SHA-256 of the text sent (never the text itself) and the masked text of a post
+        // the plugin kept in the queue.
+        'sent_sha256' => 'varchar(64)', 'masked_text' => 'text',
+        // Steps that threw for the row ({@see Applier::failedStep}).
+        'apply_errors' => 'small',
+        // `author_first_post` as first sent, for a resubmission: '1', '0', or '' (a guest).
+        'first_post' => 'varchar(1)',
+    ];
+
+    /** The log table's columns. */
+    private const LOG_COLUMNS = [
+        'lid' => 'serial', 'dateline' => 'int', 'event' => 'varchar(20)',
+        'code' => 'varchar(40)', 'pid' => 'int',
+    ];
+
     /** @var object MyBB's `$mybb`. */
     private $mybb;
 
@@ -114,6 +148,49 @@ final class Platform
     {
         $plugins = $this->cache->read('plugins');
         return is_array($plugins) && isset($plugins['active'][self::CODENAME]);
+    }
+
+    /**
+     * One value of the plugin's state kept between requests, read afresh from MyBB's
+     * datacache (`read($name, true)`: not the copy loaded when this request began, which
+     * another request may have changed since).
+     *
+     * @param string $key The value's name.
+     * @return mixed The value; null when none is kept.
+     */
+    public function state(string $key)
+    {
+        $value = $this->cache->read(self::STATE_PREFIX . $key, true);
+        return $value === false ? null : $value;
+    }
+
+    /**
+     * Keeps one value of the plugin's state, or forgets it. Each value is its own datacache
+     * entry, written whole: a request that keeps one value never writes back a stale copy
+     * of another.
+     *
+     * @param string $key   The value's name.
+     * @param mixed  $value The value (not false); null forgets it.
+     */
+    public function setState(string $key, $value): void
+    {
+        if ($value === null) {
+            $this->cache->delete(self::STATE_PREFIX . $key);
+            return;
+        }
+        $this->cache->update(self::STATE_PREFIX . $key, $value);
+    }
+
+    /**
+     * Removes the plugin's datacache entries (uninstall).
+     *
+     * @param array<int,string> $keys The values' names.
+     */
+    public function removeState(array $keys): void
+    {
+        foreach ($keys as $key) {
+            $this->cache->delete(self::STATE_PREFIX . $key);
+        }
     }
 
     /**
@@ -371,7 +448,8 @@ final class Platform
             'accepted_at' => 0, 'retry_at' => 0, 'attempts' => 0, 'truncated' => 0,
             'prefix_len' => 0, 'text_len' => 0, 'verdict' => '', 'categories' => '',
             'support' => 0, 'error_code' => '', 'decided_at' => 0, 'auto_published' => 0,
-            'claimed_at' => 0, 'claimed_from' => '', 'original_text' => '',
+            'claimed_at' => 0, 'claimed_from' => '', 'original_text' => '', 'sent_sha256' => '',
+            'masked_text' => '', 'apply_errors' => 0, 'first_post' => '',
         ]));
     }
 
@@ -428,6 +506,22 @@ final class Platform
     }
 
     /**
+     * Counts a step that threw for a row, and gives back its claim: a claimed row returns to
+     * the status it was claimed from, an unclaimed one keeps its status.
+     *
+     * @param int $pid The post.
+     * @return int The row's failed steps so far; 0 when there is no row.
+     */
+    public function countFailure(int $pid): int
+    {
+        $this->db->write_query('UPDATE ' . $this->prefix . self::PENDING_TABLE
+            . " SET apply_errors=apply_errors+1, claimed_at='0', status=CASE WHEN status='" . Status::APPLYING
+            . "' AND claimed_from<>'' THEN claimed_from ELSE status END WHERE pid='" . $pid . "'");
+        $row = $this->pending($pid);
+        return $row === null ? 0 : (int)$row['apply_errors'];
+    }
+
+    /**
      * Changes a row.
      *
      * @param int                      $pid    The post.
@@ -443,6 +537,22 @@ final class Platform
             $where .= " AND status='" . $this->db->escape_string($onlyIf) . "'";
         }
         $this->db->update_query(self::PENDING_TABLE, $this->escaped($fields), $where);
+    }
+
+    /**
+     * Makes every row still waiting for a verdict wait afresh: it is sent again at once and
+     * gets a new receive timeout (the plugin was switched off while it waited, and its
+     * verdict may have been refused and dropped meanwhile).
+     *
+     * @param int $now Unix seconds.
+     * @return int How many rows.
+     */
+    public function rearmWaiting(int $now): int
+    {
+        $this->db->update_query(self::PENDING_TABLE, [
+            'status' => Status::RETRY, 'submitted_at' => $now, 'accepted_at' => 0, 'retry_at' => $now,
+        ], "status IN ('" . implode("','", Status::OPEN) . "')");
+        return (int)$this->db->affected_rows();
     }
 
     /**
@@ -474,7 +584,8 @@ final class Platform
     }
 
     /**
-     * The newest rows a moderator should look at: held, flagged for support, or waiting.
+     * The newest rows a moderator should look at: held, flagged for support, waiting, or left
+     * to a human after a step kept failing.
      *
      * @param int $limit At most this many.
      * @return array<int,array<string,mixed>> Rows, newest first.
@@ -482,7 +593,7 @@ final class Platform
     public function attentionRows(int $limit): array
     {
         return $this->rows(self::PENDING_TABLE,
-            "support='1' OR auto_published='1' OR status IN ('"
+            "support='1' OR auto_published='1' OR verdict='" . Status::REASON_APPLY_ERROR . "' OR status IN ('"
                 . implode("','", [Status::HELD, Status::PENDING, Status::RETRY, Status::APPLYING]) . "')",
             ['order_by' => 'submitted_at', 'order_dir' => 'DESC', 'limit' => $limit]);
     }
@@ -564,31 +675,26 @@ final class Platform
     }
 
     /**
-     * Creates the plugin's tables (MySQL/MariaDB, PostgreSQL or SQLite, as MyBB runs on).
+     * Creates the plugin's tables (MySQL/MariaDB, PostgreSQL or SQLite, as MyBB runs on),
+     * and brings a table kept from an earlier version (an uninstall that kept the data, an
+     * upgrade: deactivate, replace the files, activate) up to date: every column it lacks is
+     * added with `ALTER TABLE … ADD`, its rows kept.
      */
     public function createTables(): void
     {
         $engine = (string)($this->db->type ?? 'mysqli');
-        $tables = [
-            self::PENDING_TABLE => [
-                'pid' => 'int', 'tid' => 'int', 'is_thread' => 'flag', 'status' => 'varchar(20)',
-                'submitted_at' => 'int', 'accepted_at' => 'int', 'retry_at' => 'int',
-                'attempts' => 'small', 'truncated' => 'flag', 'prefix_len' => 'small',
-                'text_len' => 'small', 'verdict' => 'varchar(20)', 'categories' => 'varchar(255)',
-                'support' => 'flag', 'error_code' => 'varchar(40)', 'decided_at' => 'int',
-                'auto_published' => 'flag', 'claimed_at' => 'int', 'claimed_from' => 'varchar(20)',
-                'original_text' => 'text',
-            ],
-            self::LOG_TABLE => [
-                'lid' => 'serial', 'dateline' => 'int', 'event' => 'varchar(20)',
-                'code' => 'varchar(40)', 'pid' => 'int',
-            ],
-        ];
+        $tables = [self::PENDING_TABLE => self::PENDING_COLUMNS, self::LOG_TABLE => self::LOG_COLUMNS];
         $keys = [self::PENDING_TABLE => 'pid', self::LOG_TABLE => 'lid'];
         foreach ($tables as $table => $columns) {
             if (!$this->db->table_exists($table)) {
                 $this->db->write_query(self::createTable($engine, $this->prefix . $table, $columns, $keys[$table],
                     (string)$this->db->build_create_table_collation()));
+                continue;
+            }
+            foreach ($columns as $name => $type) {
+                if ($type !== 'serial' && !$this->db->field_exists($name, $table)) {
+                    $this->db->add_column($table, $name, self::columnSql($engine, $type));
+                }
             }
         }
         $index = $this->prefix . self::PENDING_TABLE . '_status';
@@ -923,19 +1029,7 @@ final class Platform
                 $lines[] = $name . ($pg ? ' serial' : ($sqlite ? ' INTEGER PRIMARY KEY' : ' int unsigned NOT NULL auto_increment'));
                 continue;
             }
-            if ($type === 'text') {
-                $lines[] = $name . ' text' . ($pg || $sqlite ? " NOT NULL default ''" : ' NOT NULL');
-                continue;
-            }
-            if (strncmp($type, 'varchar', 7) === 0) {
-                $lines[] = $name . ' ' . $type . " NOT NULL default ''";
-                continue;
-            }
-            $sql = ['int' => 'int unsigned', 'small' => 'smallint unsigned', 'flag' => 'tinyint(1)'][$type];
-            if ($pg || $sqlite) {
-                $sql = ['int' => 'int', 'small' => 'smallint', 'flag' => 'smallint'][$type];
-            }
-            $lines[] = $name . ' ' . $sql . " NOT NULL default '0'";
+            $lines[] = $name . ' ' . self::columnSql($engine, $type);
         }
         if (!$sqlite || $columns[$key] !== 'serial') {
             $lines[] = 'PRIMARY KEY (' . $key . ')';
@@ -946,5 +1040,29 @@ final class Platform
         // No ENGINE clause: the server's default (InnoDB on current MySQL and MariaDB).
         return 'CREATE TABLE ' . $table . " (\n  " . implode(",\n  ", $lines) . "\n)"
             . ($pg || $sqlite ? '' : $collation);
+    }
+
+    /**
+     * One column's definition for one engine, for `CREATE TABLE` and for `ALTER TABLE … ADD`
+     * (every one is NOT NULL with a default, so rows that exist when it is added get it).
+     *
+     * @param string $type `int`, `small`, `flag`, `text` or `varchar(n)`.
+     */
+    private static function columnSql(string $engine, string $type): string
+    {
+        $pg = in_array($engine, ['pgsql', 'pgsql_pdo'], true);
+        $sqlite = $engine === 'sqlite';
+        if ($type === 'text') {
+            // MySQL gives TEXT no default; it fills existing rows with ''.
+            return 'text' . ($pg || $sqlite ? " NOT NULL default ''" : ' NOT NULL');
+        }
+        if (strncmp($type, 'varchar', 7) === 0) {
+            return $type . " NOT NULL default ''";
+        }
+        $sql = ['int' => 'int unsigned', 'small' => 'smallint unsigned', 'flag' => 'tinyint(1)'][$type];
+        if ($pg || $sqlite) {
+            $sql = ['int' => 'int', 'small' => 'smallint', 'flag' => 'smallint'][$type];
+        }
+        return $sql . " NOT NULL default '0'";
     }
 }

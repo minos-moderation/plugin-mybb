@@ -116,6 +116,104 @@ final class TextTest extends TestCase
         self::assertSame('Tytuł', Text::forPost('[attachment=7]', 'Tytuł')['tekst']);
     }
 
+    /**
+     * A post crafted to exhaust PCRE (the audit's probe: unclosed `[url=` tags) is a text
+     * the plugin could not read — never an empty text, never the subject alone.
+     *
+     * @dataProvider pcreBombs
+     */
+    public function testAPcreFailureIsAnErrorNotAnEmptyText(int $repeats, string $jit): void
+    {
+        if ($jit === '1') {
+            $reply = Text::forPost(self::bomb($repeats));
+            $thread = Text::forPost(self::bomb($repeats), 'Niewinny tytuł');
+        } else {
+            // JIT off from the start, in a process of its own (see underPcreLimits).
+            $reply = self::underPcreLimits(self::bomb($repeats))['default']['forPost'];
+            $thread = self::underPcreLimits(self::bomb($repeats), 'Niewinny tytuł')['default']['forPost'];
+        }
+        self::assertTrue($reply['error']);
+        self::assertSame('', $reply['tekst']);
+        self::assertTrue($thread['error']);
+        self::assertSame('', $thread['tekst'], 'the subject alone is never what was read');
+    }
+
+    /** @return array<string,array{0:int,1:string}> */
+    public function pcreBombs(): array
+    {
+        return [
+            '340, JIT on'   => [340, '1'],
+            '340, JIT off'  => [340, '0'],
+            '1000, JIT on'  => [1000, '1'],
+            '1000, JIT off' => [1000, '0'],
+        ];
+    }
+
+    /**
+     * Whatever PCRE's backtrack limit (with JIT off: JIT ignores it), reading a post either
+     * fails with an error or gives the true answer — never a wrong one, such as "no links"
+     * or an empty text. Low limits make different calls fail first, so every limit from 1
+     * up is tried; which ones fail depends on the PCRE version, the property does not.
+     */
+    public function testAPcreFailureIsNeverAWrongAnswer(): void
+    {
+        $message = 'Zobacz https://example.com/a i [b]www.example.org[/b]';
+        $truth = [
+            'links'       => Text::links($message),
+            'linkDomains' => Text::linkDomains($message),
+            'forPost'     => Text::forPost($message),
+        ];
+        self::assertSame([2, ['example.com', 'example.org'], 'Zobacz https://example.com/a i www.example.org'],
+            [$truth['links'], $truth['linkDomains'], $truth['forPost']['tekst']], 'the guard: without a limit all are read');
+        $errors = [];
+        $answers = [];
+        foreach (self::underPcreLimits($message, '', range(1, 200)) as $limit => $results) {
+            foreach ($results as $method => $answer) {
+                if ($method === 'forPost') {
+                    self::assertIsArray($answer, "forPost never throws (limit {$limit})");
+                    $failed = $answer['error'];
+                    if ($failed) {
+                        self::assertSame('', $answer['tekst'], "forPost at limit {$limit}");
+                    }
+                } else {
+                    $failed = $answer === 'error';
+                }
+                if ($failed) {
+                    $errors[$method] = true;
+                    continue;
+                }
+                self::assertSame($truth[$method], $answer, "{$method} at limit {$limit}");
+                $answers[$method] = true;
+            }
+        }
+        self::assertSame(['links', 'linkDomains', 'forPost'], array_keys($errors), 'each failed at some limit');
+        self::assertSame(['links', 'linkDomains', 'forPost'], array_keys($answers), 'and answered at a higher one');
+    }
+
+    public function testTheSamePatternOnAShortPostIsReadAsUsual(): void
+    {
+        // The guard: the probe at an ordinary size is read (its unclosed tags stay as
+        // readers see them), and the pattern it abuses still renders a closed tag.
+        $sent = Text::forPost(self::bomb(10));
+        self::assertFalse($sent['error']);
+        self::assertSame(self::bomb(10), $sent['tekst']);
+        $closed = Text::forPost('Widoczne SLOWO [url=http://a.pl]x[/url]');
+        self::assertSame([false, 'Widoczne SLOWO x (http://a.pl)'], [$closed['error'], $closed['tekst']]);
+    }
+
+    public function testAMaskFitsOnlyWhereItReplacesCharactersOneForOne(): void
+    {
+        self::assertTrue(Text::maskFits('abc zły', 'abc ███'));
+        self::assertTrue(Text::maskFits('abc zły', 'abc zły'), 'nothing masked');
+        self::assertTrue(Text::maskFits('żółw', '████'));
+        self::assertFalse(Text::maskFits('abc zły', 'xyz ███'), 'the same length, other letters');
+        self::assertFalse(Text::maskFits('Ala ma kota.', 'Kup: zly.pl█'), 'the audit\'s probe M1');
+        self::assertFalse(Text::maskFits('abc zły', 'abc ██'), 'one mask character per character');
+        self::assertFalse(Text::maskFits('abc zły', 'abc ████'));
+        self::assertFalse(Text::maskFits("abc z\xC3", 'abc ██'), 'a text that cannot be read fits nothing');
+        self::assertFalse(Text::maskFits("z\xC3", "z\xC3"), 'not even itself');
+    }
+
     public function testBrokenUtf8BecomesValidText(): void
     {
         $sent = Text::forPost("zła sekwencja \xC3\x28 tutaj");
@@ -136,5 +234,39 @@ final class TextTest extends TestCase
             $many .= " https://site{$i}.example{$i}.org/";
         }
         self::assertCount(Text::MAX_DOMAINS, Text::linkDomains($many));
+    }
+
+    /**
+     * What `Text` gives for a post under PCRE backtrack limits, read in a PHP process started
+     * with JIT off (`fixtures/text-under-pcre-limits.php`).
+     *
+     * @param array<int,int>|null $limits The limits to try; null for the configured one.
+     * @return array<int|string,array<string,mixed>> By limit (`default` for null), by call:
+     *     the answer or `"error"`.
+     */
+    private static function underPcreLimits(string $message, string $subject = '', ?array $limits = null): array
+    {
+        $process = proc_open([PHP_BINARY, '-d', 'pcre.jit=0', __DIR__ . '/fixtures/text-under-pcre-limits.php'],
+            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        self::assertIsResource($process);
+        fwrite($pipes[0], (string)json_encode(['message' => $message, 'subject' => $subject, 'limits' => $limits]));
+        fclose($pipes[0]);
+        $output = (string)stream_get_contents($pipes[1]);
+        $errors = (string)stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        self::assertSame(0, proc_close($process), $errors);
+        $results = json_decode($output, true);
+        self::assertIsArray($results, $output . $errors);
+        self::assertCount($limits === null ? 1 : count($limits), $results);
+        return $results;
+    }
+
+    /**
+     * The audit's PCRE probe: visible words, then unclosed `[url=` tags.
+     */
+    private static function bomb(int $repeats): string
+    {
+        return 'Widoczne SLOWO ' . str_repeat('[url=http://a.pl]x', $repeats);
     }
 }

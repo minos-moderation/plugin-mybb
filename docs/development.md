@@ -28,13 +28,14 @@ The classes:
 | `Platform` | The ONE adapter to MyBB: globals, functions, `Moderation`, tables, the ACP page object. |
 | `Settings` | Reads and checks the settings; everything that decides publish or hold is read fail-closed. |
 | `Text` | Post → `tekst`: what readers see (MyBB's rendering rules, per forum), the first 3000 characters; the link signals. |
-| `Gateway` | `POST /api/v1/b2b/oceny` over cURL; reads answers into accepted / retry / config error. |
+| `TextError` | A PCRE failure inside `Text`: the text could not be read (`error: true`, never `''`). |
+| `Gateway` | `POST /api/v1/b2b/oceny` over cURL; reads answers into accepted (`202` only) / retry (429, 408, 5xx, no answer) / config error. |
 | `Submitter` | The hold (validate hooks), the submission (insert-end hooks), resubmission, edits. |
 | `Receiver` | The webhook's checklist: method, signature, payload, id, claim, apply. |
 | `Applier` | A verdict or the failure mode → approve, hold, soft-delete, or publish the masked text. |
 | `Task` | Timeouts, due retries, pruning. |
 | `Installer` | Settings group, tables, task; the lifecycle functions. |
-| `Admin` | Masked secrets on the settings page, the ACP notice, the Tools → Logs page. |
+| `Admin` | Masked secrets on the settings page, the ACP notice (problems, a configuration error, a daily limit or overload until a given time), the Tools → Logs page. |
 | `Plugin` | Builds the objects once per request. |
 
 ## How the plugin holds a post
@@ -81,6 +82,11 @@ The text readers SEE, following MyBB's own text renderer
   MyBB would not parse stays literally.
 - A new thread's subject goes in front (always escaped, never parsed). Only the first 3000
   characters are sent.
+- Every regular expression runs through one checked helper in `Text`: a PCRE failure (a
+  post crafted to exhaust the backtrack limit, e.g. a few hundred unclosed `[url=` tags)
+  throws `TextError`, and `Text::forPost` returns `error: true` — never `''`. The post then
+  gets the failure mode as `text_error` with nothing sent, not even a new thread's subject
+  alone (`no_text` is only for a post readers see no text in).
 - `meta`: `links` (distinct links), `link_domains` (up to 10 registrable domains — the last
   two host labels, or three under a two-label public suffix from a short list; an
   approximation of the Public Suffix List), `author_first_post` for registered authors.
@@ -92,8 +98,9 @@ The text readers SEE, following MyBB's own text renderer
 ```
 insert ─► retry ──202──► pending ──webhook──► applying ─► published | censored | held | deleted
             │ ▲                                              superseded | gone
-            │ └─ 429/503/no answer: retry_at = ponow_za_s, or 60 s doubling to 1 h
-            └─ other 4xx: failure mode (config_error); ACP notice
+            │ └─ 429/408/5xx/no answer: retry_at = ponow_za_s, or 60 s doubling to 1 h
+            ├─ ponow_za_s ending after submitted_at + timeout: failure mode now (gateway_limit)
+            └─ other 4xx, a 2xx but 202: failure mode (config_error, http_<n>); ACP notice
 pending/retry older than the timeout (≥ 20 min) ─► failure mode (timeout)
 fail-open ─► published + auto_published ──late webhook──► applying ─► held | censored | published
 an edit while retry/pending ─► superseded (the post stays in MyBB's queue)
@@ -101,6 +108,17 @@ an edit of an auto-published post ─► auto_published = 0 (a late verdict no l
 applying for more than 5 min ─► back to claimed_from (the task)
 ```
 
+- Switched off ("Włączona = nie") or deactivated, the plugin does nothing: the webhook
+  answers `404` before the signature, the task gives back no claim, applies no failure
+  mode and sends nothing (it only forgets old data), and no new post is held. What was
+  held stays in MyBB's queue. No usable secret: `401`.
+- Switched off, the task notes it in the datacache entry `minos_switched_off`, and so
+  does a deactivation. The first run after the plugin is on again moves every
+  `pending`/`retry` row back to `retry` with `submitted_at = retry_at = now` (a fresh
+  timeout; `Platform::rearmWaiting`) and sends it in the same run, under the same id.
+- Switched on but unable to submit (`Settings::problems()`: no key or secret, an unusable
+  gateway address, an unknown profile), a new post is still held, and gets the failure
+  mode at once as `not_configured`, unsent. A fresh install starts switched off.
 - A row starts as `retry` with `retry_at` a minute ahead, so a request that dies half-way
   is sent again by the task and never mistaken for an accepted one.
 - `Platform::claimPending` moves a row from `pending`/`retry` (or, for a late verdict, from
@@ -116,19 +134,44 @@ applying for more than 5 min ─► back to claimed_from (the task)
   decision final.
 - A publishing verdict (`bezpieczne`) for a post cut at 3000 characters goes to the failure
   mode (`truncated`): the verdict judged the beginning only.
+- Rule D9.3(a): a refusal whose `ponow_za_s` (as the gateway gave it) ends after the row's
+  `submitted_at` + timeout gets the failure mode at once (`gateway_limit`). A
+  `limit_dobowy_klucza`, `limit_globalny_b2b` or `kolejka_pelna` refusal is kept in the
+  datacache entry `minos_refusal` (code, until) for the ACP notice "the gateway does not accept
+  until …"; the next `202` clears it, and it is not shown past its end.
+- `author_first_post` is read in the author's request and kept in `first_post` ('1', '0',
+  '' for a guest), so a resubmission from the task sends it as first sent.
 - The submission records the gateway's answer only while the row is still `retry`, so a
   verdict that arrived before the `202` is not overwritten.
 - Before applying, the post is read again: gone → `gone`; no longer unapproved (a moderator
   acted) → `superseded`.
+- One row that throws never stops the others: `try/catch (\Throwable $e)` around one row
+  of the task's timeout loop, one row's item in a resubmission, each batch's send, and the
+  webhook's `verdict()`/`late()`. `Applier::failedStep` logs `error` with the step as its
+  code and the post id (never `getMessage()`), counts it in `apply_errors` and gives the
+  claim back (`Platform::countFailure`); the webhook answers `500` so the gateway delivers
+  again. After 3 failed steps the row is `held` with `apply_error` (a fail-open post stays
+  published, its late window closed) and nothing more is done to the post. A failed
+  batch is only logged; its rows stay due. A redelivery after a half-applied verdict finds
+  the post changed and records `superseded`.
+- A verdict applies only to the text that was sent. The submission keeps the SHA-256 of
+  `tekst` in `sent_sha256` (never the text); before any verdict, on time or late, the post
+  is rendered again (`Text::forPost` with the forum's current options) and compared. No
+  match (a change past the edit hook, another rendering, a row without a digest) → on time
+  `held` with `text_changed`, late nothing (the late window closes).
 - The masked text replaces the message only when it stands for the whole post (see
-  `Applier`): not when the text sent was cut, not when its length differs from what was
-  sent (the contract masks one `█` per character), not when a mask falls in a new thread's
-  subject, and not when only the subject remains. The original goes into the row first,
-  and the new message is read back before the post is approved: a message that could not
-  be written keeps the post held.
+  `Applier`): not when the text sent was cut, not unless every character of the mask is
+  the one sent or `█` (`Text::maskFits`), not when a mask falls in a new thread's subject,
+  not when only the subject remains, and not unless the body sent IS the stored message
+  (CRLF aside): a post with MyCode, HTML or entities stays held. A held mask is kept in
+  `masked_text` and shown on the ACP page. The original goes into the row first, and the
+  new message is read back before the post is approved: a message that could not be
+  written keeps the post held.
 
 `PREFIX_minos_log` holds events with a code and a post id — never content, a key or a
-secret. Log entries are kept 30 days, decided rows 90 days.
+secret. Log entries are kept 30 days; decided rows — with the verdict, the original text
+of a censored post and the mask of a held one — 30 days after their decision (shared rule
+D9.11, `Task::DECIDED_RETENTION_S`).
 
 ## Tests
 
@@ -157,6 +200,17 @@ through the plugin's own autoloader) and the mock gateway from
 staged root too, installs the plugin and posts through its hooks with the real cURL
 transport, so both sides run the distributable; the mock's worker delivers, including a
 censored post published over HTTP. CI runs everything on PHP 7.4 and 8.3.
+
+## Continuous integration
+
+`.github/workflows/tests.yml` runs the syntax check and `vendor/bin/phpunit` on PHP 7.4 and
+8.3 and, on every pull request, the release build and its checks; `release.yml` runs on a
+`v*` tag. Every `uses:` in both is pinned to a full 40-character commit SHA with the
+version in a comment (`uses: actions/checkout@<sha>  # v5.0.0`), so a moved tag cannot
+change what runs. To refresh a pin, resolve the new tag to its commit —
+`git ls-remote https://github.com/<owner>/<action> 'refs/tags/<tag>*'`, taking the peeled
+`^{}` line of an annotated tag — check that the commit belongs to that release, and
+replace the SHA and the comment together, in both files.
 
 ## Against the mock gateway by hand
 
@@ -260,7 +314,8 @@ reading the code, not by running a live forum:
 | tasks: the `tasks` columns, `task_<file>($task)`, `fetch_next_run`, `add_task_log`, `$cache->update_tasks()`, a comma list of minutes | `inc/functions_task.php`, `admin/modules/tools/tasks.php`, `install/resources/mysql_db_tables.php` | `Platform`, `inc/tasks/minos.php` |
 | `$lang->load($section, true, true)` with the `english` fallback, `{1}` placeholders | `inc/class_language.php` | `Platform::lang` |
 | `$cache->read('plugins')['active']` | `admin/modules/config/plugins.php` | `Platform::isPluginActive` |
-| `$db` helpers: `simple_select`, `query`, `fetch_array`, `fetch_field`, `insert_query`, `update_query`, `delete_query`, `escape_string`, `affected_rows`, `table_exists`, `drop_table`, `write_query`, `build_create_table_collation`, `type` | `inc/db_mysqli.php`, `inc/db_pgsql.php`, `inc/db_sqlite.php`, `inc/AbstractPdoDbDriver.php`, `inc/init.php` | `Platform` |
+| `$cache->read($name, true)` (a hard read: from the database or the cache handler, not the copy loaded with the page), `update($name, $contents)` (`replace_query` on `datacache`, serialized, the whole entry), `delete($name)`. One entry per value of state, so two requests never write back each other's stale copy | `inc/class_datacache.php` | `Platform::state`, `setState`, `removeState` |
+| `$db` helpers: `simple_select`, `query`, `fetch_array`, `fetch_field`, `insert_query`, `update_query`, `delete_query`, `escape_string`, `affected_rows`, `table_exists`, `drop_table`, `write_query`, `build_create_table_collation`, `type`; `field_exists($field, $table)` and `add_column($table, $column, $definition)` (prefix added; `ALTER TABLE … ADD`) in every driver, the PDO ones included | `inc/db_mysqli.php`, `inc/db_pgsql.php`, `inc/db_sqlite.php`, `inc/AbstractPdoDbDriver.php`, `inc/db_mysql_pdo.php`, `inc/db_pgsql_pdo.php`, `inc/init.php` | `Platform` |
 | the minimal bootstrap `IN_MYBB`, `NO_ONLINE`, `THIS_SCRIPT`, `inc/init.php` (database, settings, cache, plugins; no session) | `inc/init.php`, `task.php` | `minos-webhook.php` |
 
 Not verified — to check on a live forum before a release:
@@ -268,9 +323,9 @@ Not verified — to check on a live forum before a release:
 - The MySQL and PostgreSQL `CREATE TABLE` statements (no `ENGINE` clause: the server's
   default) and `CREATE INDEX IF NOT EXISTS` (PostgreSQL 9.5+): only the SQLite ones run in
   the tests.
-- The pending table gained `auto_published`, `claimed_at` and `claimed_from` before any
-  release; a table created by the unreleased first draft (`0146a3a`) lacks them — drop it
-  (uninstall with "Tak") before reinstalling.
+- Activation adds every pending-table column a kept table lacks (`$db->field_exists`,
+  `$db->add_column`, rows kept): only SQLite's `ALTER TABLE … ADD` runs in the tests; the
+  MySQL (`text NOT NULL` without a default) and PostgreSQL forms are to check.
 - `affected_rows()` after the claim's conditional `UPDATE` on MySQL (it counts changed
   rows; the claim always changes `status`, so it should read 1).
 - Other plugins hooked on `class_moderation_*`: in the webhook and the task there is no

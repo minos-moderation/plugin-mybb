@@ -77,6 +77,28 @@ final class AdminTest extends PluginTestCase
         self::assertSame([], $this->forum->page->extra_messages, 'a plugin switched off is no problem');
     }
 
+    public function testEveryAcpPageAndTheLogPageSayUntilWhenTheGatewayRefuses(): void
+    {
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(429, 'limit_dobowy_klucza', 36000)]));
+        $this->heldReply();
+        $hour = date('Y-m-d H:i', TIME_NOW + 36000);
+
+        minos_hook_admin_load();
+        self::assertCount(1, $this->forum->page->extra_messages);
+        self::assertStringContainsString($hour, $this->forum->page->extra_messages[0]['message']);
+
+        $this->forum->page->extra_messages = [];
+        $this->forum->page->active_module = 'tools';
+        $this->forum->page->active_action = 'minos';
+        ob_start();
+        try {
+            minos_hook_admin_load();
+        } catch (PageEnded $ended) {
+            ob_end_clean();
+        }
+        self::assertStringContainsString($hour, $this->forum->page->extra_messages[0]['message'] ?? '', 'the log page shows it too');
+    }
+
     public function testMissingTablesDoNotBreakTheAcp(): void
     {
         $this->forum->platform()->dropTables();
@@ -95,6 +117,8 @@ final class AdminTest extends PluginTestCase
 
         $supported = $this->heldReply();
         $this->forum->deliver(self::payload($supported, ['kategorie' => ['samookaleczenie'], 'wsparcie' => true]));
+        $masked = $this->heldReply('[b]abc[/b] <zły>');
+        $this->forum->deliver(self::payload($masked, ['kwalifikacja' => 'ocenzurowane', 'ocenzurowany' => 'abc <███>']));
         $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(403, 'profil_niedozwolony', null, 0)]));
         $refused = $this->heldReply('<script>alert(1)</script>');
 
@@ -109,6 +133,7 @@ final class AdminTest extends PluginTestCase
         }
         self::assertStringContainsString('#' . $supported, $html);
         self::assertStringContainsString('okaż autorowi wsparcie', $html);
+        self::assertStringContainsString('abc &lt;███&gt;', $html, 'the mask of a post kept in the queue, escaped');
         self::assertStringContainsString('#' . $refused, $html);
         self::assertStringContainsString('profil_niedozwolony', $html);
         self::assertStringNotContainsString('<script>', $html);

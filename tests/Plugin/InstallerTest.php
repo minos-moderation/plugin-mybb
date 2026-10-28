@@ -40,7 +40,7 @@ final class InstallerTest extends TestCase
         self::assertTrue($this->forum->db->table_exists('minos_pending'));
         self::assertTrue($this->forum->db->table_exists('minos_log'));
         self::assertSame([
-            'minos_enabled' => '1', 'minos_gateway_url' => 'https://gateway.wergiliusz.app', 'minos_api_key' => '',
+            'minos_enabled' => '0', 'minos_gateway_url' => 'https://gateway.wergiliusz.app', 'minos_api_key' => '',
             'minos_webhook_secret' => '', 'minos_profile' => 'forum_adult', 'minos_failure_mode' => 'fail-closed',
             'minos_timeout' => '20', 'minos_censored' => 'publish', 'minos_blocked' => 'queue', 'minos_forums' => '-1',
             'minos_skip_moderators' => '1',
@@ -52,6 +52,20 @@ final class InstallerTest extends TestCase
         $task = $this->task();
         self::assertSame(['minos', '0'], [$task['file'], (string)$task['enabled']]);
         self::assertCount(12, explode(',', $task['minute']), 'every five minutes');
+    }
+
+    public function testAFreshInstallStartsSwitchedOffAndHoldsNothing(): void
+    {
+        minos_install();
+        minos_activate();
+        $this->forum->mybb->user = ['uid' => 7, 'postnum' => 3, 'moderateposts' => 0];
+
+        $handler = $this->forum->write(false, 'Post na świeżo zainstalowanym forum.');
+
+        self::assertSame(1, (int)$handler->return_values['visible'], 'switched off until the administrator switches it on');
+        self::assertSame([], $this->forum->transport->requests);
+        self::assertNull($this->forum->row((int)$handler->return_values['pid']));
+        self::assertNull($this->forum->plugin->admin->notice(), 'switched off is no problem to report');
     }
 
     public function testActivationSwitchesTheTaskOnAndKeepsStoredValues(): void
@@ -100,6 +114,40 @@ final class InstallerTest extends TestCase
         }
         minos_activate();
         self::assertStringNotContainsString('disabled', self::render($this->settings('optionscode')['minos_api_key']));
+    }
+
+    /**
+     * A table kept from an earlier version (uninstalled with "Nie", or upgraded in place)
+     * gets the columns added since, and keeps its rows.
+     */
+    public function testActivationAddsNewColumnsToAnExistingTableWithoutLosingRows(): void
+    {
+        // The pending table as version 0.1.0's first draft created it.
+        $this->forum->pdo->exec("CREATE TABLE mybb_minos_pending (pid int NOT NULL default '0', tid int NOT NULL default '0',"
+            . " is_thread smallint NOT NULL default '0', status varchar(20) NOT NULL default '', submitted_at int NOT NULL default '0',"
+            . " accepted_at int NOT NULL default '0', retry_at int NOT NULL default '0', attempts smallint NOT NULL default '0',"
+            . " truncated smallint NOT NULL default '0', prefix_len smallint NOT NULL default '0', text_len smallint NOT NULL default '0',"
+            . " verdict varchar(20) NOT NULL default '', categories varchar(255) NOT NULL default '', support smallint NOT NULL default '0',"
+            . " error_code varchar(40) NOT NULL default '', decided_at int NOT NULL default '0', auto_published smallint NOT NULL default '0',"
+            . " claimed_at int NOT NULL default '0', claimed_from varchar(20) NOT NULL default '', original_text text NOT NULL default '',"
+            . ' PRIMARY KEY (pid))');
+        $this->forum->pdo->exec("INSERT INTO mybb_minos_pending (pid, tid, status, verdict, original_text) VALUES (41, 5, 'censored', 'ocenzurowane', 'Oryginał.')");
+        self::assertFalse($this->forum->db->field_exists('sent_sha256', 'minos_pending'), 'the old shape lacks the new columns');
+
+        minos_install();
+        minos_activate();
+
+        foreach (['sent_sha256', 'masked_text', 'apply_errors', 'first_post'] as $column) {
+            self::assertTrue($this->forum->db->field_exists($column, 'minos_pending'), $column);
+        }
+        $row = $this->forum->platform()->pending(41);
+        self::assertSame(['5', 'censored', 'ocenzurowane', 'Oryginał.', '', '', '0'],
+            [(string)$row['tid'], $row['status'], $row['verdict'], $row['original_text'], $row['sent_sha256'], $row['masked_text'],
+                (string)$row['apply_errors']]);
+        self::assertSame(1, (int)$this->forum->pdo->query('SELECT COUNT(*) FROM mybb_minos_pending')->fetchColumn());
+
+        minos_activate();
+        self::assertTrue($this->forum->db->field_exists('masked_text', 'minos_pending'), 'a second activation changes nothing');
     }
 
     public function testTheTablesUseTheServersDefaultEngine(): void

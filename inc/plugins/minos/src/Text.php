@@ -26,7 +26,13 @@ namespace Minos\MyBB;
  *   literally, as readers see it.
  *
  * Only the FIRST 3000 characters are sent; {@see Applier} does not publish a cut post on a
- * verdict about its beginning. Works without mbstring (PCRE with `/u`). No PHP 8 syntax.
+ * verdict about its beginning. Works without mbstring (PCRE with `/u`).
+ *
+ * Every regular expression runs through one checked helper ({@see replace}, {@see matchAll}…):
+ * when PCRE fails (a post crafted to exhaust its backtrack limit, say), the helper throws
+ * {@see TextError} instead of handing back an empty string. {@see forPost} turns that into
+ * `error: true` — a text the plugin could not read is not an empty text, and nothing (not
+ * even a new thread's subject alone) may be sent in its place. No PHP 8 syntax.
  */
 final class Text
 {
@@ -72,37 +78,44 @@ final class Text
      *     so the title is assessed too; '' for a reply.
      * @param array<string,mixed> $forum   The forum's `allowhtml`, `allowmycode`,
      *     `allowimgcode`, `allowvideocode` ({@see DEFAULT_FORUM} for missing ones).
-     * @return array{tekst:string,truncated:bool,prefix_len:int,text_len:int} `tekst` is what
-     *     goes on the wire ('' when readers see no text at all); `truncated` says whether it
-     *     was cut; `prefix_len` counts the characters the subject and its separator take at
-     *     its head; `text_len` its length in characters.
+     * @return array{tekst:string,truncated:bool,prefix_len:int,text_len:int,error:bool} `tekst`
+     *     is what goes on the wire ('' when readers see no text at all); `truncated` says
+     *     whether it was cut; `prefix_len` counts the characters the subject and its
+     *     separator take at its head; `text_len` its length in characters. `error` is true
+     *     when the text could not be read at all (a PCRE failure): `tekst` is then '' and
+     *     must not be taken for a post without text.
      */
     public static function forPost(string $message, string $subject = '', array $forum = []): array
     {
-        // A subject is always shown escaped, never as HTML or MyCode.
-        $subject = self::squeeze(self::numericEntities(self::valid($subject)));
-        $body = self::visible($message, $forum);
-        if ($subject === '') {
-            $text = $body;
-            $prefix = 0;
-        } elseif ($body === '') {
-            $text = $subject;
-            $prefix = self::length($subject);
-        } else {
-            $text = $subject . self::SUBJECT_SEPARATOR . $body;
-            $prefix = self::length($subject) + self::length(self::SUBJECT_SEPARATOR);
-        }
+        try {
+            // A subject is always shown escaped, never as HTML or MyCode.
+            $subject = self::squeeze(self::numericEntities(self::valid($subject)));
+            $body = self::visible($message, $forum);
+            if ($subject === '') {
+                $text = $body;
+                $prefix = 0;
+            } elseif ($body === '') {
+                $text = $subject;
+                $prefix = self::length($subject);
+            } else {
+                $text = $subject . self::SUBJECT_SEPARATOR . $body;
+                $prefix = self::length($subject) + self::length(self::SUBJECT_SEPARATOR);
+            }
 
-        $truncated = self::length($text) > self::MAX_CHARS;
-        if ($truncated) {
-            $text = rtrim(self::head($text, self::MAX_CHARS));
+            $truncated = self::length($text) > self::MAX_CHARS;
+            if ($truncated) {
+                $text = rtrim(self::head($text, self::MAX_CHARS));
+            }
+            return [
+                'tekst'      => $text,
+                'truncated'  => $truncated,
+                'prefix_len' => min($prefix, self::length($text)),
+                'text_len'   => self::length($text),
+                'error'      => false,
+            ];
+        } catch (TextError $e) {
+            return ['tekst' => '', 'truncated' => false, 'prefix_len' => 0, 'text_len' => 0, 'error' => true];
         }
-        return [
-            'tekst'      => $text,
-            'truncated'  => $truncated,
-            'prefix_len' => min($prefix, self::length($text)),
-            'text_len'   => self::length($text),
-        ];
     }
 
     /**
@@ -111,6 +124,7 @@ final class Text
      * @param string              $message The message as stored.
      * @param array<string,mixed> $forum   The forum's parsing options.
      * @return string The text, trimmed.
+     * @throws TextError When PCRE fails on it.
      */
     public static function visible(string $message, array $forum = []): string
     {
@@ -128,6 +142,7 @@ final class Text
      *
      * @param string $message The message as stored.
      * @return int The count, capped at the contract's 100000.
+     * @throws TextError When PCRE fails on it.
      */
     public static function links(string $message): int
     {
@@ -140,6 +155,7 @@ final class Text
      * @param string $message The message as stored.
      * @return array<int,string> At most {@see MAX_DOMAINS}, lower case, in order of
      *     appearance; IP addresses are left out.
+     * @throws TextError When PCRE fails on it.
      */
     public static function linkDomains(string $message): array
     {
@@ -161,13 +177,14 @@ final class Text
      *
      * @param string $text Valid UTF-8.
      * @return int Characters.
+     * @throws TextError When PCRE fails on it (without mbstring only).
      */
     public static function length(string $text): int
     {
         if (function_exists('mb_strlen')) {
             return mb_strlen($text, 'UTF-8');
         }
-        return (int)preg_match_all('/./su', $text);
+        return count(self::chars($text));
     }
 
     /**
@@ -176,13 +193,14 @@ final class Text
      * @param string $text  Valid UTF-8.
      * @param int    $chars How many characters.
      * @return string The head.
+     * @throws TextError When PCRE fails on it (without mbstring only).
      */
     public static function head(string $text, int $chars): string
     {
         if (function_exists('mb_substr')) {
             return mb_substr($text, 0, $chars, 'UTF-8');
         }
-        return preg_match('/\A.{0,' . max(0, $chars) . '}/su', $text, $m) ? $m[0] : '';
+        return implode('', array_slice(self::chars($text), 0, max(0, $chars)));
     }
 
     /**
@@ -191,10 +209,39 @@ final class Text
      * @param string $text  Valid UTF-8.
      * @param int    $chars How many characters to drop.
      * @return string The rest.
+     * @throws TextError When PCRE fails on it (without mbstring only).
      */
     public static function tail(string $text, int $chars): string
     {
         return (string)substr($text, strlen(self::head($text, $chars)));
+    }
+
+    /**
+     * Whether a masked text is the sent text with some characters replaced by the mask, one
+     * per character, as the contract masks: the same length, and every character either
+     * the one that was sent or {@see MASK}.
+     *
+     * @param string $sent   The text that was sent.
+     * @param string $masked The gateway's `ocenzurowany`.
+     * @return bool False for any other text, and when either cannot be read.
+     */
+    public static function maskFits(string $sent, string $masked): bool
+    {
+        try {
+            $sentChars = self::chars($sent);
+            $maskedChars = self::chars($masked);
+        } catch (TextError $e) {
+            return false;
+        }
+        if (count($sentChars) !== count($maskedChars)) {
+            return false;
+        }
+        foreach ($maskedChars as $i => $char) {
+            if ($char !== $sentChars[$i] && $char !== self::MASK) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -204,7 +251,7 @@ final class Text
     {
         // [code] and [php] show their content as written, MyCode included.
         $blocks = [];
-        $text = (string)preg_replace_callback('#\[(code|php)\](.*?)\[/\1\]#is', static function (array $m) use (&$blocks): string {
+        $text = self::replaceCallback('#\[(code|php)\](.*?)\[/\1\]#is', static function (array $m) use (&$blocks): string {
             $blocks[] = $m[2];
             return "\x00" . (count($blocks) - 1) . "\x00";
         }, $text);
@@ -232,9 +279,9 @@ final class Text
         }
         for ($pass = 0; $pass < 20; $pass++) {
             $before = $text;
-            $text = (string)preg_replace(array_keys($find), array_values($find), $text);
+            $text = self::replace(array_keys($find), array_values($find), $text);
             // Lists, innermost first: each `[*]` starts a line.
-            $text = (string)preg_replace_callback('#\[list(?:=(?:a|A|i|I|1))?\]((?:(?!\[list(?:=[aAiI1])?\]).)*?)\[/list\]#is',
+            $text = self::replaceCallback('#\[list(?:=(?:a|A|i|I|1))?\]((?:(?!\[list(?:=[aAiI1])?\]).)*?)\[/list\]#is',
                 static function (array $m): string {
                     return "\n" . str_replace('[*]', "\n", $m[1]) . "\n";
                 }, $text);
@@ -244,7 +291,7 @@ final class Text
         }
 
         // PCRE's own `\x00` escape: PHP before 8.2 refuses a literal NUL byte in a pattern.
-        return (string)preg_replace_callback('#\x00([0-9]+)\x00#', static function (array $m) use ($blocks): string {
+        return self::replaceCallback('#\x00([0-9]+)\x00#', static function (array $m) use ($blocks): string {
             return "\n" . $blocks[(int)$m[1]] . "\n";
         }, $text);
     }
@@ -257,7 +304,7 @@ final class Text
         $pattern = '#\[quote(=[^\]\n]*)?\]((?:(?!\[quote(?:=[^\]\n]*)?\]).)*?)\[/quote\]#is';
         for ($pass = 0; $pass < 20; $pass++) {
             $before = $text;
-            $text = (string)preg_replace_callback($pattern, static function (array $m): string {
+            $text = self::replaceCallback($pattern, static function (array $m): string {
                 $author = self::quoteAuthor($m[1] ?? '');
                 return "\n" . ($author !== '' ? $author . ' ' . self::QUOTE_LEAD . "\n" : '') . $m[2] . "\n";
             }, $text);
@@ -281,7 +328,7 @@ final class Text
         if (($quote === '"' || $quote === "'") && ($end = strpos($argument, $quote, 1)) !== false) {
             return trim(substr($argument, 1, $end - 1));
         }
-        return trim((string)preg_replace('#\s+(pid|dateline)=.*\z#is', '', $argument));
+        return trim(self::replace('#\s+(pid|dateline)=.*\z#is', '', $argument));
     }
 
     /**
@@ -289,10 +336,10 @@ final class Text
      */
     private static function html(string $text): string
     {
-        $text = (string)preg_replace('#<(script|style)\b[^>]*>.*?</\1\s*>#is', ' ', $text);
-        $text = (string)preg_replace_callback('#<([a-z][a-z0-9]*)\b([^<>]*)>#i', static function (array $m): string {
+        $text = self::replace('#<(script|style)\b[^>]*>.*?</\1\s*>#is', ' ', $text);
+        $text = self::replaceCallback('#<([a-z][a-z0-9]*)\b([^<>]*)>#i', static function (array $m): string {
             $shown = [];
-            if (preg_match_all('#(?:^|\s)(?:alt|title)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'>]+))#i', $m[2], $attributes, PREG_SET_ORDER)) {
+            if (self::matchAll('#(?:^|\s)(?:alt|title)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'>]+))#i', $m[2], $attributes, PREG_SET_ORDER) > 0) {
                 foreach ($attributes as $attribute) {
                     $value = trim(($attribute[1] ?? '') . ($attribute[2] ?? '') . ($attribute[3] ?? ''));
                     if ($value !== '') {
@@ -303,7 +350,7 @@ final class Text
             $block = in_array(strtolower($m[1]), self::HTML_BLOCKS, true);
             return ($block ? "\n" : '') . ($shown !== [] ? ' ' . implode(' ', $shown) . ' ' : '');
         }, $text);
-        $text = (string)preg_replace_callback('#</([a-z][a-z0-9]*)\s*>#i', static function (array $m): string {
+        $text = self::replaceCallback('#</([a-z][a-z0-9]*)\s*>#i', static function (array $m): string {
             return in_array(strtolower($m[1]), self::HTML_BLOCKS, true) ? "\n" : '';
         }, $text);
         return html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
@@ -314,7 +361,7 @@ final class Text
      */
     private static function numericEntities(string $text): string
     {
-        return (string)preg_replace_callback('/&#([0-9]{1,7});/', static function (array $m): string {
+        return self::replaceCallback('/&#([0-9]{1,7});/', static function (array $m): string {
             return html_entity_decode($m[0], ENT_QUOTES | ENT_HTML5, 'UTF-8');
         }, $text);
     }
@@ -326,7 +373,7 @@ final class Text
      */
     private static function urls(string $message): array
     {
-        if (!preg_match_all(self::LINK, self::valid($message), $m)) {
+        if (self::matchAll(self::LINK, self::valid($message), $m) === 0) {
             return [];
         }
         return array_values(array_unique(array_map('strtolower', $m[0])));
@@ -360,7 +407,7 @@ final class Text
      */
     private static function valid(string $text): string
     {
-        if (preg_match('//u', $text) === 1) {
+        if (self::isUtf8($text)) {
             return $text;
         }
         return htmlspecialchars_decode(htmlspecialchars($text, ENT_SUBSTITUTE | ENT_NOQUOTES, 'UTF-8'), ENT_NOQUOTES);
@@ -372,9 +419,92 @@ final class Text
      */
     private static function squeeze(string $text): string
     {
-        $text = (string)preg_replace('/[ \t\x{00A0}]+/u', ' ', $text);
-        $text = (string)preg_replace('/ *\n */', "\n", $text);
-        $text = (string)preg_replace('/\n{3,}/', "\n\n", $text);
+        $text = self::replace('/[ \t\x{00A0}]+/u', ' ', $text);
+        $text = self::replace('/ *\n */', "\n", $text);
+        $text = self::replace('/\n{3,}/', "\n\n", $text);
         return trim($text);
+    }
+
+    // ------------------------------------------------------------- checked PCRE calls
+
+    /**
+     * `preg_replace`, checked.
+     *
+     * @param string|array<int,string> $pattern
+     * @param string|array<int,string> $replacement
+     * @throws TextError When PCRE fails.
+     */
+    private static function replace($pattern, $replacement, string $subject): string
+    {
+        $result = preg_replace($pattern, $replacement, $subject);
+        if (!is_string($result)) {
+            throw self::failure();
+        }
+        return $result;
+    }
+
+    /**
+     * `preg_replace_callback`, checked.
+     *
+     * @throws TextError When PCRE fails.
+     */
+    private static function replaceCallback(string $pattern, callable $callback, string $subject): string
+    {
+        $result = preg_replace_callback($pattern, $callback, $subject);
+        if (!is_string($result)) {
+            throw self::failure();
+        }
+        return $result;
+    }
+
+    /**
+     * `preg_match_all`, checked.
+     *
+     * @param array<int|string,mixed>|null $matches
+     * @return int How many matched.
+     * @throws TextError When PCRE fails.
+     */
+    private static function matchAll(string $pattern, string $subject, &$matches = null, int $flags = PREG_PATTERN_ORDER): int
+    {
+        $result = preg_match_all($pattern, $subject, $matches, $flags);
+        if (!is_int($result)) {
+            throw self::failure();
+        }
+        return $result;
+    }
+
+    /**
+     * The characters of a UTF-8 string, checked.
+     *
+     * @return array<int,string>
+     * @throws TextError When PCRE fails (invalid UTF-8 included).
+     */
+    private static function chars(string $text): array
+    {
+        $chars = preg_split('//u', $text, -1, PREG_SPLIT_NO_EMPTY);
+        if (!is_array($chars)) {
+            throw self::failure();
+        }
+        return $chars;
+    }
+
+    /**
+     * Whether a string is valid UTF-8: PCRE's "bad UTF-8" error IS the answer here; any
+     * other error is a failure.
+     *
+     * @throws TextError When PCRE fails otherwise.
+     */
+    private static function isUtf8(string $text): bool
+    {
+        $result = preg_match('//u', $text);
+        if ($result === false && preg_last_error() !== PREG_BAD_UTF8_ERROR) {
+            throw self::failure();
+        }
+        return $result === 1;
+    }
+
+    private static function failure(): TextError
+    {
+        return new TextError('PCRE error ' . preg_last_error());
     }
 }
