@@ -113,6 +113,10 @@ final class NoTextTest extends PluginTestCase
             'a site name MyBB does not know' => ['[video=YouTube]https://www.youtube.com/watch?v=x[/video]', [],
                 'https://www.youtube.com/watch?v=x'],
             'a word and U+200B'           => ["obelga\u{200B}", [], "obelga\u{200B}"],
+            'HTML: a comment start inside a title' => ['Miły tekst <b title="<!--">obelga</b><b title="-->">',
+                ['allowhtml' => 1], 'Miły tekst <!-- obelga -->'],
+            'HTML: a comment start inside an alt' => ['<img alt="<!--" src="https://example.com/a.png">obelga -->',
+                ['allowhtml' => 1], '<!-- obelga -->'],
             'HTML: an image beside text, its hints with it' => ['Tekst <img src="https://example.com/a.png" alt="podpis">',
                 ['allowhtml' => 1], 'Tekst podpis'],
         ];

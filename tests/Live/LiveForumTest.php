@@ -67,6 +67,8 @@ final class LiveForumTest extends TestCase
         'html-style'           => [['allowhtml' => 1], '<style>p { color: red }</style>Zwykły tekst'],
         'html-comment'         => [['allowhtml' => 1], 'Widoczne zdanie <!-- ukryta obelga --> i dalej'],
         'html-comment-open'    => [['allowhtml' => 1], 'Widoczne zdanie <!-- ukryta obelga do końca'],
+        'html-comment-in-title' => [['allowhtml' => 1], 'Miły tekst <b title="<!--">obelga</b><b title="-->">'],
+        'html-comment-in-alt'  => [['allowhtml' => 1], '<img alt="<!--" src="https://example.com/a.png">obelga -->'],
         'html-img-alt'         => [['allowhtml' => 1], '<img src="https://example.com/a.png" alt="podpis obrazka">'],
         'html-img-alt-text'    => [['allowhtml' => 1], 'Tekst obok <img src="https://example.com/a.png" alt="podpis obrazka" title="tytuł">'],
         'html-empty-link'      => [['allowhtml' => 1], '<a href="https://example.com/"> </a>'],

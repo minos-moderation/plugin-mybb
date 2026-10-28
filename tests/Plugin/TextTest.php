@@ -48,10 +48,12 @@ final class TextTest extends TestCase
     /**
      * An HTML comment is hidden from readers, so it is not sent: closed, never closed (it
      * hides the rest), and HTML's own early ends (`<!-->`, `<!--->`) that show what follows.
+     * What only looks like one — `<!--` inside a tag's quoted value, or inside an element
+     * HTML reads as text — opens nothing, and the words after it are sent.
      *
      * @dataProvider comments
      */
-    public function testAnHtmlCommentIsNotSent(string $message, string $tekst, int $html = 1): void
+    public function testOnlyWhatHtmlReadsAsACommentIsLeftOut(string $message, string $tekst, int $html = 1): void
     {
         self::assertSame($tekst, Text::forPost($message, '', ['allowhtml' => $html])['tekst']);
     }
@@ -67,6 +69,14 @@ final class TextTest extends TestCase
             '<!--> ends at once'  => ['a <!-->widoczna--> b', 'a widoczna--> b'],
             '<!---> ends at once' => ['a <!--->widoczna b', 'a widoczna b'],
             'HTML off: shown as typed' => ['a <!-- widoczna --> b', 'a <!-- widoczna --> b', 0],
+            // Only where HTML opens a comment (the review of #7, major 3).
+            'a comment start in a title' => ['Miły tekst <b title="<!--">obelga</b><b title="-->">', 'Miły tekst <!-- obelga -->'],
+            'a comment start in an alt'  => ['<img alt="<!--" src="https://example.com/a.png">obelga -->', '<!-- obelga -->'],
+            'in single quotes'           => ["<b title='<!--'>obelga</b> -->", '<!-- obelga -->'],
+            'in a textarea'              => ['<textarea><!-- obelga --></textarea>', '<!-- obelga -->'],
+            'in an xmp, text after'      => ['<xmp><!-- obelga --></xmp> po', '<!-- obelga --> po'],
+            'in a plaintext'             => ['<plaintext><!-- obelga', '<!-- obelga'],
+            'a tag inside a comment'     => ['a <!-- x <b title="y"> --> b', 'a b'],
         ];
     }
 

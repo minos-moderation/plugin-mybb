@@ -96,6 +96,9 @@ final class Text
         'co.jp', 'co.kr', 'co.in', 'co.za', 'com.br', 'com.tr', 'com.ua', 'com.cn', 'com.mx', 'co.il',
     ];
 
+    /** A tag's attributes, quoted values whole (they may hold `<`, `>`, `<!--`). */
+    private const ATTRIBUTES = '(?:[^<>"\']|"[^"]*"|\'[^\']*\')*';
+
     /** Tags after which a reader sees a new line (HTML forums). */
     private const HTML_BLOCKS = ['br', 'p', 'div', 'li', 'tr', 'blockquote', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'table', 'ul', 'ol'];
 
@@ -720,12 +723,21 @@ final class Text
      * on (`Postparser::parse_message`, the same pattern): the reader sees them as text, with
      * what is between them. A comment is hidden: `<!-->` and `<!--->` end at once (HTML's
      * own parsing), any other ends at `-->` (or `--!>`), and one never closed hides the rest.
+     * Only where HTML opens a comment, though: one pass from left to right takes each tag
+     * whole (its quoted values may hold `<!--`, `-->`, `<` or `>`), and the content of an
+     * element HTML reads as text (`<textarea>`, `<title>`, `<xmp>`, `<plaintext>`,
+     * `<iframe>`, `<noembed>`, `<noframes>`, `<noscript>`) is kept as it is. In doubt,
+     * the text stays.
      */
     private static function html(string $text, bool $textOnly = false): string
     {
         $text = self::replace('#<(/?)(base|meta|script|style)([^>]*)>#i', '&lt;$1$2$3&gt;', $text);
-        $text = self::replace('#<!--(?:-?>|.*?(?:--!?>|\z))#s', ' ', $text);
-        $text = self::replaceCallback('#<([a-z][a-z0-9]*)\b([^<>]*)>#i', static function (array $m) use ($textOnly): string {
+        $text = self::replaceCallback('#<(textarea|title|xmp|iframe|noembed|noframes|noscript)\b' . self::ATTRIBUTES
+            . '>.*?(?:</\1\s*>|\z)|<plaintext\b.*\z|<!--(?:-?>|.*?(?:--!?>|\z))|</?[a-z][a-z0-9]*\b' . self::ATTRIBUTES . '>#is',
+            static function (array $m): string {
+                return strncmp($m[0], '<!--', 4) === 0 ? ' ' : $m[0];
+            }, $text);
+        $text = self::replaceCallback('#<([a-z][a-z0-9]*)\b(' . self::ATTRIBUTES . ')>#i', static function (array $m) use ($textOnly): string {
             $shown = [];
             // A hint goes with the words beside it; alone it is not a text (F7).
             if (!$textOnly && self::matchAll('#(?:^|\s)(?:alt|title)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'>]+))#i', $m[2], $attributes, PREG_SET_ORDER) > 0) {

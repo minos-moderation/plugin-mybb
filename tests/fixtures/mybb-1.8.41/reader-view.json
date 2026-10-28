@@ -68,6 +68,39 @@
             "media": 0,
             "has_text": true
         },
+        "html-comment-in-title": {
+            "forum": {
+                "allowhtml": 1,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "Miły tekst <b title=\"<!--\">obelga</b><b title=\"-->\">",
+            "html": "Miły tekst <b title=\"<!--\">obelga</b><b title=\"-->\">",
+            "text": "Miły tekst obelga",
+            "hints": [
+                "<!--",
+                "-->"
+            ],
+            "media": 0,
+            "has_text": true
+        },
+        "html-comment-in-alt": {
+            "forum": {
+                "allowhtml": 1,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "<img alt=\"<!--\" src=\"https://example.com/a.png\">obelga -->",
+            "html": "<img alt=\"<!--\" src=\"https://example.com/a.png\">obelga -->",
+            "text": "obelga -->",
+            "hints": [
+                "<!--"
+            ],
+            "media": 1,
+            "has_text": true
+        },
         "html-img-alt": {
             "forum": {
                 "allowhtml": 1,
