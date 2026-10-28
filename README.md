@@ -24,8 +24,9 @@ Minos.
    `https://<adres-forum>/minos-webhook.php`, podpisany sekretem webhooka. Wtyczka sprawdza
    podpis i stosuje werdykt.
 4. Co 5 minut zadanie MyBB „Minos — moderacja postów” ponawia wysyłkę postów, których
-   brama chwilowo nie przyjęła, i stosuje tryb awaryjny do postów, dla których werdykt
-   nie nadszedł w czasie oczekiwania.
+   brama chwilowo nie przyjęła, wysyła poprawione przez autorów posty czekające na werdykt
+   i stosuje tryb awaryjny do postów, dla których werdykt nie nadszedł w czasie
+   oczekiwania.
 
 ## Wymagania
 
@@ -36,6 +37,12 @@ Minos.
   z `http` na `https` ani z `www` na domenę bez `www`).
 - Klucz B2B (`wgb2b_…`) i sekret webhooka, wydane przez operatora bramy. Sekret jest
   pokazywany tylko raz, przy wydaniu klucza.
+- **Osobny klucz dla kopii testowej forum.** Nie wpisuj klucza i sekretu forum produkcyjnego
+  w kopii testowej: jej posty zużywałyby limity klucza produkcji, a brama doręcza werdykty
+  na adres webhooka zapisany przy kluczu, czyli na forum produkcyjne. Tam werdykt dla posta
+  kopii trafiłby na post o tym samym numerze — jeśli taki akurat czeka na werdykt, zostałby
+  w kolejce dla człowieka (tekst inny niż wysłany do oceny). Poproś operatora bramy
+  o osobny klucz z adresem webhooka kopii.
 - Działające zadania MyBB. Bez dodatkowej konfiguracji MyBB uruchamia je przy okazji ruchu
   na forum, więc na cichym forum ponowienia i tryb awaryjny czekają na odwiedzających.
   Zalecamy prawdziwy cron, np. `* * * * * php /ścieżka/do/forum/task.php` — przy każdym
@@ -65,8 +72,11 @@ Minos.
 5. Przekaż operatorowi bramy adres webhooka do zapisania przy kluczu:
    `https://<adres-forum>/minos-webhook.php`. Wtyczka pokazuje go w opisie wtyczki,
    w opisie grupy ustawień i przy polu sekretu.
-6. Napisz próbny post jako zwykły użytkownik. Stan każdego wysłanego postu widać
-   w **Narzędzia i konserwacja → Dzienniki → Minos — dziennik**.
+6. Napisz próbny post jako zwykły użytkownik. W **Narzędzia i konserwacja → Dzienniki →
+   Minos — dziennik** widać posty, które wymagają uwagi (czekające na werdykt, zatrzymane
+   w kolejce, opublikowane bez oceny — pełna lista niżej, w „Panel administratora”), oraz
+   dziennik zdarzeń; post opublikowany po werdykcie `bezpieczne` znika z tej listy, chyba
+   że brama oznaczyła go sygnałem „wsparcie”.
 
 **Aktualizacja do nowej wersji**: dezaktywuj wtyczkę, podmień pliki i aktywuj ją ponownie.
 Aktywacja dodaje do tabel wtyczki kolumny, których wymaga nowa wersja (dane zostają); bez
@@ -81,9 +91,9 @@ dezaktywacji, wtyczka wysyła ponownie przy pierwszym przebiegu zadania.
 | Adres bramy | Adres bramy Wergiliusza. Musi zaczynać się od `https://` (`http://` tylko dla atrapy bramy na tym samym komputerze). | `https://gateway.wergiliusz.app` |
 | Klucz API | Klucz B2B `wgb2b_…`. Po zapisaniu panel pokazuje tylko jego początek. Puste pole przy zapisie zostawia zapisany klucz; pole „Usuń zapisaną wartość” go kasuje. | — |
 | Sekret webhooka | Sekret do sprawdzania podpisu werdyktów. Zapisywany i pokazywany jak klucz. | — |
-| Profil oceny | `forum_adult` (forum dla dorosłych) albo `forum_teen` (forum dla młodzieży). Musi być na liście profili klucza. | `forum_adult` |
+| Profil oceny | `forum_adult` (forum dla dorosłych) albo `forum_teen` (forum dla dzieci i młodzieży). Musi być na liście profili klucza. | `forum_adult` |
 | Tryb awaryjny | Co zrobić z postem bez werdyktu: **zostawić w kolejce moderacji** (fail-closed) albo **opublikować bez oceny** (fail-open). | fail-closed |
-| Czas oczekiwania na werdykt | Minuty, po których post bez werdyktu dostaje tryb awaryjny. **Najmniej 20** = 15 minut, przez które brama próbuje doręczyć werdykt, i 5 minut zapasu; mniejsza wartość jest traktowana jak 20. | 20 |
+| Czas oczekiwania na werdykt | Minuty, po których post bez werdyktu dostaje tryb awaryjny. **Najmniej 20** = 15 minut, przez które brama próbuje doręczyć werdykt, i 5 minut zapasu; mniejsza wartość jest traktowana jak 20. **Najwięcej 1440** (doba); większa jest traktowana jak 1440. | 20 |
 | Post ocenzurowany | **Opublikuj zamaskowany tekst** albo **zostaw w kolejce moderacji**. | opublikuj |
 | Post zablokowany | **Zostaw w kolejce moderacji** albo **usuń (miękko)** — moderator może go przywrócić. | zostaw w kolejce |
 | Fora | Fora, w których wtyczka moderuje nowe posty. | wszystkie |
@@ -124,7 +134,9 @@ Wysyłane jest tylko:
     z wyłączonym MyCode), zostaje dosłownie — tak jak widzi go czytelnik;
 - profil oceny;
 - sygnały antyspamowe: liczba linków w poście, domeny tych linków (najwyżej 10, np.
-  `example.com`) i — dla zarejestrowanego autora — czy to jego pierwszy post.
+  `example.com`) i — dla zarejestrowanego autora — czy to jego pierwszy post: czy licznik
+  postów jego konta w MyBB wynosił 0, gdy post był wysyłany pierwszy raz (ponowienie
+  wysyła tę samą wartość, a dla gościa ten sygnał nie jest wysyłany).
 
 **Nigdy** nie są wysyłane: adres e-mail, adres IP, nazwa ani numer użytkownika, załączniki
 ani dalsza część postu ponad 3000 znaków.
@@ -141,8 +153,9 @@ ani dalsza część postu ponad 3000 znaków.
 
 **Post dłuższy niż 3000 znaków**: brama oceniła tylko jego początek, więc werdykt
 `bezpieczne` nie wystarcza do publikacji — post dostaje tryb awaryjny (fail-closed: zostaje
-w kolejce z uwagą „wpis dłuższy niż 3000 znaków — oceniono początek”; fail-open: zostaje
-opublikowany). Werdykt `zablokowane` działa normalnie, a `ocenzurowane` zawsze zostawia
+w kolejce; fail-open: zostaje opublikowany). Uwagę „wpis dłuższy niż 3000 znaków — oceniono
+początek” widać w dzienniku wtyczki (Minos — dziennik, lista postów wymagających uwagi,
+kolumna „Werdykt”), nie w kolejce moderacji MyBB. Werdykt `zablokowane` działa normalnie, a `ocenzurowane` zawsze zostawia
 taki post w kolejce.
 
 Brama maskuje tekst, który zobaczyli czytelnicy, więc wtyczka publikuje zamaskowany tekst
@@ -213,6 +226,12 @@ zastosuje, dopóki nikt nie ruszył postu: `zablokowane` odsyła post z powrotem
 moderacji, `ocenzurowane` postępuje według ustawienia „Post ocenzurowany”. Jeśli w tym czasie
 moderator zdecydował o poście albo post został edytowany, decyzja człowieka jest ostateczna.
 
+Które odpowiedzi bramy są ponawiane: `429` (limity klucza, wspólny limit bramy, pełna
+kolejka), `503` i każde inne `5xx`, `408` oraz brak odpowiedzi (błąd połączenia, przekroczony
+czas). Przyjęciem jest wyłącznie `202`. Każda inna odpowiedź — pozostałe `4xx`,
+przekierowanie, `2xx` inne niż `202` — to błąd konfiguracji: tryb awaryjny od razu i
+komunikat z kodem w panelu administratora.
+
 Gdy brama jest chwilowo przeciążona albo niedostępna (lub nie ma połączenia albo
 połączenie przekroczyło czas — `408`), post czeka: zadanie ponawia wysyłkę po czasie
 wskazanym przez bramę albo po coraz dłuższej przerwie (od 1 minuty do 1 godziny). Jeśli do końca czasu oczekiwania się nie uda — tryb awaryjny.
@@ -246,8 +265,8 @@ numer postu — nigdy treść błędu.
   bez oceny w trybie fail-open, rozstrzygnięte przez człowieka przed werdyktem i oznaczone
   jako potrzebujące wsparcia; przy poście
   ocenzurowanym zatrzymanym w kolejce — tekst zamaskowany przez bramę) oraz dziennik
-  zdarzeń. Dziennik zawiera wyłącznie kody i
-  numery postów — nigdy treść, klucz ani sekret. Wpisy starsze niż 30 dni są usuwane.
+  zdarzeń. Obie tabele pokazują po 50 najnowszych wierszy. Dziennik zawiera wyłącznie kody
+  i numery postów — nigdy treść, klucz ani sekret. Wpisy starsze niż 30 dni są usuwane.
 - **Werdykty z ostatnich 7 dni** (na tej samej stronie): mediana (P50) i 95. percentyl (P95)
   czasu od przyjęcia postu przez bramę (odpowiedź `202`) do doręczenia werdyktu oraz liczba
   werdyktów `bezpieczne`, `ocenzurowane`, `zablokowane` i `nieocenione` — takich, jakie
