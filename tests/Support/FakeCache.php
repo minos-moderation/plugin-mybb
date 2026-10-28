@@ -51,7 +51,12 @@ final class FakeCache
 
     public function delete($name, $greedy = false)
     {
-        unset($this->data[$name], $this->database[$name]);
+        unset($this->data[$name]);
+        // Unsetting a missing offset of an ArrayObject raises a notice on PHP 7.4 (not on 8);
+        // MyBB's delete of a missing entry is a DELETE that matches nothing.
+        if ($this->database->offsetExists($name)) {
+            $this->database->offsetUnset($name);
+        }
     }
 
     public function update_tasks()
