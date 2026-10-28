@@ -240,6 +240,9 @@ final class Submitter
      * - A post the failure mode published (`fail-open`): a late verdict would judge text that
      *   is gone, so it no longer applies ({@see Applier::late}). Edits of published posts
      *   are not assessed again.
+     * - An author's edit after which the text to send is the one already sent (its digest
+     *   unchanged — the post saved as it was, an edit reason added) changes nothing: the
+     *   verdict on its way still judges this text.
      *
      * An edit keeps an unapproved post unapproved (MyBB's `update_post`), so the post stays
      * in MyBB's queue throughout.
@@ -249,11 +252,19 @@ final class Submitter
      */
     public function onUpdated($handler, int $now): void
     {
-        $pid = (int)(is_array($handler->data ?? null) ? ($handler->data['pid'] ?? 0) : 0);
+        $data = is_array($handler->data ?? null) ? $handler->data : [];
+        $pid = (int)($data['pid'] ?? 0);
         if ($pid <= 0) {
             return;
         }
-        $this->edited($pid, $now);
+        // MyBB writes the new message and subject after this hook: the post as it will read.
+        $changes = [];
+        foreach (['message', 'subject'] as $field) {
+            if (isset($data[$field]) && is_string($data[$field])) {
+                $changes[$field] = $data[$field];
+            }
+        }
+        $this->edited($pid, $now, $changes);
     }
 
     /**
@@ -277,10 +288,12 @@ final class Submitter
     /**
      * An edit of a post by the current user ({@see onUpdated}, {@see onPollChanged}).
      *
-     * @param int $pid The post.
-     * @param int $now Unix seconds.
+     * @param int                  $pid     The post.
+     * @param int                  $now     Unix seconds.
+     * @param array<string,string> $changes The new `message` and `subject`, when MyBB has
+     *     not written them yet.
      */
-    private function edited(int $pid, int $now): void
+    private function edited(int $pid, int $now, array $changes = []): void
     {
         $post = $this->platform->post($pid);
         $moderator = $post !== null && $this->platform->isModerator($post['fid'], $this->platform->currentUserId());
@@ -291,10 +304,29 @@ final class Submitter
                 ]);
                 return;
             }
+        } elseif ($post !== null && $this->sendsTheSameText($pid, $changes + $post)) {
+            return;
         } elseif ($this->platform->revise($pid, $now)) {
             return;
         }
         $this->platform->updatePending($pid, ['auto_published' => 0], Status::PUBLISHED);
+    }
+
+    /**
+     * Whether a post, as it reads after an edit, gives the text its row last recorded as
+     * sent (or as unreadable or empty: an edit that leaves it so starts nothing either).
+     *
+     * @param int                 $pid  The post.
+     * @param array<string,mixed> $post The post after the edit ({@see Platform::post}).
+     */
+    private function sendsTheSameText(int $pid, array $post): bool
+    {
+        $row = $this->platform->pending($pid);
+        if ($row === null) {
+            return false;
+        }
+        $text = Text::ofPost($post, (int)$row['is_thread'] === 1, $this->platform->forumParsing((int)$post['fid']));
+        return hash_equals((string)$row['sent_sha256'], self::digest($text));
     }
 
     /**

@@ -132,6 +132,41 @@ final class RevisionTest extends PluginTestCase
         ];
     }
 
+    /**
+     * An author's edit after which the text to send is the one already sent — saved as it
+     * was, twice — starts no revision: no request, and the verdict on its way applies.
+     */
+    public function testAnEditThatLeavesTheSentTextAsItWasStartsNothing(): void
+    {
+        $pid = $this->heldReply('Ten sam tekst.');
+        $sent = count($this->forum->transport->requests);
+
+        $this->forum->edit($pid, 'Ten sam tekst.');
+        task_minos(['tid' => 1]);
+        $this->forum->edit($pid, "Ten  sam tekst.\r\n");
+        task_minos(['tid' => 1]);
+
+        self::assertCount($sent, $this->forum->transport->requests, 'nothing sent again');
+        self::assertSame([Status::PENDING, '0'], [$this->forum->row($pid)['status'], (string)$this->forum->row($pid)['rev']]);
+        self::assertSame(200, $this->forum->deliver(self::payload($pid)));
+        self::assertSame([1, Status::PUBLISHED], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']],
+            'the verdict on its way still judged this text');
+    }
+
+    /**
+     * A post held as `no_text` and edited, still without text: nothing starts, nothing loops.
+     */
+    public function testAnEmptyPostEditedStillEmptyStartsNothing(): void
+    {
+        $pid = (int)$this->forum->write(true, '[b] [/b]', ['subject' => 'Tytuł'])->return_values['pid'];
+        $this->forum->edit($pid, '[i] [/i]');
+        task_minos(['tid' => 1]);
+
+        self::assertSame([], $this->forum->transport->requests);
+        self::assertSame([Status::HELD, Status::REASON_NO_TEXT, '0'],
+            [$this->forum->row($pid)['status'], $this->forum->row($pid)['verdict'], (string)$this->forum->row($pid)['rev']]);
+    }
+
     public function testAnIdThatIsNoRevisionIsNotAccepted(): void
     {
         $pid = $this->heldReply('Wersja zero.');
