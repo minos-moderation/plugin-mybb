@@ -9,6 +9,7 @@ use Minos\MyBB\Gateway;
 use Minos\MyBB\Platform;
 use Minos\MyBB\Plugin;
 use Minos\MyBB\Status;
+use Minos\MyBB\Task;
 use Minos\MyBB\Tests\Support\FakeCache;
 use Minos\MyBB\Tests\Support\PluginTestCase;
 use Minos\MyBB\Tests\Support\RecordingTransport;
@@ -251,6 +252,32 @@ final class TaskTest extends PluginTestCase
             return in_array('mybb:' . $waiting, array_column(json_decode($request['body'], true)['elementy'], 'id'), true);
         });
         self::assertCount(1, $sends, 'sent again once, not twice');
+    }
+
+    /**
+     * Two runs that both began while the plugin was marked as switched off: the first sends
+     * the backlog again and clears the mark. The second's own copy of the datacache still
+     * holds it — MyBB's `delete()` leaves a request's copy alone — so only a fresh read of
+     * the mark keeps the second from sending the backlog again.
+     */
+    public function testARunThatBeganBeforeAnotherClearedTheMarkDoesNotSendTheBacklogAgain(): void
+    {
+        $waiting = $this->heldReply('Czekał podczas wyłączenia.');
+        $datacache = self::datacache();
+        $this->request($datacache)->installer->deactivate(TIME_NOW);
+        $sent = new RecordingTransport();
+        $first = $this->request($datacache, $sent);
+        $second = $this->request($datacache, $sent);
+
+        $first->task->run(TIME_NOW);
+        self::assertSame(Status::PENDING, $this->forum->row($waiting)['status'], 'the first run sent the backlog again');
+        self::assertArrayNotHasKey(Platform::STATE_PREFIX . Task::SWITCHED_OFF, $datacache->getArrayCopy());
+        $second->task->run(TIME_NOW);
+
+        $sends = array_filter($sent->requests, static function (array $request) use ($waiting): bool {
+            return in_array('mybb:' . $waiting, array_column(json_decode($request['body'], true)['elementy'], 'id'), true);
+        });
+        self::assertCount(1, $sends, 'sent again once, not once per run');
     }
 
     public function testAResendOfAPostAHumanDecidedIsDropped(): void

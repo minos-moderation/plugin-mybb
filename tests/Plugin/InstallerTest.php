@@ -5,9 +5,13 @@ declare(strict_types=1);
 namespace Minos\MyBB\Tests\Plugin;
 
 use Minos\MyBB\Installer;
+use Minos\MyBB\Platform;
 use Minos\MyBB\Settings;
+use Minos\MyBB\Submitter;
+use Minos\MyBB\Task;
 use Minos\MyBB\Tests\Support\Forum;
 use Minos\MyBB\Tests\Support\PageEnded;
+use Minos\MyBB\Tests\Support\RecordingTransport;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -177,6 +181,29 @@ final class InstallerTest extends TestCase
         self::assertSame([], $this->settings('value'));
         self::assertNull($this->task());
         self::assertFalse($this->forum->db->table_exists('minos_pending'));
+    }
+
+    /**
+     * Uninstalling leaves none of the plugin's datacache entries behind — here the two a
+     * forum gathers in use: the mark of a deactivation and a refusal of the gateway.
+     */
+    public function testUninstallRemovesEveryStateEntry(): void
+    {
+        $this->forum->install([], new RecordingTransport([RecordingTransport::refused(429, 'limit_dobowy_klucza', 36000)]));
+        $this->forum->mybb->user = ['uid' => 7, 'username' => 'Autor Testowy', 'postnum' => 3, 'moderateposts' => 0];
+        $this->forum->write(false, 'Post przy wyczerpanym limicie.');
+        minos_deactivate();
+        foreach ([Task::SWITCHED_OFF, Submitter::REFUSAL] as $key) {
+            self::assertArrayHasKey(Platform::STATE_PREFIX . $key, $this->forum->cache->stored(), "{$key} was kept before");
+        }
+
+        $this->forum->mybb->request_method = 'post';
+        minos_uninstall();
+
+        $left = array_filter(array_keys($this->forum->cache->stored()), static function (string $name): bool {
+            return strncmp($name, Platform::STATE_PREFIX, strlen(Platform::STATE_PREFIX)) === 0;
+        });
+        self::assertSame([], array_values($left), 'no entry of the plugin is left in the datacache');
     }
 
     public function testUninstallCanKeepTheTables(): void
