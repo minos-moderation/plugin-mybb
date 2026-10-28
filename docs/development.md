@@ -426,10 +426,15 @@ reading the code; what the live run below goes through is verified on a real for
 server and runs `tests/Live/LiveForumTest.php` through the forum's own pages: the ACP's
 plugin and settings pages, `member.php`, `newreply.php`, `newthread.php`, `polls.php`,
 `editpost.php`, `modcp.php`, `showthread.php`, `printthread.php`, `search.php` and the
-real `minos-webhook.php`, with deliveries signed by the mock's worker. The database is
-only read; `tests/Live/fixtures/minos-live-cli.php` (copied into the forum, never shipped)
-sets the board up through MyBB's functions (`rebuild_settings`, `UserDataHandler`) and
-runs MyBB's parser and the plugin's `Platform` on the real `$db`; `minoslive.php`, a
+real `minos-webhook.php`, with deliveries signed by the mock's worker. The test reads the
+database to see what happened. It writes to it outside those pages only to set the stage:
+`tests/Live/fixtures/minos-live-cli.php` (copied into the forum, never shipped) changes
+board settings, a forum's parsing options and users through MyBB's own functions
+(`rebuild_settings`, `$cache->update_forums`, `UserDataHandler`), runs MyBB's parser, and
+runs the plugin's `Platform` on the real `$db` (the claim question, which puts the row's
+status back afterwards); the subscribers' `lastactive` is moved ahead (MyBB notifies once
+per visit), and the uninstall test drops a column of a kept table to stand for an older
+version's; `minoslive.php`, a
 watcher plugin of the test forum, logs the hooks that ran. `.github/workflows/live.yml`
 runs it on PHP 7.4 (MySQL 8.0) and PHP 8.3 (MySQL 8.0 and PostgreSQL 16) for pull
 requests that change `inc/`, the webhook, the lock, the build or the live files, and on

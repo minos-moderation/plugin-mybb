@@ -22,9 +22,11 @@ use PHPUnit\Framework\TestCase;
  * Every scenario goes through the forum's own pages — the ACP's plugin and settings pages,
  * `member.php`, `newreply.php`, `newthread.php`, `polls.php`, `editpost.php`, `modcp.php`,
  * `showthread.php`, `search.php` — and the real `minos-webhook.php`, with deliveries signed
- * by the mock's worker the way the gateway signs. The database is only READ, to see what
- * happened; the helper inside the forum (`minos-live-cli.php`) sets the board up through
- * MyBB's own functions.
+ * by the mock's worker the way the gateway signs. The database is read to see what
+ * happened; outside the pages it is written only to set the stage: the helper inside the
+ * forum (`minos-live-cli.php`) changes settings, forums and users through MyBB's own
+ * functions and runs the plugin's claim (putting the row back), the subscribers'
+ * `lastactive` moves ahead, and the uninstall test drops a column of the kept table.
  *
  * The tests run in order and share the forum. Each answer is recorded and written, at the
  * end, to `$MINOS_LIVE_OUT/live-<engine>.json` (and `reader-view.json`): the fixtures in
