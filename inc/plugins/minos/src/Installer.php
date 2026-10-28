@@ -96,7 +96,7 @@ final class Installer
         }
         $this->platform->removeSettings();
         $this->platform->removeTask();
-        $this->platform->removeState();
+        $this->platform->removeState([Task::SWITCHED_OFF, Submitter::REFUSAL]);
         if ($this->platform->input('no') === null) {
             $this->platform->dropTables();
         }
@@ -124,7 +124,7 @@ final class Installer
      */
     public function deactivate(?int $now = null): void
     {
-        if (!isset($this->platform->state()[Task::SWITCHED_OFF])) {
+        if ($this->platform->state(Task::SWITCHED_OFF) === null) {
             $this->platform->setState(Task::SWITCHED_OFF, $now ?? time());
         }
         $this->platform->setTaskEnabled(false);

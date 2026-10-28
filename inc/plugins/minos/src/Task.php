@@ -74,14 +74,14 @@ final class Task
     {
         $settings = new Settings($this->platform->settings());
         if (!$settings->enabled()) {
-            if (!isset($this->platform->state()[self::SWITCHED_OFF])) {
+            if ($this->platform->state(self::SWITCHED_OFF) === null) {
                 $this->platform->setState(self::SWITCHED_OFF, $now);
             }
             $this->forget($now);
             return ['timeouts' => 0, 'resent' => 0];
         }
         $this->platform->releaseStaleClaims($now - self::CLAIM_TTL_S);
-        if (isset($this->platform->state()[self::SWITCHED_OFF])) {
+        if ($this->platform->state(self::SWITCHED_OFF) !== null) {
             // On again: what waited while the plugin was off is sent again, with a fresh
             // timeout, instead of getting the failure mode all at once.
             $this->platform->rearmWaiting($now);

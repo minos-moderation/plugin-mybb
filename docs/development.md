@@ -112,7 +112,7 @@ applying for more than 5 min ─► back to claimed_from (the task)
   answers `404` before the signature, the task gives back no claim, applies no failure
   mode and sends nothing (it only forgets old data), and no new post is held. What was
   held stays in MyBB's queue. No usable secret: `401`.
-- Switched off, the task notes it in the plugin's datacache entry (`switched_off`), and so
+- Switched off, the task notes it in the datacache entry `minos_switched_off`, and so
   does a deactivation. The first run after the plugin is on again moves every
   `pending`/`retry` row back to `retry` with `submitted_at = retry_at = now` (a fresh
   timeout; `Platform::rearmWaiting`) and sends it in the same run, under the same id.
@@ -137,7 +137,7 @@ applying for more than 5 min ─► back to claimed_from (the task)
 - Rule D9.3(a): a refusal whose `ponow_za_s` (as the gateway gave it) ends after the row's
   `submitted_at` + timeout gets the failure mode at once (`gateway_limit`). A
   `limit_dobowy_klucza`, `limit_globalny_b2b` or `kolejka_pelna` refusal is kept in the
-  datacache entry (`refusal`: code, until) for the ACP notice "the gateway does not accept
+  datacache entry `minos_refusal` (code, until) for the ACP notice "the gateway does not accept
   until …"; the next `202` clears it, and it is not shown past its end.
 - `author_first_post` is read in the author's request and kept in `first_post` ('1', '0',
   '' for a guest), so a resubmission from the task sends it as first sent.
@@ -314,7 +314,7 @@ reading the code, not by running a live forum:
 | tasks: the `tasks` columns, `task_<file>($task)`, `fetch_next_run`, `add_task_log`, `$cache->update_tasks()`, a comma list of minutes | `inc/functions_task.php`, `admin/modules/tools/tasks.php`, `install/resources/mysql_db_tables.php` | `Platform`, `inc/tasks/minos.php` |
 | `$lang->load($section, true, true)` with the `english` fallback, `{1}` placeholders | `inc/class_language.php` | `Platform::lang` |
 | `$cache->read('plugins')['active']` | `admin/modules/config/plugins.php` | `Platform::isPluginActive` |
-| `$cache->read($name)`, `update($name, $contents)` (`replace_query` on `datacache`, serialized), `delete($name)`; every `datacache` row is loaded with the page | `inc/class_datacache.php` | `Platform::state`, `setState`, `removeState` |
+| `$cache->read($name, true)` (a hard read: from the database or the cache handler, not the copy loaded with the page), `update($name, $contents)` (`replace_query` on `datacache`, serialized, the whole entry), `delete($name)`. One entry per value of state, so two requests never write back each other's stale copy | `inc/class_datacache.php` | `Platform::state`, `setState`, `removeState` |
 | `$db` helpers: `simple_select`, `query`, `fetch_array`, `fetch_field`, `insert_query`, `update_query`, `delete_query`, `escape_string`, `affected_rows`, `table_exists`, `drop_table`, `write_query`, `build_create_table_collation`, `type`; `field_exists($field, $table)` and `add_column($table, $column, $definition)` (prefix added; `ALTER TABLE … ADD`) in every driver, the PDO ones included | `inc/db_mysqli.php`, `inc/db_pgsql.php`, `inc/db_sqlite.php`, `inc/AbstractPdoDbDriver.php`, `inc/db_mysql_pdo.php`, `inc/db_pgsql_pdo.php`, `inc/init.php` | `Platform` |
 | the minimal bootstrap `IN_MYBB`, `NO_ONLINE`, `THIS_SCRIPT`, `inc/init.php` (database, settings, cache, plugins; no session) | `inc/init.php`, `task.php` | `minos-webhook.php` |
 

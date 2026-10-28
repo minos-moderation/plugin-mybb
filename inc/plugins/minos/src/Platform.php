@@ -29,8 +29,12 @@ final class Platform
     /** The settings group's name. */
     public const SETTING_GROUP = 'minos';
 
-    /** The plugin's entry in MyBB's datacache (`$cache`): a small array of state. */
-    public const STATE_CACHE = 'minos';
+    /**
+     * The prefix of the plugin's entries in MyBB's datacache (`$cache`): one entry per value
+     * of state (`minos_switched_off`, `minos_refusal`), so requests that change different
+     * values never overwrite each other's.
+     */
+    public const STATE_PREFIX = 'minos_';
 
     /**
      * The pending table's columns, name → type ({@see columnSql}). A column added in a later
@@ -147,42 +151,46 @@ final class Platform
     }
 
     /**
-     * The plugin's state kept between requests (MyBB's datacache, loaded with every page).
+     * One value of the plugin's state kept between requests, read afresh from MyBB's
+     * datacache (`read($name, true)`: not the copy loaded when this request began, which
+     * another request may have changed since).
      *
-     * @return array<string,mixed> Empty when nothing is kept.
+     * @param string $key The value's name.
+     * @return mixed The value; null when none is kept.
      */
-    public function state(): array
+    public function state(string $key)
     {
-        $state = $this->cache->read(self::STATE_CACHE);
-        return is_array($state) ? $state : [];
+        $value = $this->cache->read(self::STATE_PREFIX . $key, true);
+        return $value === false ? null : $value;
     }
 
     /**
-     * Keeps one value of the plugin's state, or forgets it.
+     * Keeps one value of the plugin's state, or forgets it. Each value is its own datacache
+     * entry, written whole: a request that keeps one value never writes back a stale copy
+     * of another.
      *
      * @param string $key   The value's name.
-     * @param mixed  $value The value; null forgets it.
+     * @param mixed  $value The value (not false); null forgets it.
      */
     public function setState(string $key, $value): void
     {
-        $state = $this->state();
         if ($value === null) {
-            if (!array_key_exists($key, $state)) {
-                return;
-            }
-            unset($state[$key]);
-        } else {
-            $state[$key] = $value;
+            $this->cache->delete(self::STATE_PREFIX . $key);
+            return;
         }
-        $this->cache->update(self::STATE_CACHE, $state);
+        $this->cache->update(self::STATE_PREFIX . $key, $value);
     }
 
     /**
-     * Removes the plugin's datacache entry (uninstall).
+     * Removes the plugin's datacache entries (uninstall).
+     *
+     * @param array<int,string> $keys The values' names.
      */
-    public function removeState(): void
+    public function removeState(array $keys): void
     {
-        $this->cache->delete(self::STATE_CACHE);
+        foreach ($keys as $key) {
+            $this->cache->delete(self::STATE_PREFIX . $key);
+        }
     }
 
     /**

@@ -165,7 +165,7 @@ final class Admin
         }
         // The gateway's own code (checked against `[a-z0-9_]` by Gateway::classify) and a
         // time: never the key, never the answer's body.
-        $refusal = $this->platform->state()[Submitter::REFUSAL] ?? null;
+        $refusal = $this->platform->state(Submitter::REFUSAL);
         if (is_array($refusal) && (int)($refusal['until'] ?? 0) > $now) {
             $key = (string)($refusal['kod'] ?? '') === Submitter::DAILY_LIMIT ? 'minos_notice_daily_limit' : 'minos_notice_overloaded';
             $notices[] = self::e($this->platform->lang($key, date('Y-m-d H:i', (int)$refusal['until']), (string)$refusal['kod']));

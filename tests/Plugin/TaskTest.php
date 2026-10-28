@@ -4,7 +4,12 @@ declare(strict_types=1);
 
 namespace Minos\MyBB\Tests\Plugin;
 
+use ArrayObject;
+use Minos\MyBB\Gateway;
+use Minos\MyBB\Platform;
+use Minos\MyBB\Plugin;
 use Minos\MyBB\Status;
+use Minos\MyBB\Tests\Support\FakeCache;
 use Minos\MyBB\Tests\Support\PluginTestCase;
 use Minos\MyBB\Tests\Support\RecordingTransport;
 
@@ -199,6 +204,55 @@ final class TaskTest extends PluginTestCase
         self::assertSame([0, Status::PENDING], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
     }
 
+    /**
+     * A deactivation and a refused submission in two requests that both began before
+     * either wrote: neither write may drop the other's state (here: the "switched off" mark,
+     * without which the backlog is never sent again).
+     */
+    public function testARefusalDuringADeactivationKeepsTheSwitchedOffMark(): void
+    {
+        $waiting = $this->heldReply('Czekał podczas dezaktywacji.');
+        $datacache = self::datacache();
+        $deactivating = $this->request($datacache);
+        $posting = $this->request($datacache, new RecordingTransport([RecordingTransport::refused(429, 'limit_dobowy_klucza', 36000)]));
+
+        $deactivating->installer->deactivate(TIME_NOW);
+        $this->heldReply('Wysłany w tej samej chwili.');
+        self::assertSame($posting, Plugin::instance(), 'the post went through the second request');
+
+        $sent = new RecordingTransport();
+        $later = $this->request($datacache, $sent);
+        self::assertStringContainsString(date('Y-m-d H:i', TIME_NOW + 36000), (string)$later->admin->notice(TIME_NOW),
+            'the refusal survived the deactivation too');
+        $later->installer->activate();
+        $later->task->run(TIME_NOW);
+        self::assertSame(['mybb:' . $waiting], array_column($sent->lastBody()['elementy'] ?? [], 'id'), 'the backlog is sent again');
+    }
+
+    /**
+     * The task's run that sends the backlog again and clears the mark, beside a refused
+     * submission that began before it: the mark must not come back (the backlog would be
+     * sent twice).
+     */
+    public function testARefusalDuringTheResendDoesNotReviveTheSwitchedOffMark(): void
+    {
+        $waiting = $this->heldReply('Czekał podczas wyłączenia.');
+        $datacache = self::datacache();
+        $this->request($datacache)->installer->deactivate(TIME_NOW);
+        $sent = new RecordingTransport();
+        $resending = $this->request($datacache, $sent);
+        $this->request($datacache, new RecordingTransport([RecordingTransport::refused(429, 'kolejka_pelna', 60)]));
+
+        $resending->task->run(TIME_NOW);
+        $this->heldReply('Wysłany w tej samej chwili.');
+        $this->request($datacache, $sent)->task->run(TIME_NOW);
+
+        $sends = array_filter($sent->requests, static function (array $request) use ($waiting): bool {
+            return in_array('mybb:' . $waiting, array_column(json_decode($request['body'], true)['elementy'], 'id'), true);
+        });
+        self::assertCount(1, $sends, 'sent again once, not twice');
+    }
+
     public function testAResendOfAPostAHumanDecidedIsDropped(): void
     {
         $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(503, 'kolejka_niedostepna')]));
@@ -266,6 +320,28 @@ final class TaskTest extends PluginTestCase
         self::assertSame(Status::APPLYING, $this->forum->row($fresh)['status']);
         self::assertSame(200, $this->forum->deliver(self::payload($stale)));
         self::assertSame(Status::PUBLISHED, $this->forum->row($stale)['status'], 'a released row takes its verdict again');
+    }
+
+    /**
+     * MyBB's `datacache` table, shared by the requests of {@see request}.
+     *
+     * @return ArrayObject<string,mixed>
+     */
+    private static function datacache(): ArrayObject
+    {
+        return new ArrayObject(['plugins' => ['active' => ['minos' => 'minos']]]);
+    }
+
+    /**
+     * One more request to this forum: the plugin over its own copy of the datacache, loaded
+     * now (as MyBB loads it when a request begins), made the request's instance.
+     *
+     * @param ArrayObject<string,mixed> $datacache
+     */
+    private function request(ArrayObject $datacache, ?RecordingTransport $transport = null): Plugin
+    {
+        $platform = new Platform($this->forum->mybb, $this->forum->db, new FakeCache($datacache), $this->forum->lang, MYBB_ROOT, TABLE_PREFIX);
+        return Plugin::build($platform, new Gateway($transport ?? new RecordingTransport()));
     }
 
     private function age(int $pid, int $seconds): void
