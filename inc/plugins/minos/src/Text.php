@@ -16,7 +16,10 @@ namespace Minos\MyBB;
  *   KEPT — `Miłego dnia <b obelga>` shows every word. Only decimal numeric entities
  *   (`&#65;`) are decoded, as MyBB's `htmlspecialchars_uni` lets them through. In a forum
  *   with HTML on, tags are removed but the text of their `alt` and `title` attributes is
- *   kept, `<script>` and `<style>` go with their content, and entities are decoded.
+ *   kept, and entities are decoded. MyBB escapes `<script>`, `<style>`, `<base>` and
+ *   `<meta>` there (`parse_message`), so readers see those tags and what is between them as
+ *   text, and so are they sent; an HTML comment is hidden from readers, and so is it from
+ *   the gateway (verified on MyBB 1.8.41: `tests/fixtures/mybb-1.8.41/reader-view.json`).
  * - MyCode (when the forum parses it): `[quote=NAME]` becomes "NAME napisał(a):" before the
  *   quoted text; `[url=X]Y[/url]` becomes "Y (X)"; `[img]X[/img]` and `[video=…]X[/video]`
  *   become the address X; `[code]` and `[php]` keep their content as written; formatting
@@ -504,10 +507,16 @@ final class Text
 
     /**
      * HTML as its reader sees it: tags gone, `alt`/`title` text kept, entities decoded.
+     *
+     * MyBB 1.8.41 escapes `<script>`, `<style>`, `<base>` and `<meta>` in a forum with HTML
+     * on (`Postparser::parse_message`, the same pattern): the reader sees them as text, with
+     * what is between them. A comment is hidden: `<!-->` and `<!--->` end at once (HTML's
+     * own parsing), any other ends at `-->` (or `--!>`), and one never closed hides the rest.
      */
     private static function html(string $text): string
     {
-        $text = self::replace('#<(script|style)\b[^>]*>.*?</\1\s*>#is', ' ', $text);
+        $text = self::replace('#<(/?)(base|meta|script|style)([^>]*)>#i', '&lt;$1$2$3&gt;', $text);
+        $text = self::replace('#<!--(?:-?>|.*?(?:--!?>|\z))#s', ' ', $text);
         $text = self::replaceCallback('#<([a-z][a-z0-9]*)\b([^<>]*)>#i', static function (array $m): string {
             $shown = [];
             if (self::matchAll('#(?:^|\s)(?:alt|title)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'>]+))#i', $m[2], $attributes, PREG_SET_ORDER) > 0) {

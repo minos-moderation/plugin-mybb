@@ -492,7 +492,13 @@ final class LiveForumTest extends TestCase
         $pid = $board->reply($board->login(self::AUTHOR, self::$passwords[self::AUTHOR]), self::$tid,
             'Miły tekst <script>obelga</script> <!-- ukryta obelga --> [minos:cisza]');
         $shown = self::visible($board->shownBody($board->admin(), self::$tid, $pid));
+        $sent = array_values(array_filter($board->mockQueue(), static function (array $entry) use ($pid): bool {
+            return $entry['item_id'] === 'mybb:' . $pid;
+        }));
         $board->cli(['op' => 'forum', 'fid' => Board::FID, 'values' => array_map('intval', $defaults)]);
+        self::assertCount(1, $sent);
+        self::assertSame('Miły tekst <script>obelga</script> [minos:cisza]', $sent[0]['text'],
+            'the plugin sends what the page shows: the escaped tags, not the comment');
         self::$answers['reader_view'] = $cases;
         self::$answers['html_forum_page'] = ['text' => $shown['text']];
         self::assertStringContainsString('<script>obelga</script>', $shown['text'], 'MyBB shows <script> as text');

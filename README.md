@@ -133,6 +133,9 @@ Wysyłane jest tylko:
   stronie:
   - na forum bez HTML (domyślnie) znaki `<…>` są zwykłym tekstem i zostają w całości;
     na forum z HTML znaczniki znikają, ale tekst z atrybutów `alt` i `title` zostaje;
+    znaczniki `<script>` i `<style>` MyBB pokazuje tam jako zwykły tekst (razem z tym, co
+    między nimi), więc tak są wysyłane, a komentarzy HTML (`<!-- … -->`) czytelnik nie
+    widzi, więc nie są wysyłane;
   - cytat `[quote=NAZWA]` staje się „NAZWA napisał(a):” i cytowanym tekstem;
     `[url=ADRES]opis[/url]` — „opis (ADRES)”; `[img]ADRES[/img]` i filmy — samym adresem;
   - MyCode, którego MyBB nie rozpozna (nieznany znacznik, znacznik bez pary, forum

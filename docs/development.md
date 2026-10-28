@@ -77,8 +77,10 @@ The text readers SEE, following MyBB's own text renderer
 
 - HTML off (MyBB's default): `<…>` is literal on the page and stays; only decimal numeric
   entities are decoded (`htmlspecialchars_uni` lets them through). HTML on: tags go, the
-  text of `alt`/`title` stays, `<script>`/`<style>` go with their content, entities are
-  decoded.
+  text of `alt`/`title` stays, entities are decoded; `<script>`, `<style>`, `<base>` and
+  `<meta>` stay as text with what is between them (MyBB escapes them, `parse_message`),
+  and an HTML comment goes (`<!-->` and `<!--->` end at once, `-->` or `--!>` end any
+  other, one never closed hides the rest) — as the live run shows (`reader-view.json`).
 - MyCode: `[quote=NAME]` → "NAME napisał(a):"; `[url=X]Y[/url]` → "Y (X)"; `[img]X[/img]`,
   `[video=…]X[/video]` → X; `[code]`/`[php]` keep their content; formatting tags go; MyCode
   MyBB would not parse stays literally.
