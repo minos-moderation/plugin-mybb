@@ -302,8 +302,10 @@ final class Text
      * an image (`[img]` with MyBB's image MyCode on, an `<img>` on an HTML forum — its `alt`
      * or `title` notwithstanding), a video MyBB embeds (a known site, a valid address), an
      * attachment, or a link whose label shows nothing (`[url=X] [/url]`, `[url=X][img]…`,
-     * `<a href="X"> </a>`). A bare address the reader sees (`https://…`, `[url]X[/url]`, an
-     * image or video tag MyBB does not render) is text. MyBB 1.8.41's reader view, recorded
+     * `<a href="X"> </a>`), with nothing else that takes visible place — white space and
+     * invisible characters (a zero-width space, a soft hyphen…) do not. A bare address the
+     * reader sees (`https://…`, `[url]X[/url]`, an image or video tag MyBB does not render)
+     * is text. MyBB 1.8.41's reader view, recorded
      * by the live run (`tests/fixtures/mybb-1.8.41/reader-view.json`), is the reference.
      * When PCRE fails on this reading, the answer is yes: in doubt, the text is sent.
      *
@@ -313,12 +315,23 @@ final class Text
     public static function shows(string $message, array $forum = []): bool
     {
         try {
-            return self::render($message, $forum, true) !== '';
+            return !self::blank(self::render($message, $forum, true));
         } catch (TextError $e) {
             // Not knowing is no reason to send less: the post goes out as {@see visible}
             // renders it (whose own failure is `error`, a separate matter).
             return true;
         }
+    }
+
+    /**
+     * Whether a text shows a reader nothing: only white space, separators (`\p{Z}`: U+3000,
+     * U+2028…) and format characters (`\p{Cf}`: U+200B, U+2060, U+FEFF, the soft hyphen
+     * U+00AD…), which take no visible place on the page. When PCRE fails here the text is
+     * not blank: in doubt, it is sent.
+     */
+    private static function blank(string $text): bool
+    {
+        return preg_replace('/[\p{Cf}\p{Z}\s]+/u', '', $text) === '';
     }
 
     /**

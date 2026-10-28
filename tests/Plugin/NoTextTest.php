@@ -49,6 +49,22 @@ final class NoTextTest extends PluginTestCase
             'an attachment'               => ['[attachment=4]', []],
             'HTML: an image with alt and title' => ['<img src="https://example.com/a.png" alt="podpis" title="tytuł">', ['allowhtml' => 1]],
             'HTML: a link without text'   => ['<a href="https://example.com/" title="tytuł"> </a>', ['allowhtml' => 1]],
+            // Characters that take no visible place (the review of #7, major 1).
+            'an image and U+200B'         => ["[img]https://example.com/a.png[/img]\u{200B}", []],
+            'an image and &#8203;'        => ['[img]https://example.com/a.png[/img]&#8203;', []],
+            'an image and U+2060'         => ["[img]https://example.com/a.png[/img]\u{2060}", []],
+            'an image and U+FEFF'         => ["[img]https://example.com/a.png[/img]\u{FEFF}", []],
+            'an image and U+00AD'         => ["[img]https://example.com/a.png[/img]\u{00AD}", []],
+            'an image and &#173;'         => ['[img]https://example.com/a.png[/img]&#173;', []],
+            'an image and U+3000'         => ["[img]https://example.com/a.png[/img]\u{3000}", []],
+            'an image and U+2028'         => ["[img]https://example.com/a.png[/img]\u{2028}", []],
+            'a link labelled U+00AD'      => ["[url=https://example.com/]\u{00AD}[/url]", []],
+            'a blank link and U+00AD'     => ["[url=https://example.com/] [/url]\u{00AD}", []],
+            'only U+200B'                 => ["\u{200B}", []],
+            'bold U+200B'                 => ["[b]\u{200B}[/b]", []],
+            'HTML: an image with alt and &#8203;' => ['<img src="https://example.com/a.png" alt="podpis">&#8203;', ['allowhtml' => 1]],
+            'HTML: a link with a title and &shy;' => ['<a href="https://example.com/" title="tytuł">&shy;</a>', ['allowhtml' => 1]],
+            'HTML: an image and &ZeroWidthSpace;' => ['<img src="https://example.com/a.png">&ZeroWidthSpace;', ['allowhtml' => 1]],
         ];
     }
 
@@ -81,6 +97,9 @@ final class NoTextTest extends PluginTestCase
             'an empty link MyBB leaves'   => ['[url=https://example.com/][/url]', [], '[url=https://example.com/][/url]'],
             'a quote of an image'         => ['[quote=Ktoś][img]https://example.com/a.png[/img][/quote]', [],
                 "Ktoś napisał(a):\nhttps://example.com/a.png"],
+            'an image and &shy; MyBB shows as typed' => ['[img]https://example.com/a.png[/img]&shy;', [],
+                'https://example.com/a.png&shy;'],
+            'a word and U+200B'           => ["obelga\u{200B}", [], "obelga\u{200B}"],
             'HTML: an image beside text, its hints with it' => ['Tekst <img src="https://example.com/a.png" alt="podpis">',
                 ['allowhtml' => 1], 'Tekst podpis'],
         ];

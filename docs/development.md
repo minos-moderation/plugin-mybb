@@ -106,7 +106,8 @@ The text readers SEE, following MyBB's own text renderer
   MyCode on), a `[video=…]` of a site MyBB embeds with a valid address, an attachment,
   `[url=X]` around a label that shows nothing (blanks, an image, empty formatting), or on an
   HTML forum an `<img>` — its `alt`/`title` notwithstanding — or an `<a>` without text, is
-  `no_text`. A bare address the reader sees is text (`https://…`, `[url]X[/url]`, an image
+  `no_text`; so is one whose only other characters take no visible place (white space,
+  `\p{Z}` separators, `\p{Cf}` format characters: U+200B, U+2060, U+FEFF, `&#173;`…). A bare address the reader sees is text (`https://…`, `[url]X[/url]`, an image
   or video tag MyBB leaves as a link or as typed); beside other text, an image's address
   and a hint are sent as before. The cases are MyBB 1.8.41's reader view as the live run
   recorded it (`reader-view.json`, checked by `ReaderViewTest`). The reading is linear (a

@@ -88,10 +88,13 @@ final class ReaderViewTest extends TestCase
     }
 
     /**
+     * The words of a text: what is between white space, separators and invisible format
+     * characters (a zero-width space is no word a reader sees).
+     *
      * @return array<int,string>
      */
     private static function words(string $text): array
     {
-        return array_values(array_filter((array)preg_split('/\s+/u', $text), 'strlen'));
+        return array_values(array_filter((array)preg_split('/[\p{Cf}\p{Z}\s]+/u', $text), 'strlen'));
     }
 }

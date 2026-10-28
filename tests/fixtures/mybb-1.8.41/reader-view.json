@@ -348,6 +348,100 @@
             "hints": [],
             "media": 0,
             "has_text": true
+        },
+        "img-zero-width-space": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[img]https://example.com/obrazek.png[/img]​",
+            "html": "<img src=\"https://example.com/obrazek.png\" loading=\"lazy\"  alt=\"[Image: obrazek.png]\" class=\"mycode_img\" />​",
+            "text": "​",
+            "hints": [
+                "[Image: obrazek.png]"
+            ],
+            "media": 1,
+            "has_text": false
+        },
+        "img-soft-hyphen-entity": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[img]https://example.com/obrazek.png[/img]&#173;",
+            "html": "<img src=\"https://example.com/obrazek.png\" loading=\"lazy\"  alt=\"[Image: obrazek.png]\" class=\"mycode_img\" />&#173;",
+            "text": "­",
+            "hints": [
+                "[Image: obrazek.png]"
+            ],
+            "media": 1,
+            "has_text": false
+        },
+        "img-shy-html-off": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "[img]https://example.com/obrazek.png[/img]&shy;",
+            "html": "<img src=\"https://example.com/obrazek.png\" loading=\"lazy\"  alt=\"[Image: obrazek.png]\" class=\"mycode_img\" />&amp;shy;",
+            "text": "&shy;",
+            "hints": [
+                "[Image: obrazek.png]"
+            ],
+            "media": 1,
+            "has_text": true
+        },
+        "only-zero-width-space": {
+            "forum": {
+                "allowhtml": 0,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "​",
+            "html": "​",
+            "text": "​",
+            "hints": [],
+            "media": 0,
+            "has_text": false
+        },
+        "html-img-alt-zwsp": {
+            "forum": {
+                "allowhtml": 1,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "<img src=\"https://example.com/a.png\" alt=\"podpis\">&#8203;",
+            "html": "<img src=\"https://example.com/a.png\" alt=\"podpis\">&#8203;",
+            "text": "​",
+            "hints": [
+                "podpis"
+            ],
+            "media": 1,
+            "has_text": false
+        },
+        "html-title-shy": {
+            "forum": {
+                "allowhtml": 1,
+                "allowmycode": 1,
+                "allowimgcode": 1,
+                "allowvideocode": 1
+            },
+            "message": "<a href=\"https://example.com/\" title=\"tytuł\">&shy;</a>",
+            "html": "<a href=\"https://example.com/\" title=\"tytuł\">&shy;</a>",
+            "text": "­",
+            "hints": [
+                "tytuł"
+            ],
+            "media": 0,
+            "has_text": false
         }
     }
 }

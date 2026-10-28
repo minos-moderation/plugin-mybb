@@ -86,6 +86,12 @@ final class LiveForumTest extends TestCase
         'url-label'            => [[], '[url=https://example.com/]opis linku[/url]'],
         'url-bare-tag'         => [[], '[url]https://example.com/strona[/url]'],
         'url-bare'             => [[], 'https://example.com/strona'],
+        'img-zero-width-space' => [[], "[img]https://example.com/obrazek.png[/img]\u{200B}"],
+        'img-soft-hyphen-entity' => [[], '[img]https://example.com/obrazek.png[/img]&#173;'],
+        'img-shy-html-off'     => [[], '[img]https://example.com/obrazek.png[/img]&shy;'],
+        'only-zero-width-space' => [[], "\u{200B}"],
+        'html-img-alt-zwsp'    => [['allowhtml' => 1], '<img src="https://example.com/a.png" alt="podpis">&#8203;'],
+        'html-title-shy'       => [['allowhtml' => 1], '<a href="https://example.com/" title="tytuł">&shy;</a>'],
     ];
 
     public static function setUpBeforeClass(): void
@@ -736,7 +742,9 @@ final class LiveForumTest extends TestCase
             'text' => $text,
             'hints' => array_values(array_filter($hints, 'strlen')),
             'media' => $xpath->query('//img|//iframe|//video|//object|//embed')->length,
-            'has_text' => $text !== '',
+            // White space, separators and format characters (a zero-width space, a soft
+            // hyphen) take no visible place: a text of only those shows nothing.
+            'has_text' => preg_replace('/[\p{Cf}\p{Z}\s]+/u', '', $text) !== '',
         ];
     }
 

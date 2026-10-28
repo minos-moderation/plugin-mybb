@@ -227,7 +227,9 @@ werdyktu nie ma:
   ich treść nie ma tekstu: sam tytuł nie jest tekstem do oceny i nie jest wysyłany. Tekstu
   do oceny nie ma też post, którego czytelnik widzi tylko obrazek (`[img]`, a na forum
   z HTML `<img>` — nawet z opisem `alt` albo `title`), film osadzony przez MyBB,
-  załącznik albo link bez widocznego opisu (`[url=ADRES] [/url]`, link wokół obrazka):
+  załącznik albo link bez widocznego opisu (`[url=ADRES] [/url]`, link wokół obrazka),
+  także gdy obok są tylko znaki niewidoczne (np. spacja o zerowej szerokości, miękki
+  dywiz):
   brama nie ocenia obrazów, a adres, którego czytelnik nie widzi, nie jest treścią postu.
   Goły adres widoczny dla czytelnika (`https://…`) jest tekstem i jest wysyłany. Pytanie
   i opcje ankiety są tekstem, więc wątek z ankietą i pustą treścią jest wysyłany z tytułem
