@@ -29,19 +29,71 @@ env:
   MINOS_LIVE_DB_PASS: atrapa-haslo-live
 
 jobs:
-  live:
-    name: PHP ${{ matrix.php }} · ${{ matrix.engines }}
+  # The oldest PHP the plugin promises, on MySQL (no PostgreSQL container: it would not be
+  # used).
+  php74:
+    name: PHP 7.4 · mysqli
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # The oldest PHP the plugin promises, on MySQL; a current one on both engines.
-          - php: '7.4'
-            engines: mysqli
-          - php: '8.3'
-            engines: mysqli pgsql
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: atrapa-root-live
+          MYSQL_DATABASE: mybb_live
+          MYSQL_USER: mybb_live
+          MYSQL_PASSWORD: atrapa-haslo-live
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -patrapa-root-live"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      # Pinned to the commits tests.yml and release.yml run (docs/development.md,
+      # "Continuous integration").
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        with:
+          persist-credentials: false
+      - name: MyBB 1.8.41
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        with:
+          repository: mybb/mybb
+          ref: mybb_1841
+          path: build/mybb-src
+          persist-credentials: false
+      - name: The tag names the recorded commit
+        run: test "$(git -C build/mybb-src rev-parse HEAD)" = "$MYBB_COMMIT"
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240  # 2.37.2
+        with:
+          php-version: '7.4'
+          extensions: curl, json, mbstring, xml, dom, simplexml, mysqli, pdo_mysql, gd, pdo_sqlite
+          coverage: none
+      - name: Dependencies
+        env:
+          COMPOSER_AUTH: '{"github-oauth": {"github.com": "${{ secrets.GITHUB_TOKEN }}"}}'
+        run: composer install --no-interaction --no-progress --prefer-dist
+      - name: The live run
+        env:
+          MYBB_DIR: build/mybb-src
+          MINOS_LIVE_OUT: build/live-answers/php7.4
+        run: |
+          bash bin/verify-mybb-1841.sh mysqli
+          php tests/Live/compare-answers.php "$MINOS_LIVE_OUT" tests/fixtures/mybb-1.8.41
+      - name: The answers
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: mybb-1.8.41-answers-php7.4
+          path: |
+            build/live-answers/
+            build/live/*/forum-server.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # A current PHP, on both engines.
+  php83:
+    name: PHP 8.3 · mysqli, pgsql
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       mysql:
         image: mysql:8.0
@@ -64,8 +116,6 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U mybb_live" --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
-      # Pinned to the commits tests.yml and release.yml run (docs/development.md,
-      # "Continuous integration").
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
         with:
           persist-credentials: false
@@ -80,27 +130,32 @@ jobs:
         run: test "$(git -C build/mybb-src rev-parse HEAD)" = "$MYBB_COMMIT"
       - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240  # 2.37.2
         with:
-          php-version: ${{ matrix.php }}
+          php-version: '8.3'
           extensions: curl, json, mbstring, xml, dom, simplexml, mysqli, pdo_mysql, pgsql, pdo_pgsql, gd, pdo_sqlite
           coverage: none
       - name: Dependencies
         env:
           COMPOSER_AUTH: '{"github-oauth": {"github.com": "${{ secrets.GITHUB_TOKEN }}"}}'
         run: composer install --no-interaction --no-progress --prefer-dist
-      - name: The live run
+      - name: The live run on MySQL
         env:
           MYBB_DIR: build/mybb-src
-        shell: bash
+          MINOS_LIVE_OUT: build/live-answers/php8.3
         run: |
-          for engine in ${{ matrix.engines }}; do
-            MINOS_LIVE_OUT="build/live-answers/php${{ matrix.php }}" bash bin/verify-mybb-1841.sh "$engine"
-            php tests/Live/compare-answers.php "build/live-answers/php${{ matrix.php }}" tests/fixtures/mybb-1.8.41
-          done
+          bash bin/verify-mybb-1841.sh mysqli
+          php tests/Live/compare-answers.php "$MINOS_LIVE_OUT" tests/fixtures/mybb-1.8.41
+      - name: The live run on PostgreSQL
+        env:
+          MYBB_DIR: build/mybb-src
+          MINOS_LIVE_OUT: build/live-answers/php8.3
+        run: |
+          bash bin/verify-mybb-1841.sh pgsql
+          php tests/Live/compare-answers.php "$MINOS_LIVE_OUT" tests/fixtures/mybb-1.8.41
       - name: The answers
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
-          name: mybb-1.8.41-answers-php${{ matrix.php }}
+          name: mybb-1.8.41-answers-php8.3
           path: |
             build/live-answers/
             build/live/*/forum-server.log
