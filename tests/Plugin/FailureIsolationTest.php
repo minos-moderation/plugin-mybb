@@ -116,6 +116,7 @@ final class FailureIsolationTest extends PluginTestCase
             $pids[] = $this->heldReply('Wpis numer ' . $i . '.');
             $this->forum->platform()->updatePending($pids[$i], ['retry_at' => TIME_NOW - 1]);
         }
+        $this->forum->endPause();
         // Every change of the second row fails, as a database error would.
         $this->forum->pdo->exec('CREATE TRIGGER minos_test_broken BEFORE UPDATE ON mybb_minos_pending WHEN OLD.pid = ' . $pids[1]
             . " BEGIN SELECT RAISE(ABORT, '" . \Moderation::SECRET_TEXT . "'); END");
@@ -131,6 +132,29 @@ final class FailureIsolationTest extends PluginTestCase
         $this->assertLoggedOnce('resubmit', $pids[1]);
     }
 
+    /**
+     * While the shared pause lasts the task only moves due rows to its end: one row that
+     * throws there leaves the others.
+     */
+    public function testARowThatThrowsDuringThePauseLeavesTheOthers(): void
+    {
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(503, 'kolejka_niedostepna', 120)]));
+        $pids = [];
+        for ($i = 0; $i < 3; $i++) {
+            $pids[] = $this->heldReply('Wpis numer ' . $i . '.');
+            $this->forum->platform()->updatePending($pids[$i], ['retry_at' => TIME_NOW - 1]);
+        }
+        $this->forum->pdo->exec('CREATE TRIGGER minos_test_broken BEFORE UPDATE ON mybb_minos_pending WHEN OLD.pid = ' . $pids[1]
+            . " BEGIN SELECT RAISE(ABORT, '" . \Moderation::SECRET_TEXT . "'); END");
+
+        task_minos(['tid' => 1]);
+
+        self::assertSame([TIME_NOW + 120, TIME_NOW - 1, TIME_NOW + 120], array_map(function (int $pid): int {
+            return (int)$this->forum->row($pid)['retry_at'];
+        }, $pids));
+        $this->assertLoggedOnce('resubmit', $pids[1]);
+    }
+
     public function testABatchThatThrowsLeavesTheOtherBatches(): void
     {
         $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(503, 'kolejka_niedostepna')]));
@@ -139,6 +163,7 @@ final class FailureIsolationTest extends PluginTestCase
             $pids[] = $this->heldReply('Wpis ' . $i . '.');
             $this->forum->platform()->updatePending($pids[$i], ['retry_at' => TIME_NOW - 1]);
         }
+        $this->forum->endPause();
         $calls = 0;
         $this->forum->plugin(function () use (&$calls): array {
             if (++$calls === 1) {

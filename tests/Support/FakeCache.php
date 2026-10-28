@@ -10,7 +10,9 @@ use ArrayObject;
  * MyBB's `$cache` (datacache): `read`, `update`, `delete` and `update_tasks`, with MyBB
  * 1.8.41's semantics (`inc/class_datacache.php`, database mode): every entry is loaded
  * into the request's own copy when the request begins; `read($name)` answers from that
- * copy, `read($name, true)` from the database; `update` and `delete` change both.
+ * copy, `read($name, true)` from the database (and refreshes the copy); `update` changes
+ * both; `delete` deletes the database row ONLY — MyBB's `delete()` never touches the
+ * request's copy, so a plain `read` in the same request still answers the old value.
  *
  * Several stand-ins built over one `$database` are several concurrent requests of one
  * forum. The plugin is active by default.
@@ -51,9 +53,9 @@ final class FakeCache
 
     public function delete($name, $greedy = false)
     {
-        unset($this->data[$name]);
-        // Unsetting a missing offset of an ArrayObject raises a notice on PHP 7.4 (not on 8);
-        // MyBB's delete of a missing entry is a DELETE that matches nothing.
+        // The request's copy keeps the entry, as in MyBB. Unsetting a missing offset of an
+        // ArrayObject raises a notice on PHP 7.4 (not on 8); MyBB's delete of a missing
+        // entry is a DELETE that matches nothing.
         if ($this->database->offsetExists($name)) {
             $this->database->offsetUnset($name);
         }
@@ -62,5 +64,15 @@ final class FakeCache
     public function update_tasks()
     {
         $this->tasksUpdated++;
+    }
+
+    /**
+     * The `datacache` table as it is now (what every request that begins now loads).
+     *
+     * @return array<string,mixed> Entries by name.
+     */
+    public function stored(): array
+    {
+        return $this->database->getArrayCopy();
     }
 }

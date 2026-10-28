@@ -29,10 +29,13 @@ final class Platform
     /** The settings group's name. */
     public const SETTING_GROUP = 'minos';
 
+    /** Between a poll's options in MyBB's `polls.options` column. */
+    private const POLL_OPTIONS_SEPARATOR = '||~|~||';
+
     /**
      * The prefix of the plugin's entries in MyBB's datacache (`$cache`): one entry per value
-     * of state (`minos_switched_off`, `minos_refusal`), so requests that change different
-     * values never overwrite each other's.
+     * of state (`minos_switched_off`, `minos_refusal`, `minos_pause`), so requests that
+     * change different values never overwrite each other's.
      */
     public const STATE_PREFIX = 'minos_';
 
@@ -55,6 +58,16 @@ final class Platform
         'apply_errors' => 'small',
         // `author_first_post` as first sent, for a resubmission: '1', '0', or '' (a guest).
         'first_post' => 'varchar(1)',
+        // The revision being assessed: 0 is sent as `mybb:<pid>`, n as `mybb:<pid>.<n>`
+        // ({@see Submitter::itemId}); an author's edit of a waiting post adds one.
+        'rev' => 'small',
+        // The gateway's answer as delivered (a wire value: `bezpieczne`, `ocenzurowane`,
+        // `zablokowane` or `nieocenione`, whatever the plugin then did) and when it came:
+        // with `accepted_at` (the 202), the ACP's time-to-verdict figures.
+        'answer' => 'varchar(20)', 'answered_at' => 'int',
+        // Whether a reply's own subject was sent with it (`Text::ownSubject`), as decided
+        // at its first send or by the edit that started its revision.
+        'own_subject' => 'flag',
     ];
 
     /** The log table's columns. */
@@ -326,33 +339,66 @@ final class Platform
     // ---------------------------------------------------------------- posts
 
     /**
-     * A post as it is now, with whether it opens its thread.
+     * A post as it is now, with whether it opens its thread, its thread's title, the subject
+     * of the post it replies to (`posts.replyto`, '' for none), and — for the first post of
+     * a thread with a poll — the poll as `showthread.php` reads it (`threads.poll` →
+     * `polls`; the options are one string, `||~|~||` between them, of which `numoptions`
+     * are shown).
      *
      * @param int $pid The post.
-     * @return array{pid:int,tid:int,fid:int,visible:int,subject:string,message:string,first:bool}|null
+     * @return array{pid:int,tid:int,fid:int,visible:int,subject:string,message:string,first:bool,thread_subject:string,replyto_subject:string,poll:array{question:string,options:array<int,string>}|null}|null
      *     Null when it no longer exists.
      */
     public function post(int $pid): ?array
     {
         $query = $this->db->query(
-            'SELECT p.pid, p.tid, p.fid, p.visible, p.subject, p.message, t.firstpost'
+            'SELECT p.pid, p.tid, p.fid, p.visible, p.subject, p.message, t.firstpost, t.subject AS thread_subject,'
+            . ' r.subject AS replyto_subject,'
+            . ' pl.pid AS poll_id, pl.question AS poll_question, pl.options AS poll_options, pl.numoptions AS poll_numoptions'
             . ' FROM ' . $this->prefix . 'posts p'
             . ' LEFT JOIN ' . $this->prefix . 'threads t ON (t.tid=p.tid)'
+            . ' LEFT JOIN ' . $this->prefix . "posts r ON (r.pid=p.replyto AND p.replyto>'0')"
+            . ' LEFT JOIN ' . $this->prefix . "polls pl ON (pl.pid=t.poll AND t.poll>'0')"
             . " WHERE p.pid='" . $pid . "'"
         );
         $row = $this->db->fetch_array($query);
         if (!is_array($row) || !isset($row['pid'])) {
             return null;
         }
+        $first = (int)$row['firstpost'] === (int)$row['pid'];
+        $poll = null;
+        if ($first && (int)($row['poll_id'] ?? 0) > 0) {
+            $poll = [
+                'question' => (string)$row['poll_question'],
+                'options'  => array_slice(explode(self::POLL_OPTIONS_SEPARATOR, (string)$row['poll_options']), 0,
+                    max(0, (int)$row['poll_numoptions'])),
+            ];
+        }
         return [
-            'pid'     => (int)$row['pid'],
-            'tid'     => (int)$row['tid'],
-            'fid'     => (int)$row['fid'],
-            'visible' => (int)$row['visible'],
-            'subject' => (string)$row['subject'],
-            'message' => (string)$row['message'],
-            'first'   => (int)$row['firstpost'] === (int)$row['pid'],
+            'pid'            => (int)$row['pid'],
+            'tid'            => (int)$row['tid'],
+            'fid'            => (int)$row['fid'],
+            'visible'        => (int)$row['visible'],
+            'subject'        => (string)$row['subject'],
+            'message'        => (string)$row['message'],
+            'first'          => $first,
+            'thread_subject' => (string)($row['thread_subject'] ?? ''),
+            'replyto_subject' => (string)($row['replyto_subject'] ?? ''),
+            'poll'           => $poll,
         ];
+    }
+
+    /**
+     * The first post of the thread whose poll `polls.php` has just created or changed: its
+     * `polls_do_newpoll_end` and `polls_do_editpoll_end` hooks run in the script's global
+     * scope with the thread's row in `$thread`, and pass no arguments.
+     *
+     * @return int The post id; 0 when there is no such thread row.
+     */
+    public function pollThreadFirstPost(): int
+    {
+        $thread = $GLOBALS['thread'] ?? null;
+        return is_array($thread) ? (int)($thread['firstpost'] ?? 0) : 0;
     }
 
     /**
@@ -449,7 +495,8 @@ final class Platform
             'prefix_len' => 0, 'text_len' => 0, 'verdict' => '', 'categories' => '',
             'support' => 0, 'error_code' => '', 'decided_at' => 0, 'auto_published' => 0,
             'claimed_at' => 0, 'claimed_from' => '', 'original_text' => '', 'sent_sha256' => '',
-            'masked_text' => '', 'apply_errors' => 0, 'first_post' => '',
+            'masked_text' => '', 'apply_errors' => 0, 'first_post' => '', 'rev' => 0,
+            'answer' => '', 'answered_at' => 0, 'own_subject' => 0,
         ]));
     }
 
@@ -476,15 +523,19 @@ final class Platform
      * @param array<int,string> $from             The statuses it may be taken from.
      * @param bool              $autoPublishedOnly Only a row the plugin itself published
      *     in fail-open mode (`auto_published`).
+     * @param int|null          $rev              Only while the row is at this revision — how a
+     *     verdict for a revision an edit has since replaced is kept from being applied.
      * @return bool True for the one caller that changed it.
      */
-    public function claimPending(int $pid, int $now, array $from = Status::OPEN, bool $autoPublishedOnly = false): bool
+    public function claimPending(int $pid, int $now, array $from = Status::OPEN, bool $autoPublishedOnly = false,
+        ?int $rev = null): bool
     {
         foreach ($from as $status) {
             $this->db->update_query(self::PENDING_TABLE, [
                 'status' => Status::APPLYING, 'claimed_from' => $this->db->escape_string($status), 'claimed_at' => $now,
             ], "pid='" . $pid . "' AND status='" . $this->db->escape_string($status) . "'"
-                . ($autoPublishedOnly ? " AND auto_published='1'" : ''));
+                . ($autoPublishedOnly ? " AND auto_published='1'" : '')
+                . ($rev !== null ? " AND rev='" . $rev . "'" : ''));
             if ((int)$this->db->affected_rows() === 1) {
                 return true;
             }
@@ -529,14 +580,47 @@ final class Platform
      * @param string|null              $onlyIf Change it only while it has this status — how
      *     a submission records the gateway's answer without overwriting a verdict that a
      *     fast webhook delivery applied in the meantime.
+     * @param int|null                 $rev    Change it only while it is at this revision — how
+     *     the answer to a request records nothing on a revision an edit started while the
+     *     request was on its way.
      */
-    public function updatePending(int $pid, array $fields, ?string $onlyIf = null): void
+    public function updatePending(int $pid, array $fields, ?string $onlyIf = null, ?int $rev = null): void
     {
         $where = "pid='" . $pid . "'";
         if ($onlyIf !== null) {
             $where .= " AND status='" . $this->db->escape_string($onlyIf) . "'";
         }
+        if ($rev !== null) {
+            $where .= " AND rev='" . $rev . "'";
+        }
         $this->db->update_query(self::PENDING_TABLE, $this->escaped($fields), $where);
+    }
+
+    /**
+     * Starts a new revision of a post an author edited while the plugin was waiting for its
+     * verdict (`pending`, `retry`) or after the failure mode held it because no verdict came
+     * ({@see Status::REVISED_REASONS}): one conditional `UPDATE`, so a verdict being applied
+     * at the same moment and the edit never both win. The row waits again as `retry`, due
+     * now, with a fresh receive timeout and nothing of the earlier attempt (its digest, its
+     * outcome); the task sends it under the next revision's id.
+     *
+     * @param int      $pid        The post.
+     * @param int      $now        Unix seconds.
+     * @param int|null $ownSubject For a reply: whether its subject goes with the new
+     *     revision (1 or 0); null keeps what the row has.
+     * @return bool True when the row now waits as a new revision.
+     */
+    public function revise(int $pid, int $now, ?int $ownSubject = null): bool
+    {
+        $this->db->write_query('UPDATE ' . $this->prefix . self::PENDING_TABLE
+            . " SET rev=rev+1, status='" . Status::RETRY . "', submitted_at='" . $now . "', accepted_at='0',"
+            . ($ownSubject !== null ? " own_subject='" . ($ownSubject === 1 ? 1 : 0) . "'," : '')
+            . " retry_at='" . $now . "', attempts='0', error_code='', verdict='', categories='', support='0',"
+            . " decided_at='0', auto_published='0', claimed_at='0', claimed_from='', sent_sha256='',"
+            . " masked_text='', apply_errors='0', truncated='0', prefix_len='0', text_len='0'"
+            . " WHERE pid='" . $pid . "' AND (status IN ('" . implode("','", Status::OPEN) . "')"
+            . " OR (status='" . Status::HELD . "' AND verdict IN ('" . implode("','", Status::REVISED_REASONS) . "')))");
+        return (int)$this->db->affected_rows() === 1;
     }
 
     /**
@@ -584,8 +668,9 @@ final class Platform
     }
 
     /**
-     * The newest rows a moderator should look at: held, flagged for support, waiting, or left
-     * to a human after a step kept failing.
+     * The newest rows a moderator should look at: held, flagged for support, waiting, decided
+     * by a human before the verdict came (a moderator's edit, say), or left to a human after a
+     * step kept failing.
      *
      * @param int $limit At most this many.
      * @return array<int,array<string,mixed>> Rows, newest first.
@@ -594,8 +679,30 @@ final class Platform
     {
         return $this->rows(self::PENDING_TABLE,
             "support='1' OR auto_published='1' OR verdict='" . Status::REASON_APPLY_ERROR . "' OR status IN ('"
-                . implode("','", [Status::HELD, Status::PENDING, Status::RETRY, Status::APPLYING]) . "')",
+                . implode("','", [Status::HELD, Status::PENDING, Status::RETRY, Status::APPLYING, Status::SUPERSEDED]) . "')",
             ['order_by' => 'submitted_at', 'order_dir' => 'DESC', 'limit' => $limit]);
+    }
+
+    /**
+     * The verdicts the gateway delivered since a moment: for each, its answer and, when the
+     * row kept the moment of the gateway's `202`, the seconds from it to the delivery.
+     * Codes and times only — never a text.
+     *
+     * @param int $since Unix seconds.
+     * @return array<int,array{answer:string,seconds:int|null}> One per delivered verdict.
+     */
+    public function answersSince(int $since): array
+    {
+        $answers = [];
+        foreach ($this->rows(self::PENDING_TABLE, "answered_at>='" . $since . "' AND answer<>''", []) as $row) {
+            $accepted = (int)$row['accepted_at'];
+            $answered = (int)$row['answered_at'];
+            $answers[] = [
+                'answer'  => (string)$row['answer'],
+                'seconds' => $accepted > 0 && $answered >= $accepted ? $answered - $accepted : null,
+            ];
+        }
+        return $answers;
     }
 
     /**

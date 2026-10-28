@@ -11,9 +11,9 @@ use Minos\Client\WebhookPayload;
  * when it said nothing — to the post, and records the outcome in its row.
  *
  * The caller has claimed the row ({@see Platform::claimPending}), so each post is applied
- * once. Before touching the post it is read again: a post that is gone, or that a moderator
- * (or its author, by editing it) already dealt with, is left alone — a human decision beats
- * the plugin's.
+ * once (and, for a verdict, only at the revision it is about). Before touching the post it
+ * is read again: a post that is gone, or that a moderator already dealt with, is left alone —
+ * a human decision beats the plugin's.
  *
  * The rules, from the contract's receiving checklist:
  * - `bezpieczne` → publish (approve);
@@ -42,8 +42,8 @@ use Minos\Client\WebhookPayload;
  * The masked text replaces the message only when it stands for the whole post, character
  * by character: not when the text sent was cut at 3000 characters; not unless every
  * character of the mask is the one that was sent or `█` ({@see Text::maskFits}); not when
- * a mask falls in a new thread's subject (the plugin does not rewrite titles); not when
- * nothing but the subject remains; and not unless the body that was sent IS the message as
+ * a mask falls in what heads the text — a subject, a poll (the plugin never rewrites
+ * titles, subjects or polls); not when nothing but that head remains; and not unless the body that was sent IS the message as
  * stored (line endings aside) — a post with MyCode, HTML or entities renders to another
  * text, and publishing its mask would revive or drop markup; so does a plain one with
  * whitespace the text squeezes (double spaces, tabs, NBSP, blank lines in a row), which
@@ -77,7 +77,7 @@ final class Applier
      */
     public function verdict(array $row, array $payload, Settings $settings, int $now): string
     {
-        $record = self::record($payload);
+        $record = self::record($payload) + self::answered($payload, $now);
         if ($payload['status'] !== WebhookPayload::ASSESSED || $payload['kwalifikacja'] === null) {
             return $this->failure($row, 'nieocenione', $settings, $now, $record);
         }
@@ -170,24 +170,25 @@ final class Applier
     {
         $pid = (int)$row['pid'];
         $qualification = $payload['status'] === WebhookPayload::ASSESSED ? $payload['kwalifikacja'] : null;
+        $answered = self::answered($payload, $now);
         $post = $this->platform->post($pid);
         $status = self::untouchable($post, 1);
         if ($status !== null) {
-            $this->platform->updatePending($pid, ['status' => $status, 'auto_published' => 0]);
+            $this->platform->updatePending($pid, ['status' => $status, 'auto_published' => 0] + $answered);
             return $status;
         }
         $sent = $this->sentText($row, $post);
         if ($sent === null) {
             // Not the text that was assessed: nothing is applied, and no later verdict will be.
-            $this->platform->updatePending($pid, ['status' => Status::PUBLISHED, 'auto_published' => 0]);
+            $this->platform->updatePending($pid, ['status' => Status::PUBLISHED, 'auto_published' => 0] + $answered);
             return Status::PUBLISHED;
         }
         if ($qualification === null || ($qualification === 'bezpieczne' && (int)$row['truncated'] === 1)) {
-            $this->platform->updatePending($pid, ['status' => Status::PUBLISHED]);
+            $this->platform->updatePending($pid, ['status' => Status::PUBLISHED] + $answered);
             return Status::PUBLISHED;
         }
 
-        $record = self::record($payload) + ['auto_published' => 0, 'decided_at' => $now];
+        $record = self::record($payload) + $answered + ['auto_published' => 0, 'decided_at' => $now];
         if ($qualification === 'bezpieczne') {
             $status = Status::PUBLISHED;
         } elseif ($qualification === 'ocenzurowane' && $this->censor($row, $post, $payload['ocenzurowany'], $sent, $settings)) {
@@ -256,6 +257,19 @@ final class Applier
     }
 
     /**
+     * What a delivered payload says, for the ACP's figures: the answer as the gateway gave
+     * it and when it came — whatever the plugin then does with it.
+     *
+     * @param array{status:string,kwalifikacja:?string} $payload
+     * @return array{answer:string,answered_at:int}
+     */
+    private static function answered(array $payload, int $now): array
+    {
+        $qualification = $payload['status'] === WebhookPayload::ASSESSED ? $payload['kwalifikacja'] : null;
+        return ['answer' => $qualification ?? 'nieocenione', 'answered_at' => $now];
+    }
+
+    /**
      * The text the plugin would send for the post now, when it is the text that was sent.
      *
      * @param array<string,mixed> $row  The row, with the digest kept at submission.
@@ -269,8 +283,8 @@ final class Applier
         if (strlen($digest) !== 64) {
             return null;
         }
-        $text = Text::forPost($post['message'], (int)$row['is_thread'] === 1 ? $post['subject'] : '',
-            $this->platform->forumParsing($post['fid']));
+        $text = Text::ofPost($post, (int)$row['is_thread'] === 1, $this->platform->forumParsing($post['fid']),
+            (int)($row['own_subject'] ?? 0) === 1);
         return !$text['error'] && hash_equals($digest, hash('sha256', $text['tekst'])) ? $text['tekst'] : null;
     }
 

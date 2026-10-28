@@ -69,8 +69,16 @@ final class Status
      */
     public const REASON_TEXT_ERROR = 'text_error';
 
-    /** Recorded in `verdict` when the post was edited before its verdict came. */
+    /** Recorded in `verdict` when a moderator edited the post before its verdict came. */
     public const REASON_EDITED = 'edited';
+
+    /**
+     * The failure-mode reasons after which an author's edit sends the post again, as a new
+     * revision: no verdict was ever given for its text ({@see Platform::revise}) — including
+     * a post that had no text to assess, which a later body or poll may give it.
+     */
+    public const REVISED_REASONS = [self::REASON_TIMEOUT, self::REASON_CONFIG_ERROR, self::REASON_TEXT_ERROR,
+        self::REASON_NO_TEXT];
 
     /**
      * Recorded in `verdict` when a verdict came for a post whose text is not the one that

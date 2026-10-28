@@ -35,7 +35,7 @@ The classes:
 | `Applier` | A verdict or the failure mode → approve, hold, soft-delete, or publish the masked text. |
 | `Task` | Timeouts, due retries, pruning. |
 | `Installer` | Settings group, tables, task; the lifecycle functions. |
-| `Admin` | Masked secrets on the settings page, the ACP notice (problems, a configuration error, a daily limit or overload until a given time), the Tools → Logs page. |
+| `Admin` | Masked secrets on the settings page, the ACP notice (problems, a configuration error, a daily limit or overload until a given time), the Tools → Logs page with the last 7 days' verdict figures. |
 | `Plugin` | Builds the objects once per request. |
 
 ## How the plugin holds a post
@@ -80,13 +80,29 @@ The text readers SEE, following MyBB's own text renderer
 - MyCode: `[quote=NAME]` → "NAME napisał(a):"; `[url=X]Y[/url]` → "Y (X)"; `[img]X[/img]`,
   `[video=…]X[/video]` → X; `[code]`/`[php]` keep their content; formatting tags go; MyCode
   MyBB would not parse stays literally.
-- A new thread's subject goes in front (always escaped, never parsed). Only the first 3000
-  characters are sent.
+- What heads the post goes in front, a blank line between the parts (`Text::ofPost`): a
+  new thread's subject (always escaped, never parsed), then its poll — the question
+  escaped like a subject, each option on its own line through the post rules above, as
+  `showthread.php` shows them; for a reply, its own subject when it is not one of MyBB's
+  defaults ("RE: " and the thread's title, or — for a reply to a post, `posts.replyto` —
+  "RE: " and that post's subject without its "RE:"; either cut to 82 characters and "..."
+  when longer than 85; or the thread's title itself — `Text::ownSubject`). Whether a
+  reply's subject goes with it is decided at its first send and kept in the row
+  (`own_subject`), and decided again only by an edit that changes the subject: renaming
+  the thread or the replied-to post later does not turn a default into another text. All
+  of it is `prefix_len`: a mask there holds the post. Only the first 3000 characters are
+  sent.
+- A title or a reply's own subject alone is not a text to assess (shared rule F7 in
+  client-php's `docs/plugin-behaviour.md`): when the body shows no text and there is no
+  poll, `tekst` is `''` and the post gets the failure mode at once as `no_text`, nothing
+  sent (fail-open publishes it marked `auto_published`). A poll is text (S5): an empty body
+  with a poll sends the title and the poll.
+- The link signals count the links of what is sent, head included (`Text::sourceOf`).
 - Every regular expression runs through one checked helper in `Text`: a PCRE failure (a
   post crafted to exhaust the backtrack limit, e.g. a few hundred unclosed `[url=` tags)
   throws `TextError`, and `Text::forPost` returns `error: true` — never `''`. The post then
   gets the failure mode as `text_error` with nothing sent, not even a new thread's subject
-  alone (`no_text` is only for a post readers see no text in).
+  alone (`no_text` is for a post whose body shows no text and that has no poll).
 - `meta`: `links` (distinct links), `link_domains` (up to 10 registrable domains — the last
   two host labels, or three under a two-label public suffix from a short list; an
   approximation of the Public Suffix List), `author_first_post` for registered authors.
@@ -103,7 +119,11 @@ insert ─► retry ──202──► pending ──webhook──► applying �
             └─ other 4xx, a 2xx but 202: failure mode (config_error, http_<n>); ACP notice
 pending/retry older than the timeout (≥ 20 min) ─► failure mode (timeout)
 fail-open ─► published + auto_published ──late webhook──► applying ─► held | censored | published
-an edit while retry/pending ─► superseded (the post stays in MyBB's queue)
+a "retry" answer ─► the shared pause: nothing sent before its end (below)
+an author's edit while retry/pending, or of a post held as timeout/config_error/text_error/no_text,
+  that changes the text to send ─► rev + 1, retry due now, a fresh timeout
+  (sent by the task as mybb:<pid>.<rev>)
+a moderator's edit while retry/pending ─► superseded (the post stays in MyBB's queue)
 an edit of an auto-published post ─► auto_published = 0 (a late verdict no longer applies)
 applying for more than 5 min ─► back to claimed_from (the task)
 ```
@@ -139,12 +159,38 @@ applying for more than 5 min ─► back to claimed_from (the task)
   `limit_dobowy_klucza`, `limit_globalny_b2b` or `kolejka_pelna` refusal is kept in the
   datacache entry `minos_refusal` (code, until) for the ACP notice "the gateway does not accept
   until …"; the next `202` clears it, and it is not shown past its end.
+- The shared pause (`Submitter::PAUSE`, datacache entry `minos_pause`: until, code): every
+  "retry" answer (any 429, 408, 5xx, no answer) holds every sending back until
+  now + `ponow_za_s` as given (60 s without one); a longer pause already kept stays. While
+  it lasts a new post is not sent in its author's request and the task sends nothing: a
+  due row waits with `retry_at` = the pause's end, or gets the failure mode at once
+  (`gateway_limit`) when the pause ends after its timeout. A task run stops sending at the
+  first batch the gateway asks to retry. The next `202` clears the pause.
 - `author_first_post` is read in the author's request and kept in `first_post` ('1', '0',
   '' for a guest), so a resubmission from the task sends it as first sent.
 - The submission records the gateway's answer only while the row is still `retry`, so a
   verdict that arrived before the `202` is not overwritten.
 - Before applying, the post is read again: gone → `gone`; no longer unapproved (a moderator
   acted) → `superseded`.
+- An edit of a waiting post (`datahandler_post_update`, which MyBB runs before it writes the
+  new text) makes the coming verdict stale. By anyone who is not a moderator of the post's
+  forum (`is_moderator($fid, '', <current user>)`, the check `update_post` itself makes),
+  the row starts a new revision (`Platform::revise`, one conditional `UPDATE`): `rev` + 1,
+  `retry` due now, `submitted_at` = now (a fresh timeout), nothing of the earlier attempt
+  kept (digest, attempts, outcome). The same for a row the failure mode held because no
+  verdict came for its text (`Status::REVISED_REASONS`: `timeout`, `config_error`,
+  `text_error`, `no_text` — a body or a poll added later gives it a text). The task sends it as `mybb:<pid>.<rev>`, never the editor's request. The
+  receiver accepts `mybb:<pid>` and `mybb:<pid>.<n>` (n ≥ 1, no leading zero) and applies a
+  verdict only to the row's current revision: its claim names the revision, so an edit
+  between the receiver's read and its claim wins. A verdict for another revision gets `200`
+  and nothing else. A moderator's edit of a waiting post leaves it to humans: `superseded`
+  with `edited`, nothing sent, listed on the ACP page. Edits of published posts are not
+  assessed again (shared rule D9.2, not adopted yet).
+- Who can edit a post in the moderation queue, in MyBB 1.8.41: its forum's moderators, and
+  its author only while the board setting `showownunapproved` ("Access Own Unapproved
+  Threads / Posts", off by default) is on — `editpost.php` and the quick edit
+  (`xmlhttp.php`, `edit_post`) refuse the author otherwise. Read in the source, not tried
+  on a live forum.
 - One row that throws never stops the others: `try/catch (\Throwable $e)` around one row
   of the task's timeout loop, one row's item in a resubmission, each batch's send, and the
   webhook's `verdict()`/`late()`. `Applier::failedStep` logs `error` with the step as its
@@ -167,6 +213,20 @@ applying for more than 5 min ─► back to claimed_from (the task)
   `masked_text` and shown on the ACP page. The original goes into the row first, and the
   new message is read back before the post is approved: a message that could not be
   written keeps the post held.
+
+Every verdict the webhook applies — on time or late, whatever it then does — records the
+gateway's answer as delivered (`answer`: `bezpieczne`, `ocenzurowane`, `zablokowane`,
+`nieocenione`) and the moment (`answered_at`). The ACP page (`Admin::verdictFigures`) reads
+the rows answered in the last 7 days: the median and the 95th percentile (nearest rank) of
+`answered_at` − `accepted_at` over those whose `202` was recorded, and a count per answer.
+No text, no key, no request to the gateway.
+
+What stays in MyBB's own records after those 30 days (read in the 1.8.41 source): the
+post itself; nothing in the moderator log — `Moderation` (`inc/class_moderation.php`)
+never calls `log_moderator_action`, the moderator pages (`modcp.php`, `moderation.php`…)
+do; no edit history — MyBB 1.8 has none (`posts.edituid`/`edittime` only, and
+`Platform::replaceMessage` sets neither); in the task log (`add_task_log`) one line per run
+with two counts.
 
 `PREFIX_minos_log` holds events with a code and a post id — never content, a key or a
 secret. Log entries are kept 30 days; decided rows — with the verdict, the original text
@@ -305,6 +365,9 @@ reading the code, not by running a live forum:
 | settings groups and settings (the `hello` plugin's pattern), `optionscode` types `onoff`, `yesno`, `text`, `numeric` with `min`/`max`, `select`, `forumselect`, `php` (evaluated as a double-quoted string; its "Edit setting" page refused; disabled while the plugin is deactivated) | `admin/modules/config/settings.php`, `inc/plugins/hello.php` | `Installer`, `Platform::saveSettings`, `setOptionscode` |
 | `newreply_start` / `newthread_start` (the form shown again after errors), `DataHandler::get_errors` | `newreply.php`, `newthread.php`, `inc/datahandler.php` | `Submitter` |
 | `get_forum()['allowhtml'/'allowmycode'/'allowimgcode'/'allowvideocode']`, `htmlspecialchars_uni`, `Postparser::text_parse_message` (the rules `Text` follows) | `inc/functions.php`, `inc/class_parser.php` | `Platform::forumParsing`, `Text` |
+| `polls_do_newpoll_end`, `polls_do_editpoll_end` (no arguments; the thread's row in the global `$thread`, read before the poll was written) | `polls.php` | `Platform::pollThreadFirstPost`, `Submitter::onPollChanged` |
+| a thread's poll: `threads.poll` → `polls` (`question`, `options` joined by `\|\|~\|~\|\|`, `numoptions` of them shown); the question through `htmlspecialchars_uni`, each option through `parse_message` with the forum's options | `showthread.php`, `install/resources/mysql_db_tables.php` | `Platform::post`, `Text` |
+| a reply's default subject: "RE: " and the thread's title (cut to 82 characters and "..." past 85; for a reply to a post, `replyto`, "RE: " and that post's subject without its `#^RE:\s?#i`); `posts.replyto` | `newreply.php`, `inc/datahandlers/post.php` (`verify_subject`, `insert_post`) | `Text::ownSubject`, `Platform::post` |
 | `Moderation::unapprove_posts`, `unapprove_threads` | `inc/class_moderation.php` | `Platform::unapprove` (a late `zablokowane`) |
 | subscription notifications: inline in `insert_post`/`insert_thread`, only for `visible == 1`; none on approval | `inc/datahandlers/post.php`, `inc/class_moderation.php`, `modcp.php` | not sent (see above) |
 | `admin_config_settings_change` before `upsetting` is saved | `admin/modules/config/settings.php` | `Admin::onSettingsChange` |
@@ -317,6 +380,30 @@ reading the code, not by running a live forum:
 | `$cache->read($name, true)` (a hard read: from the database or the cache handler, not the copy loaded with the page), `update($name, $contents)` (`replace_query` on `datacache`, serialized, the whole entry), `delete($name)`. One entry per value of state, so two requests never write back each other's stale copy | `inc/class_datacache.php` | `Platform::state`, `setState`, `removeState` |
 | `$db` helpers: `simple_select`, `query`, `fetch_array`, `fetch_field`, `insert_query`, `update_query`, `delete_query`, `escape_string`, `affected_rows`, `table_exists`, `drop_table`, `write_query`, `build_create_table_collation`, `type`; `field_exists($field, $table)` and `add_column($table, $column, $definition)` (prefix added; `ALTER TABLE … ADD`) in every driver, the PDO ones included | `inc/db_mysqli.php`, `inc/db_pgsql.php`, `inc/db_sqlite.php`, `inc/AbstractPdoDbDriver.php`, `inc/db_mysql_pdo.php`, `inc/db_pgsql_pdo.php`, `inc/init.php` | `Platform` |
 | the minimal bootstrap `IN_MYBB`, `NO_ONLINE`, `THIS_SCRIPT`, `inc/init.php` (database, settings, cache, plugins; no session) | `inc/init.php`, `task.php` | `minos-webhook.php` |
+
+Read in the 1.8.41 source — questions 3 to 5 of the live check (minos-moderation/minos#47),
+still to be confirmed by the job on a real forum:
+
+- **3. Polls.** A poll is not part of `newthread.php`: with "post a poll" ticked, it
+  redirects to `polls.php?action=newpoll&tid=…` after `insert_thread`, and the poll is
+  created by `do_newpoll` (hooks `polls_do_newpoll_start`, `_process` before the insert,
+  `_end` after it and after `threads.poll` is set). The form (`newpoll`) refuses a thread
+  that is not visible to anyone but a moderator (`error_invalidthread`), so the author of a
+  thread the plugin holds cannot reach it; `do_newpoll` itself checks only the thread's
+  author (or `canmanagepolls`) and the forum's permissions, so a direct post still adds a
+  poll to a held thread. `showthread.php` offers the author "add poll" on a published
+  thread (within `polltimelimit` hours). Editing a poll (`do_editpoll`, hook
+  `polls_do_editpoll_end`) needs `canmanagepolls`: moderators only. So before the verdict a
+  poll exists only when a moderator or a direct post made it — the plugin then sends it as a
+  new revision (an author's) or leaves the thread to a human (a moderator's); a poll added
+  after publication is a change of a published post, not assessed (D9.2 not adopted).
+- **4. Who edits a post in the queue**: see "The row's life" — moderators, and its author
+  only with `showownunapproved` on.
+- **5. A reply's subject is shown**: the default theme's `showthread_threaded_bit` prints it
+  as the link text in the threaded view, `search_results_posts_post` in post search
+  results, `printthread_post` in the printable version, and `postbit_posturl` puts it in
+  the `title` of the post-number link in the linear view (`build_postbit` escapes it with
+  `htmlspecialchars_uni`). So an own subject is sent; the default one tells nothing new.
 
 Not verified — to check on a live forum before a release:
 

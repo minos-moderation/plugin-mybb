@@ -22,8 +22,9 @@ use Minos\Client\WebhookPayload;
  *    the gateway tries again. Without a usable stored secret nothing can be verified:
  *    `401` too.
  * 4. `WebhookPayload::parse` reads it (`400` for a body that is no payload at all). An id
- *    that is not `mybb:<pid>`, a post the plugin is not waiting for, and a delivery already
- *    applied (deliveries repeat) get `200` and nothing else.
+ *    that is not `mybb:<pid>` or `mybb:<pid>.<n>`, a post the plugin is not waiting for, a
+ *    verdict for a revision an author's edit has replaced ({@see Submitter::onUpdated}),
+ *    and a delivery already applied (deliveries repeat) get `200` and nothing else.
  * 5. The verdict is applied ({@see Applier}) — the claim on the row makes sure a repeated or
  *    concurrent delivery applies nothing twice. A verdict for a post the failure mode
  *    already published (`fail-open`) is applied late while nobody touched the post
@@ -80,15 +81,19 @@ final class Receiver
         if ($payload === null) {
             return 400;
         }
-        if (!preg_match('/^' . preg_quote(Submitter::ID_PREFIX, '/') . '([1-9][0-9]{0,9})\z/', $payload['id'], $m)) {
+        if (!preg_match('/^' . preg_quote(Submitter::ID_PREFIX, '/') . '([1-9][0-9]{0,9})(?:'
+            . preg_quote(Submitter::REVISION_SEPARATOR, '/') . '([1-9][0-9]{0,4}))?\z/', $payload['id'], $m)) {
             return 200; // not an id this plugin sends
         }
         $pid = (int)$m[1];
+        $rev = isset($m[2]) ? (int)$m[2] : 0;
         $row = $this->platform->pending($pid);
-        if ($row === null) {
-            return 200; // unknown
+        if ($row === null || (int)$row['rev'] !== $rev) {
+            return 200; // unknown, or a revision an edit has since replaced
         }
-        if ($this->platform->claimPending($pid, $now)) {
+        // The claims name the revision too: an edit between the read above and the claim
+        // starts a new one, and this verdict is then not applied.
+        if ($this->platform->claimPending($pid, $now, Status::OPEN, false, $rev)) {
             try {
                 $this->applier->verdict($row, $payload, $settings, $now);
             } catch (\Throwable $e) {
@@ -96,7 +101,7 @@ final class Receiver
                 return 500; // the gateway delivers again
             }
         } elseif ((int)$row['auto_published'] === 1
-            && $this->platform->claimPending($pid, $now, [Status::PUBLISHED], true)) {
+            && $this->platform->claimPending($pid, $now, [Status::PUBLISHED], true, $rev)) {
             // Published by the failure mode before this verdict came: still applied.
             try {
                 $this->applier->late($row, $payload, $settings, $now);

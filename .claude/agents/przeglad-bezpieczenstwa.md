@@ -1,6 +1,6 @@
 ---
 name: przeglad-bezpieczenstwa
-description: Pre-merge review of a PR to the Minos MyBB plugin that touches the webhook, the hooks that hold or approve posts, the task, the publish/hold settings, the key and secret handling or the MyBB adapter. Use once per such PR, before merge. Read-only; confirms findings by running code.
+description: Pre-merge review of a PR to the Minos MyBB plugin that touches the webhook, the hooks that hold or approve posts, the task, the publish/hold settings, the key and secret handling or the MyBB adapter. Use once per such PR, before merge. Read-only by instruction (Bash runs its checks and probes); confirms findings by running code.
 model: opus
 effort: high
 tools: Read, Grep, Glob, Bash

@@ -102,17 +102,28 @@ final class EndToEndTest extends TestCase
                 'twice'    => [false, 'Dwa razy [minos:dwa-razy]'],
                 'forged'   => [false, 'Podrobiony [minos:zly-podpis]'],
                 'thread'   => [true, 'Pierwszy post wątku.', 'Wątek z bramy'],
+                'edited'   => [false, 'Pierwsza wersja [minos:blokuj]'],
             ],
         ])), true);
         self::assertStringStartsWith(realpath($forumRoot), (string)$posted['plugin'], 'the posting side ran the staged plugin');
         $pids = array_map('intval', (array)$posted['pids']);
-        self::assertCount(8, $pids);
+        self::assertCount(9, $pids);
 
         $forum = Forum::create($database);
         foreach ($pids as $name => $pid) {
             self::assertSame(Status::PENDING, $forum->row($pid)['status'], "{$name}: the mock accepted it (202)");
             self::assertSame(0, (int)$forum->post($pid)['visible'], "{$name}: held until its verdict");
         }
+
+        // Its author edits a post while it waits; the task sends the edit as revision 1. The
+        // mock then delivers both verdicts, the stale one about the first text first.
+        $this->runCommand([PHP_BINARY, $forumRoot . '/forum-cli.php'], $forumEnv, (string)json_encode([
+            'user'  => ['uid' => 7, 'postnum' => 1, 'moderateposts' => 0],
+            'edits' => [$pids['edited'] => 'Poprawiona wersja.'],
+            'task'  => true,
+        ]));
+        self::assertSame([Status::PENDING, '1'], [$forum->row($pids['edited'])['status'], (string)$forum->row($pids['edited'])['rev']],
+            'revision 1 accepted (202)');
 
         // Two passes: `[minos:dwa-razy]` is delivered again on the second.
         $first = $this->runCommand([PHP_BINARY, self::MOCK . '/bin/worker.php', '--once'], $mockEnv);
@@ -133,6 +144,8 @@ final class EndToEndTest extends TestCase
         self::assertSame([1, Status::PUBLISHED, 'bezpieczne'], $state('twice'));
         self::assertSame([0, Status::PENDING, ''], $state('forged'));
         self::assertSame([1, Status::PUBLISHED, 'bezpieczne'], $state('thread'));
+        self::assertMatchesRegularExpression('/mybb:' . $pids['edited'] . '\.1 dostarczony 200/', $first, 'revision 1 was delivered');
+        self::assertSame([1, Status::PUBLISHED, 'bezpieczne'], $state('edited'), 'the stale verdict was not applied');
         // The mock masks one character per character, as the contract does.
         self::assertSame([1, Status::CENSORED, 'ocenzurowane'], $state('censored'));
         self::assertSame('to jest [minos:cenzuruj] [[█████]] pomysł', $forum->post($pids['censored'])['message']);

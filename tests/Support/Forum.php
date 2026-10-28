@@ -8,6 +8,7 @@ use Minos\Client\Signature;
 use Minos\MyBB\Gateway;
 use Minos\MyBB\Platform;
 use Minos\MyBB\Plugin;
+use Minos\MyBB\Submitter;
 use PDO;
 
 /**
@@ -148,7 +149,8 @@ final class Forum
      *
      * @param bool                $thread  A new thread (else a reply to {@see thread}).
      * @param string              $message The message (MyCode source).
-     * @param array<string,mixed> $options `subject`, `fid`, `tid`, `uid`, `savedraft`.
+     * @param array<string,mixed> $options `subject`, `fid`, `tid`, `uid`, `savedraft`, `replyto`
+     *     (the post whose reply or quote button was used).
      * @return FakePostHandler The handler, with `return_values`.
      */
     public function write(bool $thread, string $message, array $options = []): FakePostHandler
@@ -160,7 +162,7 @@ final class Forum
         $handler = new FakePostHandler('insert', $thread ? 'thread' : 'post', [
             'uid' => $uid, 'fid' => $fid, 'tid' => $tid, 'subject' => $subject, 'message' => $message,
             'username' => 'Autor Testowy', 'ipaddress' => '203.0.113.77',
-            'savedraft' => !empty($options['savedraft']) ? 1 : 0,
+            'savedraft' => !empty($options['savedraft']) ? 1 : 0, 'replyto' => (int)($options['replyto'] ?? 0),
         ]);
         $kind = $thread ? 'thread' : 'post';
         $GLOBALS['plugins']->run_hooks('datahandler_post_validate_' . $kind, $handler);
@@ -183,7 +185,7 @@ final class Forum
             $tid = $this->db->insert_query('threads', ['fid' => $fid, 'subject' => $this->db->escape_string($subject),
                 'uid' => $uid, 'firstpost' => 0, 'visible' => $visible]);
         }
-        $pid = $this->db->insert_query('posts', ['tid' => $tid, 'fid' => $fid, 'uid' => $uid,
+        $pid = $this->db->insert_query('posts', ['tid' => $tid, 'replyto' => (int)$handler->data['replyto'], 'fid' => $fid, 'uid' => $uid,
             'subject' => $this->db->escape_string($subject), 'message' => $this->db->escape_string($message),
             'ipaddress' => '203.0.113.77', 'visible' => $visible]);
         if ($thread) {
@@ -194,6 +196,88 @@ final class Forum
         }
         $GLOBALS['plugins']->run_hooks('datahandler_post_insert_' . $kind . '_end', $handler);
         return $handler;
+    }
+
+    /**
+     * The current user edits a post, the way MyBB 1.8.41's `PostDataHandler::update_post`
+     * runs: `pid`, `tid` and `fid` in the data, a first post's new subject written to its
+     * thread, the `datahandler_post_update` hook, and only then the post's new text.
+     *
+     * @param int         $pid     The post.
+     * @param string      $message The new message.
+     * @param string|null $subject A new subject, or null to keep it.
+     * @return FakePostHandler The handler.
+     */
+    public function edit(int $pid, string $message, ?string $subject = null): FakePostHandler
+    {
+        $post = $this->post($pid);
+        $data = ['pid' => $pid, 'tid' => (int)$post['tid'], 'fid' => (int)$post['fid'], 'message' => $message,
+            'edit_uid' => (int)$this->mybb->user['uid']];
+        if ($subject !== null) {
+            $data['subject'] = $subject;
+        }
+        $handler = new FakePostHandler('update', 'post', $data);
+        $fields = ['message' => $this->db->escape_string($message)];
+        if ($subject !== null) {
+            $fields['subject'] = $this->db->escape_string($subject);
+            $this->db->update_query('threads', ['subject' => $fields['subject']],
+                "tid='" . (int)$post['tid'] . "' AND firstpost='" . $pid . "'");
+        }
+        $GLOBALS['plugins']->run_hooks('datahandler_post_update', $handler);
+        $this->db->update_query('posts', $fields, "pid='" . $pid . "'");
+        return $handler;
+    }
+
+    /**
+     * The current user adds a poll to a thread, the way MyBB 1.8.41's `polls.php`
+     * (`do_newpoll`) does: the poll row, the thread's `poll`, then `polls_do_newpoll_end`
+     * with the thread's row (as read before) in the global `$thread`.
+     *
+     * @param int               $tid      The thread.
+     * @param string            $question The question.
+     * @param array<int,string> $options  The options, as typed.
+     * @return int The poll's id.
+     */
+    public function addPoll(int $tid, string $question, array $options): int
+    {
+        $thread = (array)$this->db->fetch_array($this->db->simple_select('threads', '*', "tid='" . $tid . "'"));
+        $poll = $this->db->insert_query('polls', ['tid' => $tid, 'question' => $this->db->escape_string($question),
+            'options' => $this->db->escape_string(implode('||~|~||', $options)),
+            'votes' => implode('||~|~||', array_fill(0, count($options), '0')), 'numoptions' => count($options)]);
+        $this->db->update_query('threads', ['poll' => $poll], "tid='" . $tid . "'");
+        $GLOBALS['thread'] = $thread;
+        $GLOBALS['plugins']->run_hooks('polls_do_newpoll_end');
+        return $poll;
+    }
+
+    /**
+     * A moderator changes a poll, the way `polls.php` (`do_editpoll`) does: the poll row
+     * updated, then `polls_do_editpoll_end` with the thread's row in the global `$thread`.
+     *
+     * @param int               $poll     The poll.
+     * @param string            $question The question.
+     * @param array<int,string> $options  The options.
+     */
+    public function editPoll(int $poll, string $question, array $options): void
+    {
+        $GLOBALS['thread'] = (array)$this->db->fetch_array($this->db->simple_select('threads', '*', "poll='" . $poll . "'"));
+        $this->db->update_query('polls', ['question' => $this->db->escape_string($question),
+            'options' => $this->db->escape_string(implode('||~|~||', $options)), 'numoptions' => count($options)],
+            "pid='" . $poll . "'");
+        $GLOBALS['plugins']->run_hooks('polls_do_editpoll_end');
+    }
+
+    /**
+     * The shared pause a "retry" answer started is over: what the test does next happens
+     * after its end. The entry stays, ended now, as it would be found later.
+     */
+    public function endPause(): void
+    {
+        $platform = $this->platform();
+        $pause = $platform->state(Submitter::PAUSE);
+        if (is_array($pause)) {
+            $platform->setState(Submitter::PAUSE, ['until' => TIME_NOW] + $pause);
+        }
     }
 
     /**
@@ -263,8 +347,12 @@ final class Forum
                 . " nextrun INTEGER NOT NULL DEFAULT 0, lastrun INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1,"
                 . " logging INTEGER NOT NULL DEFAULT 0, locked INTEGER NOT NULL DEFAULT 0)",
             "CREATE TABLE {$p}threads (tid INTEGER PRIMARY KEY, fid INTEGER NOT NULL DEFAULT 0, subject TEXT NOT NULL DEFAULT '',"
-                . " uid INTEGER NOT NULL DEFAULT 0, firstpost INTEGER NOT NULL DEFAULT 0, visible INTEGER NOT NULL DEFAULT 1)",
-            "CREATE TABLE {$p}posts (pid INTEGER PRIMARY KEY, tid INTEGER NOT NULL DEFAULT 0, fid INTEGER NOT NULL DEFAULT 0,"
+                . " uid INTEGER NOT NULL DEFAULT 0, firstpost INTEGER NOT NULL DEFAULT 0, visible INTEGER NOT NULL DEFAULT 1,"
+                . " poll INTEGER NOT NULL DEFAULT 0)",
+            "CREATE TABLE {$p}polls (pid INTEGER PRIMARY KEY, tid INTEGER NOT NULL DEFAULT 0, question TEXT NOT NULL DEFAULT '',"
+                . " options TEXT NOT NULL DEFAULT '', votes TEXT NOT NULL DEFAULT '', numoptions INTEGER NOT NULL DEFAULT 0)",
+            "CREATE TABLE {$p}posts (pid INTEGER PRIMARY KEY, tid INTEGER NOT NULL DEFAULT 0, replyto INTEGER NOT NULL DEFAULT 0,"
+                . " fid INTEGER NOT NULL DEFAULT 0,"
                 . " uid INTEGER NOT NULL DEFAULT 0, subject TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '',"
                 . " ipaddress TEXT NOT NULL DEFAULT '', visible INTEGER NOT NULL DEFAULT 1)",
         ];

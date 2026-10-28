@@ -16,7 +16,9 @@ namespace Minos\MyBB;
  *   until a known moment — the key's daily limit, or an overload — with that moment: new
  *   posts get the failure mode until then. The first accepted submission clears it.
  * - A page under Tools & Maintenance → Logs → "Minos — dziennik": the configuration's
- *   state, the posts that need a look (held, waiting, and those the gateway flagged with
+ *   state, the verdicts of the last 7 days ({@see verdictFigures}: the median and the 95th
+ *   percentile of the time from the gateway's `202` to the verdict, and how many of each
+ *   verdict), the posts that need a look (held, waiting, and those the gateway flagged with
  *   `wsparcie` — the author may need support) with the gateway's masked text of a censored
  *   post the plugin kept in the queue, and the log of codes.
  *
@@ -30,6 +32,12 @@ final class Admin
 
     /** Rows per table on the page. */
     private const ROWS = 50;
+
+    /** The window of the verdict figures, in seconds. */
+    public const FIGURES_WINDOW_S = 7 * 86400;
+
+    /** The gateway's verdicts, in the order the page counts them (wire values). */
+    public const VERDICTS = ['bezpieczne', 'ocenzurowane', 'zablokowane', 'nieocenione'];
 
     /** @var Platform */
     private $platform;
@@ -174,12 +182,46 @@ final class Admin
     }
 
     /**
+     * The verdicts the gateway delivered in the last {@see FIGURES_WINDOW_S}: the time from
+     * its `202` to the verdict — the median (P50) and the 95th percentile (P95), nearest
+     * rank, over the verdicts whose `202` the plugin recorded (a verdict can overtake its
+     * `202`, or come for a post whose request timed out on the forum's side) — and how many
+     * of each verdict. Read from the plugin's own table: no request to the gateway, no text.
+     *
+     * @param int $now Unix seconds.
+     * @return array{p50:int|null,p95:int|null,timed:int,counts:array<string,int>} Seconds;
+     *     null without a timed verdict.
+     */
+    public function verdictFigures(int $now): array
+    {
+        $counts = array_fill_keys(self::VERDICTS, 0);
+        $seconds = [];
+        foreach ($this->platform->answersSince($now - self::FIGURES_WINDOW_S) as $answer) {
+            if (isset($counts[$answer['answer']])) {
+                $counts[$answer['answer']]++;
+            }
+            if ($answer['seconds'] !== null) {
+                $seconds[] = $answer['seconds'];
+            }
+        }
+        sort($seconds);
+        return [
+            'p50'    => self::percentile($seconds, 50),
+            'p95'    => self::percentile($seconds, 95),
+            'timed'  => count($seconds),
+            'counts' => $counts,
+        ];
+    }
+
+    /**
      * The page's body.
      *
+     * @param int|null $now Unix seconds (now by default).
      * @return string Escaped HTML.
      */
-    public function page(): string
+    public function page(?int $now = null): string
     {
+        $now = $now ?? time();
         $settings = new Settings($this->platform->settings());
         if (!$settings->enabled()) {
             $state = $this->platform->lang('minos_acp_state_disabled');
@@ -193,6 +235,18 @@ final class Admin
             [$this->platform->lang('minos_acp_webhook'), Settings::webhookUrl($this->platform->boardUrl())],
             [$this->platform->lang('minos_acp_mode'), $settings->failOpen() ? Settings::FAIL_OPEN : Settings::FAIL_CLOSED],
         ], '');
+
+        $figures = $this->verdictFigures($now);
+        $rows = [
+            [$this->platform->lang('minos_acp_figures_p50'), $this->duration($figures['p50'])],
+            [$this->platform->lang('minos_acp_figures_p95'), $this->duration($figures['p95'])],
+            [$this->platform->lang('minos_acp_figures_timed'), (string)$figures['timed']],
+        ];
+        foreach ($figures['counts'] as $verdict => $count) {
+            $rows[] = [$verdict, (string)$count];
+        }
+        $html .= self::table($this->platform->lang('minos_acp_figures'), [], $rows,
+            $this->platform->lang('minos_acp_figures_desc'));
 
         $rows = [];
         foreach ($this->platform->attentionRows(self::ROWS) as $row) {
@@ -228,6 +282,35 @@ final class Admin
     }
 
     /**
+     * The nearest-rank percentile of sorted values.
+     *
+     * @param array<int,int> $sorted Ascending.
+     * @param int            $p      1–100.
+     * @return int|null Null for no values.
+     */
+    private static function percentile(array $sorted, int $p): ?int
+    {
+        if ($sorted === []) {
+            return null;
+        }
+        return $sorted[max(1, (int)ceil($p / 100 * count($sorted))) - 1];
+    }
+
+    /**
+     * A time in seconds as the page shows it.
+     */
+    private function duration(?int $seconds): string
+    {
+        if ($seconds === null) {
+            return $this->platform->lang('minos_acp_figures_none');
+        }
+        if ($seconds < 60) {
+            return $this->platform->lang('minos_acp_seconds', (string)$seconds);
+        }
+        return $this->platform->lang('minos_acp_minutes', (string)intdiv($seconds, 60), (string)($seconds % 60));
+    }
+
+    /**
      * @param array<int,string> $problems Language keys.
      */
     private function problemList(array $problems): string
@@ -252,8 +335,9 @@ final class Admin
     {
         $html = '<div class="border_wrapper"><div class="title">' . self::e($title) . '</div>'
             . '<table class="general" cellspacing="0">';
+        $columns = $headers !== [] ? count($headers) : count($rows[0] ?? [1]);
         if ($description !== '') {
-            $html .= '<tr><td class="tcat" colspan="' . max(1, count($headers)) . '">' . self::e($description) . '</td></tr>';
+            $html .= '<tr><td class="tcat" colspan="' . max(1, $columns) . '">' . self::e($description) . '</td></tr>';
         }
         if ($headers !== [] && $platform !== null) {
             $html .= '<thead><tr>';
