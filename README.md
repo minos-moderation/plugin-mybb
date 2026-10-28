@@ -175,6 +175,13 @@ Gdy brama jest chwilowo przeciążona albo niedostępna (lub nie ma połączenia
 zadanie ponawia wysyłkę po czasie wskazanym przez bramę albo po coraz dłuższej przerwie
 (od 1 minuty do 1 godziny). Jeśli do końca czasu oczekiwania się nie uda — tryb awaryjny.
 
+Gdy obsługa jednego postu kończy się błędem (np. wyjątkiem innej wtyczki podpiętej pod
+moderację MyBB), pozostałe posty są obsługiwane normalnie. Webhook odpowiada wtedy błędem
+`500`, więc brama doręcza werdykt ponownie, a zadanie próbuje znowu przy następnym
+przebiegu. Po trzech nieudanych próbach wtyczka nie robi już nic z postem: zostaje on dla
+człowieka z uwagą „błąd przy stosowaniu werdyktu (3 próby)”. Dziennik zapisuje krok i
+numer postu — nigdy treść błędu.
+
 ## Panel administratora
 
 - **Komunikat na każdej stronie panelu**, gdy wtyczka jest włączona, ale nie może działać

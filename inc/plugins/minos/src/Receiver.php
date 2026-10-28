@@ -27,7 +27,10 @@ use Minos\Client\WebhookPayload;
  * 5. The verdict is applied ({@see Applier}) — the claim on the row makes sure a repeated or
  *    concurrent delivery applies nothing twice. A verdict for a post the failure mode
  *    already published (`fail-open`) is applied late while nobody touched the post
- *    ({@see Applier::late}); a moderator's decision stays final.
+ *    ({@see Applier::late}); a moderator's decision stays final. When applying throws, the
+ *    claim is given back and the answer is `500`, so the gateway delivers again and the
+ *    redelivery applies the verdict ({@see Applier::failedStep}: after three failures the
+ *    post is left to a human).
  * 6. The answer is a bare `200`; the gateway discards its body. The work in step 5 is a
  *    few queries, well inside the gateway's 10 seconds.
  *
@@ -86,11 +89,21 @@ final class Receiver
             return 200; // unknown
         }
         if ($this->platform->claimPending($pid, $now)) {
-            $this->applier->verdict($row, $payload, $settings, $now);
+            try {
+                $this->applier->verdict($row, $payload, $settings, $now);
+            } catch (\Throwable $e) {
+                $this->applier->failedStep($pid, 'verdict', $now);
+                return 500; // the gateway delivers again
+            }
         } elseif ((int)$row['auto_published'] === 1
             && $this->platform->claimPending($pid, $now, [Status::PUBLISHED], true)) {
             // Published by the failure mode before this verdict came: still applied.
-            $this->applier->late($row, $payload, $settings, $now);
+            try {
+                $this->applier->late($row, $payload, $settings, $now);
+            } catch (\Throwable $e) {
+                $this->applier->failedStep($pid, 'late', $now);
+                return 500;
+            }
         }
         return 200; // applied, or already handled
     }

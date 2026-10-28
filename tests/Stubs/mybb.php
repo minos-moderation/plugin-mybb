@@ -98,9 +98,17 @@ if (!class_exists('Moderation', false)) {
      * MyBB's `Moderation`: the six methods the plugin calls. Visibility changes as MyBB's
      * do (`1` approved, `-1` soft-deleted; a thread's first post follows its thread); the
      * counters MyBB rebuilds are not modelled — the calls are recorded instead.
+     *
+     * A test makes a call throw, as another plugin's `class_moderation_*` hook could, for the
+     * ids in `$GLOBALS['minos_test']['throw_on']` (before any change) or `['throw_after']`
+     * (after the visibility changed: a half-applied call). The message is {@see SECRET_TEXT},
+     * which must reach no log.
      */
     class Moderation
     {
+        /** What a thrown error says: a stand-in for post text in an error message. */
+        const SECRET_TEXT = 'TAJNA_TRESC_POSTU_W_KOMUNIKACIE_BLEDU';
+
         /** @param array<int,int> $pids */
         public function approve_posts($pids)
         {
@@ -151,7 +159,16 @@ if (!class_exists('Moderation', false)) {
 
         private function record(string $method, array $ids): void
         {
+            $this->throwFor('throw_on', $ids);
             $GLOBALS['minos_test']['moderation'][] = [$method, array_map('intval', $ids)];
+        }
+
+        /** @param array<int,int> $ids */
+        private function throwFor(string $when, array $ids): void
+        {
+            if (array_intersect(array_map('intval', $ids), $GLOBALS['minos_test'][$when] ?? []) !== []) {
+                throw new \RuntimeException(self::SECRET_TEXT);
+            }
         }
 
         private function posts(array $pids, int $visible, ?int $from): void
@@ -159,6 +176,7 @@ if (!class_exists('Moderation', false)) {
             global $db;
             $where = 'pid IN (' . implode(',', array_map('intval', $pids)) . ')';
             $db->update_query('posts', ['visible' => $visible], $where . ($from === null ? '' : " AND visible='" . $from . "'"));
+            $this->throwFor('throw_after', $pids);
         }
 
         private function threads(array $tids, int $visible, ?int $from): void
@@ -169,6 +187,7 @@ if (!class_exists('Moderation', false)) {
             $db->update_query('threads', ['visible' => $visible], 'tid IN (' . $list . ')' . $only);
             $db->write_query('UPDATE ' . TABLE_PREFIX . "posts SET visible='" . $visible . "' WHERE pid IN (SELECT firstpost FROM "
                 . TABLE_PREFIX . 'threads WHERE tid IN (' . $list . '))' . $only);
+            $this->throwFor('throw_after', $tids);
         }
     }
 }

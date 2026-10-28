@@ -47,6 +47,8 @@ final class Platform
         // The SHA-256 of the text sent (never the text itself) and the masked text of a post
         // the plugin kept in the queue.
         'sent_sha256' => 'varchar(64)', 'masked_text' => 'text',
+        // Steps that threw for the row ({@see Applier::failedStep}).
+        'apply_errors' => 'small',
     ];
 
     /** The log table's columns. */
@@ -437,7 +439,7 @@ final class Platform
             'prefix_len' => 0, 'text_len' => 0, 'verdict' => '', 'categories' => '',
             'support' => 0, 'error_code' => '', 'decided_at' => 0, 'auto_published' => 0,
             'claimed_at' => 0, 'claimed_from' => '', 'original_text' => '', 'sent_sha256' => '',
-            'masked_text' => '',
+            'masked_text' => '', 'apply_errors' => 0,
         ]));
     }
 
@@ -491,6 +493,22 @@ final class Platform
         $this->db->write_query('UPDATE ' . $this->prefix . self::PENDING_TABLE
             . " SET status=claimed_from, claimed_at='0' WHERE status='" . Status::APPLYING
             . "' AND claimed_from<>'' AND claimed_at<'" . $before . "'");
+    }
+
+    /**
+     * Counts a step that threw for a row, and gives back its claim: a claimed row returns to
+     * the status it was claimed from, an unclaimed one keeps its status.
+     *
+     * @param int $pid The post.
+     * @return int The row's failed steps so far; 0 when there is no row.
+     */
+    public function countFailure(int $pid): int
+    {
+        $this->db->write_query('UPDATE ' . $this->prefix . self::PENDING_TABLE
+            . " SET apply_errors=apply_errors+1, claimed_at='0', status=CASE WHEN status='" . Status::APPLYING
+            . "' AND claimed_from<>'' THEN claimed_from ELSE status END WHERE pid='" . $pid . "'");
+        $row = $this->pending($pid);
+        return $row === null ? 0 : (int)$row['apply_errors'];
     }
 
     /**
@@ -556,7 +574,8 @@ final class Platform
     }
 
     /**
-     * The newest rows a moderator should look at: held, flagged for support, or waiting.
+     * The newest rows a moderator should look at: held, flagged for support, waiting, or left
+     * to a human after a step kept failing.
      *
      * @param int $limit At most this many.
      * @return array<int,array<string,mixed>> Rows, newest first.
@@ -564,7 +583,7 @@ final class Platform
     public function attentionRows(int $limit): array
     {
         return $this->rows(self::PENDING_TABLE,
-            "support='1' OR auto_published='1' OR status IN ('"
+            "support='1' OR auto_published='1' OR verdict='" . Status::REASON_APPLY_ERROR . "' OR status IN ('"
                 . implode("','", [Status::HELD, Status::PENDING, Status::RETRY, Status::APPLYING]) . "')",
             ['order_by' => 'submitted_at', 'order_dir' => 'DESC', 'limit' => $limit]);
     }

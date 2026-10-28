@@ -112,10 +112,12 @@ $l['minos_reason_text_error'] = 'nie udało się odczytać tekstu postu';
 $l['minos_reason_edited'] = 'edytowany przed werdyktem';
 $l['minos_reason_text_changed'] = 'tekst postu inny niż wysłany do oceny — decyduje człowiek';
 $l['minos_reason_truncated'] = 'wpis dłuższy niż 3000 znaków — oceniono początek';
+$l['minos_reason_apply_error'] = 'błąd przy stosowaniu werdyktu (3 próby) — decyduje człowiek';
 
 $l['minos_event_config_error'] = 'Błąd konfiguracji';
 $l['minos_event_retry'] = 'Ponowienie wysyłki';
 $l['minos_event_recovered'] = 'Wysyłka znów działa';
 $l['minos_event_timeout'] = 'Brak werdyktu w czasie';
 $l['minos_event_text_error'] = 'Nie udało się odczytać tekstu postu';
+$l['minos_event_error'] = 'Błąd przy obsłudze postu (krok w kolumnie „Kod”)';
 $l['minos_event_resumed'] = 'Wtyczka znów włączona — posty czekające na werdykt wysłane ponownie';

@@ -137,6 +137,15 @@ applying for more than 5 min ─► back to claimed_from (the task)
   verdict that arrived before the `202` is not overwritten.
 - Before applying, the post is read again: gone → `gone`; no longer unapproved (a moderator
   acted) → `superseded`.
+- One row that throws never stops the others: `try/catch (\Throwable $e)` around one row
+  of the task's timeout loop, one row's item in a resubmission, each batch's send, and the
+  webhook's `verdict()`/`late()`. `Applier::failedStep` logs `error` with the step as its
+  code and the post id (never `getMessage()`), counts it in `apply_errors` and gives the
+  claim back (`Platform::countFailure`); the webhook answers `500` so the gateway delivers
+  again. After 3 failed steps the row is `held` with `apply_error` (a fail-open post stays
+  published, its late window closed) and nothing more is done to the post. A failed
+  batch is only logged; its rows stay due. A redelivery after a half-applied verdict finds
+  the post changed and records `superseded`.
 - A verdict applies only to the text that was sent. The submission keeps the SHA-256 of
   `tekst` in `sent_sha256` (never the text); before any verdict, on time or late, the post
   is rendered again (`Text::forPost` with the forum's current options) and compared. No

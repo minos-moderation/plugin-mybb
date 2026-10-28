@@ -25,7 +25,9 @@ namespace Minos\MyBB;
  * deactivation, {@see Installer::deactivate}); the first run after it is switched on again
  * sends what was waiting again, with a fresh timeout, before step 1 could fail it.
  *
- * Each run handles at most {@see LIMIT} rows per step; the rest wait five minutes.
+ * Each run handles at most {@see LIMIT} rows per step; the rest wait five minutes. A row
+ * that throws is logged and left for the next run ({@see Applier::failedStep}); it never
+ * stops the others.
  * No PHP 8 syntax.
  */
 final class Task
@@ -88,10 +90,16 @@ final class Task
 
         $timeouts = 0;
         foreach ($this->platform->expiredPending($now - $settings->timeoutS(), self::LIMIT) as $row) {
-            if ($this->platform->claimPending((int)$row['pid'], $now)) {
-                $this->applier->failure($row, Status::REASON_TIMEOUT, $settings, $now);
-                $this->platform->log('timeout', '', (int)$row['pid'], $now);
-                $timeouts++;
+            // One row that throws (a hook of another plugin inside `Moderation`, say) is that
+            // row's problem: the others are still timed out, retried and pruned.
+            try {
+                if ($this->platform->claimPending((int)$row['pid'], $now)) {
+                    $this->applier->failure($row, Status::REASON_TIMEOUT, $settings, $now);
+                    $this->platform->log('timeout', '', (int)$row['pid'], $now);
+                    $timeouts++;
+                }
+            } catch (\Throwable $e) {
+                $this->applier->failedStep((int)$row['pid'], 'timeout', $now);
             }
         }
 

@@ -208,6 +208,10 @@ final class Submitter
     /**
      * Sends waiting rows again (the task), in batches of at most {@see Gateway::MAX_ITEMS}.
      *
+     * A row that throws while its item is built, and a batch that throws while it is sent,
+     * are logged by step and post id and left for the next run; the other rows and batches
+     * go on ({@see Applier::failedStep}).
+     *
      * @param array<int,array<string,mixed>> $rows     Rows due for a retry.
      * @param Settings                       $settings The settings (active).
      * @param int                            $now      Unix seconds.
@@ -217,41 +221,73 @@ final class Submitter
     {
         $batch = [];
         foreach ($rows as $row) {
-            $pid = (int)$row['pid'];
-            $post = $this->platform->post($pid);
-            if ($post === null || $post['visible'] !== 0) {
-                if ($this->platform->claimPending($pid, $now)) {
-                    $this->platform->updatePending($pid, [
-                        'status' => $post === null ? Status::GONE : Status::SUPERSEDED, 'decided_at' => $now,
-                    ]);
-                }
+            try {
+                $entry = $this->element($row, $settings, $now);
+            } catch (\Throwable $e) {
+                $this->applier->failedStep((int)$row['pid'], 'resubmit', $now);
                 continue;
             }
-            $text = Text::forPost($post['message'], (int)$row['is_thread'] === 1 ? $post['subject'] : '',
-                $this->platform->forumParsing($post['fid']));
-            $signals = $text['error'] ? null : self::linkSignals($post['subject'] . "\n" . $post['message']);
-            if ($signals === null) {
-                $this->unreadable($row, $settings, $now);
-                continue;
+            if ($entry !== null) {
+                $batch[] = $entry;
             }
-            if ($text['tekst'] === '') {
-                $this->decideWithout($row, Status::REASON_NO_TEXT, $settings, $now);
-                continue;
-            }
-            $shape = [
-                'truncated' => $text['truncated'] ? 1 : 0, 'prefix_len' => $text['prefix_len'],
-                'text_len' => $text['text_len'], 'sent_sha256' => self::digest($text),
-            ];
-            $this->platform->updatePending($pid, $shape, Status::RETRY);
-            $batch[] = [
-                'row'  => $shape + $row,
-                'item' => self::item($pid, $text['tekst'], (string)$settings->profile(), $signals),
-            ];
         }
+        $sent = 0;
         foreach (array_chunk($batch, Gateway::MAX_ITEMS) as $chunk) {
-            $this->send($chunk, $settings, $now);
+            try {
+                $this->send($chunk, $settings, $now);
+                $sent += count($chunk);
+            } catch (\Throwable $e) {
+                // Its rows stay `retry`, due: the next run sends them again. The failure is
+                // the batch's, not its first row's, so no row's count grows.
+                try {
+                    $this->platform->log('error', 'send', (int)$chunk[0]['row']['pid'], $now);
+                } catch (\Throwable $ignored) {
+                    // The database refuses even this; the rows wait as they are.
+                }
+            }
         }
-        return count($batch);
+        return $sent;
+    }
+
+    /**
+     * One row's entry of a resubmission, or null when the row was decided instead (the post
+     * is gone, a human acted, or it has no text that can be sent).
+     *
+     * @param array<string,mixed> $row
+     * @return array{row:array<string,mixed>,item:array<string,mixed>}|null
+     */
+    private function element(array $row, Settings $settings, int $now): ?array
+    {
+        $pid = (int)$row['pid'];
+        $post = $this->platform->post($pid);
+        if ($post === null || $post['visible'] !== 0) {
+            if ($this->platform->claimPending($pid, $now)) {
+                $this->platform->updatePending($pid, [
+                    'status' => $post === null ? Status::GONE : Status::SUPERSEDED, 'decided_at' => $now,
+                ]);
+            }
+            return null;
+        }
+        $text = Text::forPost($post['message'], (int)$row['is_thread'] === 1 ? $post['subject'] : '',
+            $this->platform->forumParsing($post['fid']));
+        $signals = $text['error'] ? null : self::linkSignals($post['subject'] . "\n" . $post['message']);
+        if ($signals === null) {
+            $this->unreadable($row, $settings, $now);
+            return null;
+        }
+        if ($text['tekst'] === '') {
+            $this->decideWithout($row, Status::REASON_NO_TEXT, $settings, $now);
+            return null;
+        }
+        $shape = [
+            'truncated' => $text['truncated'] ? 1 : 0, 'prefix_len' => $text['prefix_len'],
+            'text_len' => $text['text_len'], 'sent_sha256' => self::digest($text),
+        ];
+        $this->platform->updatePending($pid, $shape, Status::RETRY);
+        return [
+            'row'  => $shape + $row,
+            'item' => self::item($pid, $text['tekst'], (string)$settings->profile(), $signals),
+        ];
     }
 
     /**

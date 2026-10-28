@@ -77,4 +77,11 @@ final class Status
      * sent: it judged the beginning only, so the failure mode decides.
      */
     public const REASON_TRUNCATED = 'truncated';
+
+    /**
+     * Recorded in `verdict` when applying a verdict or the failure mode threw
+     * {@see Applier::MAX_FAILURES} times for the post: nothing more is done to it, and a
+     * human decides.
+     */
+    public const REASON_APPLY_ERROR = 'apply_error';
 }

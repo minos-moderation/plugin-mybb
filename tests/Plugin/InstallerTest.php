@@ -137,12 +137,13 @@ final class InstallerTest extends TestCase
         minos_install();
         minos_activate();
 
-        foreach (['sent_sha256', 'masked_text'] as $column) {
+        foreach (['sent_sha256', 'masked_text', 'apply_errors'] as $column) {
             self::assertTrue($this->forum->db->field_exists($column, 'minos_pending'), $column);
         }
         $row = $this->forum->platform()->pending(41);
-        self::assertSame(['5', 'censored', 'ocenzurowane', 'Oryginał.', '', ''],
-            [(string)$row['tid'], $row['status'], $row['verdict'], $row['original_text'], $row['sent_sha256'], $row['masked_text']]);
+        self::assertSame(['5', 'censored', 'ocenzurowane', 'Oryginał.', '', '', '0'],
+            [(string)$row['tid'], $row['status'], $row['verdict'], $row['original_text'], $row['sent_sha256'], $row['masked_text'],
+                (string)$row['apply_errors']]);
         self::assertSame(1, (int)$this->forum->pdo->query('SELECT COUNT(*) FROM mybb_minos_pending')->fetchColumn());
 
         minos_activate();

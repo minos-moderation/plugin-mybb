@@ -53,6 +53,9 @@ use Minos\Client\WebhookPayload;
  */
 final class Applier
 {
+    /** Steps that may throw for one row before it is left to a human. */
+    public const MAX_FAILURES = 3;
+
     /** @var Platform */
     private $platform;
 
@@ -193,6 +196,45 @@ final class Applier
         }
         $this->platform->updatePending($pid, $record + self::maskKept($status, $payload) + ['status' => $status]);
         return $status;
+    }
+
+    /**
+     * A step that threw for one row (the task's timeout, a resubmission, a webhook's
+     * verdict): the row's error alone, never the others'.
+     *
+     * The log gets the step and the post id — never the error's message, which may carry
+     * the post's text or a secret. The row's claim is given back, so the task's next run or
+     * the gateway's next delivery tries again; a step that applied part of a verdict before
+     * it threw finds the post changed and leaves it ({@see untouchable}), never acting
+     * twice. After {@see MAX_FAILURES} failed steps the row is left to a human: `held` with
+     * `apply_error`, and nothing done to the post — the failure mode is no way out, since
+     * under fail-open it approves, and approving may be what fails. A post the failure mode
+     * already published stays published, and its late window closes.
+     *
+     * Never throws: a row whose own record cannot be written is left as it is.
+     *
+     * @param int    $pid  The post.
+     * @param string $step What threw (`timeout`, `resubmit`, `send`, `verdict`, `late`).
+     * @param int    $now  Unix seconds.
+     */
+    public function failedStep(int $pid, string $step, int $now): void
+    {
+        try {
+            $this->platform->log('error', $step, $pid, $now);
+            if ($this->platform->countFailure($pid) < self::MAX_FAILURES) {
+                return;
+            }
+            if ($this->platform->claimPending($pid, $now)) {
+                $this->platform->updatePending($pid,
+                    ['status' => Status::HELD, 'verdict' => Status::REASON_APPLY_ERROR, 'decided_at' => $now]);
+            } elseif ($this->platform->claimPending($pid, $now, [Status::PUBLISHED], true)) {
+                $this->platform->updatePending($pid, ['status' => Status::PUBLISHED, 'auto_published' => 0,
+                    'verdict' => Status::REASON_APPLY_ERROR, 'decided_at' => $now]);
+            }
+        } catch (\Throwable $e) {
+            // The database refuses even this: the next run or delivery meets the row as it is.
+            return;
+        }
     }
 
     /**
