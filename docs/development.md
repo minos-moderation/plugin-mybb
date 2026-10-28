@@ -120,8 +120,9 @@ insert ─► retry ──202──► pending ──webhook──► applying �
 pending/retry older than the timeout (≥ 20 min) ─► failure mode (timeout)
 fail-open ─► published + auto_published ──late webhook──► applying ─► held | censored | published
 a "retry" answer ─► the shared pause: nothing sent before its end (below)
-an author's edit while retry/pending, or of a post held as timeout/config_error/text_error
-  ─► rev + 1, retry due now, a fresh timeout (sent by the task as mybb:<pid>.<rev>)
+an author's edit while retry/pending, or of a post held as timeout/config_error/text_error/no_text,
+  that changes the text to send ─► rev + 1, retry due now, a fresh timeout
+  (sent by the task as mybb:<pid>.<rev>)
 a moderator's edit while retry/pending ─► superseded (the post stays in MyBB's queue)
 an edit of an auto-published post ─► auto_published = 0 (a late verdict no longer applies)
 applying for more than 5 min ─► back to claimed_from (the task)
@@ -219,6 +220,13 @@ gateway's answer as delivered (`answer`: `bezpieczne`, `ocenzurowane`, `zablokow
 the rows answered in the last 7 days: the median and the 95th percentile (nearest rank) of
 `answered_at` − `accepted_at` over those whose `202` was recorded, and a count per answer.
 No text, no key, no request to the gateway.
+
+What stays in MyBB's own records after those 30 days (read in the 1.8.41 source): the
+post itself; nothing in the moderator log — `Moderation` (`inc/class_moderation.php`)
+never calls `log_moderator_action`, the moderator pages (`modcp.php`, `moderation.php`…)
+do; no edit history — MyBB 1.8 has none (`posts.edituid`/`edittime` only, and
+`Platform::replaceMessage` sets neither); in the task log (`add_task_log`) one line per run
+with two counts.
 
 `PREFIX_minos_log` holds events with a code and a post id — never content, a key or a
 secret. Log entries are kept 30 days; decided rows — with the verdict, the original text

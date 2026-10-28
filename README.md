@@ -282,7 +282,12 @@ numer postu — nigdy treść błędu.
 - **Jak długo wtyczka przechowuje dane postu**: wiersz rozstrzygniętego postu — z werdyktem,
   kategoriami, oryginałem opublikowanego postu ocenzurowanego i zamaskowanym tekstem
   postu zatrzymanego w kolejce — jest usuwany 30 dni po rozstrzygnięciu. Sam wysłany
-  tekst nie jest przechowywany (tylko jego skrót SHA-256).
+  tekst nie jest przechowywany (tylko jego skrót SHA-256). Po tym czasie w rejestrach MyBB
+  nie zostaje nic z pracy wtyczki poza samym postem: zatwierdzenia, przywrócenia do kolejki
+  i miękkie usunięcia, które wykonuje wtyczka, nie trafiają do dziennika moderatorów (MyBB
+  zapisuje tam działania wykonane na stronach moderatorów, nie wywołania, których używa
+  wtyczka), MyBB 1.8 nie prowadzi historii edycji (zamaskowany tekst zastępuje treść postu
+  bez śladu), a dziennik zadań MyBB dostaje z każdego przebiegu tylko dwie liczby.
 
 ## Ograniczenia
 
