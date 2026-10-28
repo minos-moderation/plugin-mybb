@@ -155,6 +155,8 @@ Wtyczka nigdy nie zgaduje werdyktu. Tryb awaryjny rozstrzyga, co zrobić z poste
 werdyktu nie ma:
 - brama odpowiedziała `nieocenione` (nie zdążyła ocenić albo nie rozpoznała odpowiedzi);
 - werdykt nie nadszedł w czasie oczekiwania;
+- brama odmówiła przyjęcia postu do chwili, która wypada po końcu jego czasu oczekiwania
+  (np. wyczerpany dobowy limit klucza albo przeciążenie) — tryb awaryjny od razu;
 - brama odrzuciła wysyłkę z powodu błędu konfiguracji (np. zły klucz, profil spoza listy
   klucza, brak zapisanego webhooka) — kod błędu pojawia się w panelu administratora;
 - wtyczka jest włączona, ale jej ustawienia są niekompletne (brak klucza albo sekretu,
@@ -174,6 +176,12 @@ moderator zdecydował o poście albo post został edytowany, decyzja człowieka 
 Gdy brama jest chwilowo przeciążona albo niedostępna (lub nie ma połączenia), post czeka:
 zadanie ponawia wysyłkę po czasie wskazanym przez bramę albo po coraz dłuższej przerwie
 (od 1 minuty do 1 godziny). Jeśli do końca czasu oczekiwania się nie uda — tryb awaryjny.
+Gdy czas wskazany przez bramę kończy się dopiero po czasie oczekiwania postu (np. po
+wyczerpaniu dobowego limitu klucza brama odmawia do końca doby), post od razu dostaje tryb
+awaryjny, bez czekania. Przy wyczerpanym dobowym limicie i przy przeciążeniu bramy każda
+strona panelu administratora pokazuje, do której godziny brama nie przyjmuje postów;
+komunikat znika po pierwszej przyjętej wysyłce albo po tej godzinie. W tym czasie wtyczka
+nadal próbuje wysłać każdy nowy post, a brama mu odmawia.
 
 Gdy obsługa jednego postu kończy się błędem (np. wyjątkiem innej wtyczki podpiętej pod
 moderację MyBB), pozostałe posty są obsługiwane normalnie. Webhook odpowiada wtedy błędem
@@ -185,8 +193,9 @@ numer postu — nigdy treść błędu.
 ## Panel administratora
 
 - **Komunikat na każdej stronie panelu**, gdy wtyczka jest włączona, ale nie może działać
-  (czego brakuje), albo gdy brama odrzuciła ostatnią wysyłkę z powodu błędu konfiguracji
-  (kod błędu i czas). Znika po pierwszej udanej wysyłce.
+  (czego brakuje), gdy brama odrzuciła ostatnią wysyłkę z powodu błędu konfiguracji
+  (kod błędu i czas) albo gdy brama nie przyjmuje postów do określonej godziny (wyczerpany
+  dobowy limit klucza, przeciążenie — kod i godzina). Znika po pierwszej udanej wysyłce.
 - **Narzędzia i konserwacja → Dzienniki → Minos — dziennik**: stan konfiguracji, adres
   webhooka, posty wymagające uwagi (zatrzymane w kolejce, czekające na werdykt, opublikowane
   bez oceny w trybie fail-open i oznaczone jako potrzebujące wsparcia; przy poście

@@ -48,6 +48,12 @@ final class Status
 
     /** Reasons recorded in `verdict` when no verdict came (besides `nieocenione`). */
     public const REASON_TIMEOUT = 'timeout';
+
+    /**
+     * Recorded in `verdict` when the gateway refused the post (a limit, an overload) until
+     * after its receive timeout (shared rule D9.3a): the failure mode at once.
+     */
+    public const REASON_GATEWAY_LIMIT = 'gateway_limit';
     public const REASON_CONFIG_ERROR = 'config_error';
 
     /**

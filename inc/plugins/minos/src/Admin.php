@@ -10,9 +10,11 @@ namespace Minos\MyBB;
  * - The key and the webhook secret: the settings page shows an empty password field and,
  *   beside it, only the stored value's prefix ({@see Settings::prefixOf}); a typed value
  *   replaces the stored one, an empty field keeps it, a checkbox clears it.
- * - A notice on every ACP page while the plugin is switched on but cannot work (what is
- *   missing), or while the gateway's last answer to a submission was a configuration
- *   error (its code — never content).
+ * - A notice on every ACP page (the log page too) while the plugin is switched on but
+ *   cannot work (what is missing), while the gateway's last answer to a submission was a
+ *   configuration error (its code — never content), and while the gateway refuses posts
+ *   until a known moment — the key's daily limit, or an overload — with that moment: new
+ *   posts get the failure mode until then. The first accepted submission clears it.
  * - A page under Tools & Maintenance → Logs → "Minos — dziennik": the configuration's
  *   state, the posts that need a look (held, waiting, and those the gateway flagged with
  *   `wsparcie` — the author may need support) with the gateway's masked text of a censored
@@ -140,10 +142,12 @@ final class Admin
     /**
      * The notice, if one is due.
      *
+     * @param int|null $now Unix seconds (now by default).
      * @return string|null Escaped HTML, or null.
      */
-    public function notice(): ?string
+    public function notice(?int $now = null): ?string
     {
+        $now = $now ?? time();
         $settings = new Settings($this->platform->settings());
         if (!$settings->enabled()) {
             return null;
@@ -152,13 +156,21 @@ final class Admin
         if ($problems !== []) {
             return self::e($this->platform->lang('minos_notice_problems', $this->problemList($problems)));
         }
+        $notices = [];
         // Every ACP page asks; a missing table must not turn that into a database error.
         $last = $this->platform->tablesExist() ? $this->platform->lastLog(['config_error', 'recovered']) : null;
         if ($last !== null && $last['event'] === 'config_error') {
-            return self::e($this->platform->lang('minos_notice_config_error', (string)$last['code'],
+            $notices[] = self::e($this->platform->lang('minos_notice_config_error', (string)$last['code'],
                 date('Y-m-d H:i', (int)$last['dateline'])));
         }
-        return null;
+        // The gateway's own code (checked against `[a-z0-9_]` by Gateway::classify) and a
+        // time: never the key, never the answer's body.
+        $refusal = $this->platform->state()[Submitter::REFUSAL] ?? null;
+        if (is_array($refusal) && (int)($refusal['until'] ?? 0) > $now) {
+            $key = (string)($refusal['kod'] ?? '') === Submitter::DAILY_LIMIT ? 'minos_notice_daily_limit' : 'minos_notice_overloaded';
+            $notices[] = self::e($this->platform->lang($key, date('Y-m-d H:i', (int)$refusal['until']), (string)$refusal['kod']));
+        }
+        return $notices === [] ? null : implode('<br />', $notices);
     }
 
     /**

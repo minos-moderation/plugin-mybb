@@ -315,6 +315,98 @@ final class SubmissionTest extends PluginTestCase
         self::assertSame(['retry', 'limit_minutowy_klucza'], [$this->logEntries()[0]['event'], $this->logEntries()[0]['code']]);
     }
 
+    /**
+     * The audit's probe M4: the key's daily limit, `ponow_za_s` = 10 hours. The post cannot
+     * be assessed within its 20 minutes, so it gets the failure mode at once (rule D9.3a)
+     * instead of waiting, and every ACP page says until when the gateway refuses.
+     *
+     * @dataProvider failureModes
+     */
+    public function testTheDailyLimitAppliesTheFailureModeAtOnceAndSaysUntilWhen(string $mode, int $visible, string $status): void
+    {
+        $this->forum->set(['minos_failure_mode' => $mode]);
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(429, 'limit_dobowy_klucza', 36000)]));
+        $pid = $this->heldReply('Zwykły post po wyczerpaniu limitu.');
+
+        self::assertCount(1, $this->forum->transport->requests);
+        self::assertSame([$visible, $status, Status::REASON_GATEWAY_LIMIT, 'limit_dobowy_klucza'],
+            [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status'], $this->forum->row($pid)['verdict'],
+                $this->forum->row($pid)['error_code']]);
+        $this->forum->platform()->updatePending($pid, ['submitted_at' => TIME_NOW - 19 * 60]);
+        task_minos(['tid' => 1]);
+        self::assertSame($status, $this->forum->row($pid)['status'], 'not waiting as retry after 19 minutes');
+
+        $notice = (string)$this->forum->plugin->admin->notice(TIME_NOW);
+        self::assertStringContainsString(date('Y-m-d H:i', TIME_NOW + 36000), $notice, 'the hour the gateway accepts again');
+        self::assertStringContainsString('limit_dobowy_klucza', $notice);
+        foreach ([Forum::KEY, Forum::SECRET, 'komunikat', '{'] as $never) {
+            self::assertStringNotContainsString($never, $notice, 'never the key or the answer\'s body');
+        }
+    }
+
+    /** @return array<string,array{0:string,1:int,2:string}> */
+    public function failureModes(): array
+    {
+        return [
+            'fail-closed' => ['fail-closed', 0, Status::HELD],
+            'fail-open'   => ['fail-open', 1, Status::PUBLISHED],
+        ];
+    }
+
+    public function testTheFirstAcceptedPostClearsTheNotice(): void
+    {
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(429, 'limit_dobowy_klucza', 36000), RecordingTransport::accepted()]));
+        $this->heldReply();
+        self::assertNotNull($this->forum->plugin->admin->notice(TIME_NOW));
+
+        $accepted = $this->heldReply();
+
+        self::assertSame(Status::PENDING, $this->forum->row($accepted)['status']);
+        self::assertNull($this->forum->plugin->admin->notice(TIME_NOW));
+    }
+
+    public function testTheNoticeEndsWhenTheRefusalDoes(): void
+    {
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(429, 'limit_dobowy_klucza', 36000)]));
+        $this->heldReply();
+        self::assertNull($this->forum->plugin->admin->notice(TIME_NOW + 36001), 'past the hour it named, it says nothing');
+    }
+
+    public function testAnOverloadShorterThanTheTimeoutIsRetriedAndShown(): void
+    {
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(429, 'kolejka_pelna', 60)]));
+        $pid = $this->heldReply();
+
+        self::assertSame([Status::RETRY, TIME_NOW + 60], [$this->forum->row($pid)['status'], (int)$this->forum->row($pid)['retry_at']]);
+        $notice = (string)$this->forum->plugin->admin->notice(TIME_NOW);
+        self::assertStringContainsString('przeciążona', $notice);
+        self::assertStringContainsString(date('Y-m-d H:i', TIME_NOW + 60), $notice);
+    }
+
+    public function testAnOverloadLongerThanTheTimeoutAppliesTheFailureModeAtOnce(): void
+    {
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(429, 'limit_globalny_b2b', 3600)]));
+        $pid = $this->heldReply();
+        self::assertSame([Status::HELD, Status::REASON_GATEWAY_LIMIT], [$this->forum->row($pid)['status'], $this->forum->row($pid)['verdict']]);
+        self::assertStringContainsString('limit_globalny_b2b', (string)$this->forum->plugin->admin->notice(TIME_NOW));
+    }
+
+    public function testTheTimeoutCountsFromTheFirstSubmission(): void
+    {
+        // Sent 18 minutes ago, refused now for 3 minutes: past its 20 minutes.
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(503, 'kolejka_niedostepna')]));
+        $late = $this->heldReply();
+        $early = $this->heldReply();
+        $this->forum->platform()->updatePending($late, ['submitted_at' => TIME_NOW - 18 * 60, 'retry_at' => TIME_NOW - 1]);
+        $this->forum->platform()->updatePending($early, ['submitted_at' => TIME_NOW - 60, 'retry_at' => TIME_NOW - 1]);
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(429, 'limit_minutowy_klucza', 180)]));
+
+        task_minos(['tid' => 1]);
+
+        self::assertSame([Status::HELD, Status::REASON_GATEWAY_LIMIT], [$this->forum->row($late)['status'], $this->forum->row($late)['verdict']]);
+        self::assertSame([Status::RETRY, TIME_NOW + 180], [$this->forum->row($early)['status'], (int)$this->forum->row($early)['retry_at']]);
+    }
+
     public function testA503OrNoAnswerRetriesAfterABackoff(): void
     {
         $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(503, 'kolejka_niedostepna')]));

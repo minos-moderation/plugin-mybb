@@ -66,6 +66,8 @@ $l['minos_problem_gateway_url'] = 'adres bramy musi zaczynać się od https://';
 $l['minos_problem_api_key'] = 'brak klucza API albo ma on zły format (wgb2b_…)';
 $l['minos_problem_webhook_secret'] = 'brak sekretu webhooka';
 $l['minos_problem_profile'] = 'nieznany profil oceny';
+$l['minos_notice_daily_limit'] = 'Brama nie przyjmuje postów z tego forum do {1}: wyczerpany dobowy limit klucza (kod: {2}). Do tego czasu nowe posty dostają tryb awaryjny.';
+$l['minos_notice_overloaded'] = 'Brama jest przeciążona i nie przyjmuje postów do {1} (kod: {2}). Posty, których czas oczekiwania minie wcześniej, dostają tryb awaryjny.';
 $l['minos_notice_config_error'] = 'Brama odrzuciła wysyłkę postów (kod: {1}, {2}). Takie posty dostają tryb awaryjny. Sprawdź klucz, profil oceny i adres webhooka zgłoszony dla klucza.';
 
 $l['minos_acp_title'] = 'Minos — moderacja postów';
@@ -105,6 +107,7 @@ $l['minos_status_superseded'] = 'Rozstrzygnięty przez człowieka';
 $l['minos_status_gone'] = 'Post nie istnieje';
 
 $l['minos_reason_timeout'] = 'brak werdyktu w czasie';
+$l['minos_reason_gateway_limit'] = 'brama nie przyjmie postu przed końcem czasu oczekiwania (limit albo przeciążenie)';
 $l['minos_reason_config_error'] = 'błąd konfiguracji';
 $l['minos_reason_not_configured'] = 'niekompletne ustawienia wtyczki — post nie został wysłany';
 $l['minos_reason_no_text'] = 'post bez tekstu';

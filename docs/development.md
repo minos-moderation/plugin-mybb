@@ -35,7 +35,7 @@ The classes:
 | `Applier` | A verdict or the failure mode → approve, hold, soft-delete, or publish the masked text. |
 | `Task` | Timeouts, due retries, pruning. |
 | `Installer` | Settings group, tables, task; the lifecycle functions. |
-| `Admin` | Masked secrets on the settings page, the ACP notice, the Tools → Logs page. |
+| `Admin` | Masked secrets on the settings page, the ACP notice (problems, a configuration error, a daily limit or overload until a given time), the Tools → Logs page. |
 | `Plugin` | Builds the objects once per request. |
 
 ## How the plugin holds a post
@@ -99,6 +99,7 @@ The text readers SEE, following MyBB's own text renderer
 insert ─► retry ──202──► pending ──webhook──► applying ─► published | censored | held | deleted
             │ ▲                                              superseded | gone
             │ └─ 429/503/no answer: retry_at = ponow_za_s, or 60 s doubling to 1 h
+            ├─ ponow_za_s ending after submitted_at + timeout: failure mode now (gateway_limit)
             └─ other 4xx: failure mode (config_error); ACP notice
 pending/retry older than the timeout (≥ 20 min) ─► failure mode (timeout)
 fail-open ─► published + auto_published ──late webhook──► applying ─► held | censored | published
@@ -133,6 +134,11 @@ applying for more than 5 min ─► back to claimed_from (the task)
   decision final.
 - A publishing verdict (`bezpieczne`) for a post cut at 3000 characters goes to the failure
   mode (`truncated`): the verdict judged the beginning only.
+- Rule D9.3(a): a refusal whose `ponow_za_s` (as the gateway gave it) ends after the row's
+  `submitted_at` + timeout gets the failure mode at once (`gateway_limit`). A
+  `limit_dobowy_klucza`, `limit_globalny_b2b` or `kolejka_pelna` refusal is kept in the
+  datacache entry (`refusal`: code, until) for the ACP notice "the gateway does not accept
+  until …"; the next `202` clears it, and it is not shown past its end.
 - The submission records the gateway's answer only while the row is still `retry`, so a
   verdict that arrived before the `202` is not overwritten.
 - Before applying, the post is read again: gone → `gone`; no longer unapproved (a moderator

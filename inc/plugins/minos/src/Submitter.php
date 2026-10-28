@@ -16,8 +16,12 @@ use SplObjectStorage;
  *    verdict that arrives before the gateway's `202` finds it.
  * 3. The gateway's answer ({@see send}): `202` → wait for the webhook; `429`/`503`/no
  *    answer → the task sends it again after `ponow_za_s`, or after a backoff doubling from
- *    60 s; any other refusal → a configuration error: the failure mode is applied, the
- *    code (never the content) is logged, and the ACP shows a notice.
+ *    60 s — unless `ponow_za_s` (as the gateway gave it) ends after the post's receive
+ *    timeout: then the failure mode applies at once (shared rule D9.3a), since the post
+ *    could not be assessed in time anyway; any other refusal → a configuration error: the
+ *    failure mode is applied, the code (never the content) is logged, and the ACP shows a
+ *    notice. A daily-limit or overload refusal is kept with the moment it ends, for the
+ *    ACP notice ("the gateway does not accept until …"); the next `202` clears it.
  *
  * A post the plugin does not touch: a draft, an edit, a post in a forum it does not
  * cover, a moderator's post (by setting), a post MyBB holds anyway (the forum moderates
@@ -45,6 +49,15 @@ final class Submitter
 
     /** The longest retry pause, in seconds. */
     public const MAX_BACKOFF_S = 3600;
+
+    /** The state key ({@see Platform::state}) of the gateway's last long refusal, for the ACP. */
+    public const REFUSAL = 'refusal';
+
+    /** The refusal that means "the key's allowance for the day is spent". */
+    public const DAILY_LIMIT = 'limit_dobowy_klucza';
+
+    /** Refusals that mean "the gateway is overloaded" (not this key's doing). */
+    public const OVERLOADED = ['limit_globalny_b2b', 'kolejka_pelna'];
 
     /** @var Platform */
     private $platform;
@@ -371,16 +384,27 @@ final class Submitter
             if ($last !== null && $last['event'] === 'config_error') {
                 $this->platform->log('recovered', '', 0, $now);
             }
+            $this->platform->setState(self::REFUSAL, null);
             return;
         }
 
         if ($result['outcome'] === Gateway::RETRY) {
+            $retryS = $result['ponow_za_s'];
+            if ($retryS !== null && ($result['kod'] === self::DAILY_LIMIT || in_array($result['kod'], self::OVERLOADED, true))) {
+                $this->platform->setState(self::REFUSAL, ['kod' => $result['kod'], 'since' => $now, 'until' => $now + $retryS]);
+            }
             foreach ($batch as $entry) {
                 $attempts = (int)$entry['row']['attempts'] + 1;
-                $pause = $result['ponow_za_s'] ?? min(self::MAX_BACKOFF_S, self::BACKOFF_S * (2 ** min(10, $attempts - 1)));
+                $pause = $retryS ?? min(self::MAX_BACKOFF_S, self::BACKOFF_S * (2 ** min(10, $attempts - 1)));
                 $this->platform->updatePending((int)$entry['row']['pid'], [
                     'retry_at' => $now + max(1, $pause), 'attempts' => $attempts, 'error_code' => $result['kod'],
                 ], Status::RETRY);
+                // Rule D9.3(a): the gateway refuses beyond the post's timeout — its
+                // `ponow_za_s` as given, not a pause of the plugin's own — so no verdict can
+                // come in time: the failure mode now, not after the wait.
+                if ($retryS !== null && $now + $retryS > (int)$entry['row']['submitted_at'] + $settings->timeoutS()) {
+                    $this->decideWithout($entry['row'], Status::REASON_GATEWAY_LIMIT, $settings, $now);
+                }
             }
             $this->platform->log('retry', $result['kod'], (int)$batch[0]['row']['pid'], $now);
             return;
