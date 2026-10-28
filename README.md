@@ -137,7 +137,8 @@ Wysyłane jest tylko:
     między nimi), więc tak są wysyłane, a komentarzy HTML (`<!-- … -->`) czytelnik nie
     widzi, więc nie są wysyłane;
   - cytat `[quote=NAZWA]` staje się „NAZWA napisał(a):” i cytowanym tekstem;
-    `[url=ADRES]opis[/url]` — „opis (ADRES)”; `[img]ADRES[/img]` i filmy — samym adresem;
+    `[url=ADRES]opis[/url]` — „opis (ADRES)”; `[img]ADRES[/img]` i filmy obok innego
+    tekstu — samym adresem;
   - MyCode, którego MyBB nie rozpozna (nieznany znacznik, znacznik bez pary, forum
     z wyłączonym MyCode), zostaje dosłownie — tak jak widzi go czytelnik;
 - profil oceny;
@@ -222,10 +223,15 @@ werdyktu nie ma:
   administratora;
 - wtyczka jest włączona, ale jej ustawienia są niekompletne (brak klucza albo sekretu,
   adres bramy bez `https://`, nieznany profil) — nic nie jest wysyłane;
-- post nie ma tekstu do oceny (np. sam załącznik) — także nowy wątek albo odpowiedź
-  z własnym tematem, jeśli ich treść nie ma tekstu: sam tytuł nie jest tekstem do oceny
-  i nie jest wysyłany. Pytanie i opcje ankiety są tekstem, więc wątek z ankietą i pustą
-  treścią jest wysyłany z tytułem i ankietą;
+- post nie ma tekstu do oceny — także nowy wątek albo odpowiedź z własnym tematem, jeśli
+  ich treść nie ma tekstu: sam tytuł nie jest tekstem do oceny i nie jest wysyłany. Tekstu
+  do oceny nie ma też post, którego czytelnik widzi tylko obrazek (`[img]`, a na forum
+  z HTML `<img>` — nawet z opisem `alt` albo `title`), film osadzony przez MyBB,
+  załącznik albo link bez widocznego opisu (`[url=ADRES] [/url]`, link wokół obrazka):
+  brama nie ocenia obrazów, a adres, którego czytelnik nie widzi, nie jest treścią postu.
+  Goły adres widoczny dla czytelnika (`https://…`) jest tekstem i jest wysyłany. Pytanie
+  i opcje ankiety są tekstem, więc wątek z ankietą i pustą treścią jest wysyłany z tytułem
+  i ankietą;
 - nie udało się odczytać tekstu postu (np. treść tak zbudowana, że przetwarzanie wyrażeń
   regularnych przerywa się z błędem) — wtyczka nie wysyła wtedy niczego, nawet samego
   tytułu wątku, a w dzienniku zapisuje zdarzenie z numerem postu;

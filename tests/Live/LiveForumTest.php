@@ -508,6 +508,29 @@ final class LiveForumTest extends TestCase
     }
 
     /**
+     * Shared rule F7 on the real forum: an image alone is held unsent (`no_text`), a bare
+     * address is sent as text.
+     */
+    public function testAnImageAloneIsNotSentAndABareAddressIs(): void
+    {
+        $board = self::$board;
+        $author = $board->login(self::AUTHOR, self::$passwords[self::AUTHOR]);
+        $queued = count($board->mockQueue());
+        $image = $board->reply($author, self::$tid, '[img]https://example.com/obrazek.png[/img]');
+        self::assertSame(['held', 'no_text'], [$board->pending($image)['status'], $board->pending($image)['verdict']]);
+        self::assertCount($queued, $board->mockQueue(), 'nothing sent for the image');
+        self::assertSame(0, (int)$board->post($image)['visible'], 'fail-closed');
+
+        $address = $board->reply($author, self::$tid, 'https://example.com/strona');
+        $sent = array_values(array_filter($board->mockQueue(), static function (array $entry) use ($address): bool {
+            return $entry['item_id'] === 'mybb:' . $address;
+        }));
+        self::assertCount(1, $sent);
+        self::assertSame(['https://example.com/strona', 1], [$sent[0]['text'], $sent[0]['meta']['links']]);
+        $board->deliver();
+    }
+
+    /**
      * Question 7, second half: the claim's conditional UPDATE on this engine — the first
      * claim of a waiting row changes one row, the second none.
      */

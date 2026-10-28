@@ -1,0 +1,125 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Minos\MyBB\Tests\Plugin;
+
+use Minos\MyBB\Status;
+use Minos\MyBB\Tests\Support\Forum;
+use Minos\MyBB\Tests\Support\PluginTestCase;
+
+/**
+ * Shared rule F7 for images, videos and links, through the hook functions: a post whose body
+ * shows a reader nothing but an image, a video MyBB embeds or a link without a label gets
+ * the failure mode at once as `no_text`, and nothing is sent — the gateway does not assess
+ * images, and an address the reader does not see is not what a verdict is about. An image's
+ * `alt` or `title` does not change that. A bare address the reader sees IS text: it is sent,
+ * and counted in the link signals.
+ */
+final class NoTextTest extends PluginTestCase
+{
+    /**
+     * @dataProvider nothingToRead
+     * @param array<string,int> $forum The forum's parsing options.
+     */
+    public function testABodyThatShowsNoTextIsNotSent(string $message, array $forum): void
+    {
+        $GLOBALS['minos_test']['forums'][Forum::FID] = $forum;
+        $pid = $this->heldReply($message);
+
+        self::assertSame([], $this->forum->transport->requests, 'nothing is sent');
+        self::assertSame([0, Status::HELD, Status::REASON_NO_TEXT],
+            [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status'], $this->forum->row($pid)['verdict']]);
+    }
+
+    /** @return array<string,array{0:string,1:array<string,int>}> */
+    public function nothingToRead(): array
+    {
+        return [
+            'an image'                    => ['[img]https://example.com/obrazek.png[/img]', []],
+            'an image with its size'      => ['[img=100x50]https://example.com/obrazek.png[/img]', []],
+            'an image aligned'            => ['[img=100x50 align=right]https://example.com/obrazek.png[/img]', []],
+            'two images and blank lines'  => ["[img]https://example.com/a.png[/img]\n\n[img]https://example.com/b.png[/img]", []],
+            'a video MyBB embeds'         => ['[video=youtube]https://www.youtube.com/watch?v=dQw4w9WgXcQ[/video]', []],
+            'a link with a blank label'   => ['[url=https://example.com/] [/url]', []],
+            'an image link'               => ['[url=https://example.com/][img]https://example.com/obrazek.png[/img][/url]', []],
+            'a link with a bold blank'    => ['[url=https://example.com/][b] [/b][/url]', []],
+            'formatting around an image'  => ['[b][img]https://example.com/obrazek.png[/img][/b]', []],
+            'an attachment'               => ['[attachment=4]', []],
+            'HTML: an image with alt and title' => ['<img src="https://example.com/a.png" alt="podpis" title="tytuł">', ['allowhtml' => 1]],
+            'HTML: a link without text'   => ['<a href="https://example.com/" title="tytuł"> </a>', ['allowhtml' => 1]],
+        ];
+    }
+
+    /**
+     * @dataProvider textToRead
+     * @param array<string,int> $forum The forum's parsing options.
+     */
+    public function testABodyThatShowsTextIsSent(string $message, array $forum, string $tekst): void
+    {
+        $GLOBALS['minos_test']['forums'][Forum::FID] = $forum;
+        $pid = $this->heldReply($message);
+
+        self::assertCount(1, $this->forum->transport->requests);
+        $item = $this->forum->transport->lastBody()['elementy'][0];
+        self::assertSame($tekst, $item['tekst']);
+        self::assertSame(Status::PENDING, $this->forum->row($pid)['status']);
+    }
+
+    /** @return array<string,array{0:string,1:array<string,int>,2:string}> */
+    public function textToRead(): array
+    {
+        return [
+            'a bare address'              => ['https://example.com/strona', [], 'https://example.com/strona'],
+            'an address in [url]'         => ['[url]https://example.com/strona[/url]', [], 'https://example.com/strona'],
+            'a link with a label'         => ['[url=https://example.com/]opis[/url]', [], 'opis (https://example.com/)'],
+            'an image beside text'        => ['Patrz: [img]https://example.com/a.png[/img]', [], 'Patrz: https://example.com/a.png'],
+            'an image MyBB shows as a link' => ['[img]https://example.com/a.png[/img]', ['allowimgcode' => 0], 'https://example.com/a.png'],
+            'a video of an unknown site'  => ['[video=nieznany]https://example.com/film[/video]', [], 'https://example.com/film'],
+            'a video tag MyBB leaves'     => ['[video=youtube]to nie adres[/video]', [], 'to nie adres'],
+            'an empty link MyBB leaves'   => ['[url=https://example.com/][/url]', [], '[url=https://example.com/][/url]'],
+            'a quote of an image'         => ['[quote=Ktoś][img]https://example.com/a.png[/img][/quote]', [],
+                "Ktoś napisał(a):\nhttps://example.com/a.png"],
+            'HTML: an image beside text, its hints with it' => ['Tekst <img src="https://example.com/a.png" alt="podpis">',
+                ['allowhtml' => 1], 'Tekst podpis'],
+        ];
+    }
+
+    public function testTheLinkSignalsOfABareAddressAreSent(): void
+    {
+        $this->heldReply('Zobacz https://www.przyklad.com.pl/strona');
+        $meta = $this->forum->transport->lastBody()['elementy'][0]['meta'];
+        self::assertSame([1, ['przyklad.com.pl']], [$meta['links'], $meta['link_domains']]);
+    }
+
+    /**
+     * Under fail-open an image alone is published at once, marked as published unassessed;
+     * a new thread of an image under an offensive title sends nothing, not even the title.
+     */
+    public function testUnderFailOpenAnImageAloneIsPublishedUnassessedAndATitleIsNotSent(): void
+    {
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $pid = (int)$this->forum->write(true, '[img]https://example.com/a.png[/img]', ['subject' => 'Obraźliwy tytuł'])
+            ->return_values['pid'];
+        task_minos(['tid' => 1]);
+
+        self::assertSame([], $this->forum->transport->requests);
+        $row = $this->forum->row($pid);
+        self::assertSame([1, Status::PUBLISHED, Status::REASON_NO_TEXT, '1'],
+            [(int)$this->forum->post($pid)['visible'], $row['status'], $row['verdict'], (string)$row['auto_published']]);
+    }
+
+    /**
+     * An author's edit that adds words to a post held as `no_text` sends it, as a revision.
+     */
+    public function testAnEditThatAddsTextToAnImageSendsIt(): void
+    {
+        $pid = $this->heldReply('[img]https://example.com/a.png[/img]');
+        self::assertSame(Status::REASON_NO_TEXT, $this->forum->row($pid)['verdict']);
+        $this->forum->edit($pid, 'Opis: [img]https://example.com/a.png[/img]', 'RE: Wątek');
+        task_minos(['tid' => 1]);
+        self::assertCount(1, $this->forum->transport->requests);
+        self::assertSame(['mybb:' . $pid . '.1', 'Opis: https://example.com/a.png'],
+            [$this->forum->transport->lastBody()['elementy'][0]['id'], $this->forum->transport->lastBody()['elementy'][0]['tekst']]);
+    }
+}

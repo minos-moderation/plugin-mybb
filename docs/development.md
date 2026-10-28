@@ -82,7 +82,7 @@ The text readers SEE, following MyBB's own text renderer
   and an HTML comment goes (`<!-->` and `<!--->` end at once, `-->` or `--!>` end any
   other, one never closed hides the rest) — as the live run shows (`reader-view.json`).
 - MyCode: `[quote=NAME]` → "NAME napisał(a):"; `[url=X]Y[/url]` → "Y (X)"; `[img]X[/img]`,
-  `[video=…]X[/video]` → X; `[code]`/`[php]` keep their content; formatting tags go; MyCode
+  `[video=…]X[/video]` → X beside other text; `[code]`/`[php]` keep their content; formatting tags go; MyCode
   MyBB would not parse stays literally.
 - What heads the post goes in front, a blank line between the parts (`Text::ofPost`): a
   new thread's subject (always escaped, never parsed), then its poll — the question
@@ -101,6 +101,15 @@ The text readers SEE, following MyBB's own text renderer
   poll, `tekst` is `''` and the post gets the failure mode at once as `no_text`, nothing
   sent (fail-open publishes it marked `auto_published`). A poll is text (S5): an empty body
   with a poll sends the title and the poll.
+- Neither is an image, a video or a link without a label (F7, `Text::shows`): a body whose
+  only visible content is `[img]`/`[img=WxH]`/`[img align=…]` (with the forum's image
+  MyCode on), a `[video=…]` of a site MyBB embeds with a valid address, an attachment,
+  `[url=X]` around a label that shows nothing (blanks, an image, empty formatting), or on an
+  HTML forum an `<img>` — its `alt`/`title` notwithstanding — or an `<a>` without text, is
+  `no_text`. A bare address the reader sees is text (`https://…`, `[url]X[/url]`, an image
+  or video tag MyBB leaves as a link or as typed); beside other text, an image's address
+  and a hint are sent as before. The cases are MyBB 1.8.41's reader view as the live run
+  recorded it (`reader-view.json`, checked by `ReaderViewTest`).
 - The link signals count the links of what is sent, head included (`Text::sourceOf`).
 - Every regular expression runs through one checked helper in `Text`: a PCRE failure (a
   post crafted to exhaust the backtrack limit, e.g. a few hundred unclosed `[url=` tags)

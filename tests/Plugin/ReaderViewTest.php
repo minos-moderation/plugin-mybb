@@ -34,6 +34,33 @@ final class ReaderViewTest extends TestCase
     }
 
     /**
+     * Shared rule F7 on every recorded case: something is sent exactly when the reader sees
+     * text — not for an image, a video MyBB embeds or a link without a label, whatever their
+     * hints; yes for a bare address, and for MyCode MyBB leaves on the page as typed.
+     *
+     * @dataProvider allCases
+     */
+    public function testSomethingIsSentExactlyWhenTheReaderSeesText(string $id): void
+    {
+        $case = self::cases()[$id];
+        $tekst = Text::forPost($case['message'], '', $case['forum'])['tekst'];
+        self::assertSame($case['has_text'], $tekst !== '', $id . ': "' . $case['text'] . '" / sent "' . $tekst . '"');
+    }
+
+    /**
+     * @return array<string,array{0:string}>
+     */
+    public function allCases(): array
+    {
+        $cases = [];
+        foreach (array_keys(self::cases()) as $id) {
+            $cases[$id] = [$id];
+        }
+        self::assertGreaterThanOrEqual(20, count($cases), 'the guard: the fixture has its cases');
+        return $cases;
+    }
+
+    /**
      * @return array<string,array{0:string}>
      */
     public function htmlCases(): array
