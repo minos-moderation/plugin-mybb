@@ -201,6 +201,17 @@ staged root too, installs the plugin and posts through its hooks with the real c
 transport, so both sides run the distributable; the mock's worker delivers, including a
 censored post published over HTTP. CI runs everything on PHP 7.4 and 8.3.
 
+## Continuous integration
+
+`.github/workflows/tests.yml` runs the syntax check and `vendor/bin/phpunit` on PHP 7.4 and
+8.3 and, on every pull request, the release build and its checks; `release.yml` runs on a
+`v*` tag. Every `uses:` in both is pinned to a full 40-character commit SHA with the
+version in a comment (`uses: actions/checkout@<sha>  # v5.0.0`), so a moved tag cannot
+change what runs. To refresh a pin, resolve the new tag to its commit —
+`git ls-remote https://github.com/<owner>/<action> 'refs/tags/<tag>*'`, taking the peeled
+`^{}` line of an annotated tag — check that the commit belongs to that release, and
+replace the SHA and the comment together, in both files.
+
 ## Against the mock gateway by hand
 
 The mock is in `vendor/minos-moderation/client-php/mock-gateway` (its manual: the
