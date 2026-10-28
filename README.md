@@ -15,8 +15,11 @@ Minos.
    post użytkownika pod moderacją: post trafia do zwykłej kolejki moderacji forum
    (niewidoczny, liczniki forum nie uwzględniają go aż do publikacji — dokładnie jak przy
    ręcznej moderacji).
-2. Wtyczka wysyła tekst postu do bramy (`POST /api/v1/b2b/oceny`, do 10 sekund). Brama
-   odpowiada od razu, że przyjęła post do oceny.
+2. Wtyczka wysyła tekst postu do bramy (`POST /api/v1/b2b/oceny`). Brama odpowiada od
+   razu, że przyjęła post do oceny; autor czeka na tę odpowiedź najwyżej 10 sekund. Gdy
+   brama przed chwilą poprosiła o ponowienie (limit, przeciążenie, `503`) albo nie
+   odpowiedziała, wtyczka do chwili, którą wskazała brama (bez wskazania — przez minutę),
+   nie wysyła postów w żądaniu autora: autor nie czeka, a post wyśle zadanie.
 3. Po ocenie brama odsyła werdykt na adres webhooka forum,
    `https://<adres-forum>/minos-webhook.php`, podpisany sekretem webhooka. Wtyczka sprawdza
    podpis i stosuje werdykt.
@@ -33,7 +36,10 @@ Minos.
   z `http` na `https` ani z `www` na domenę bez `www`).
 - Klucz B2B (`wgb2b_…`) i sekret webhooka, wydane przez operatora bramy. Sekret jest
   pokazywany tylko raz, przy wydaniu klucza.
-- Działające zadania MyBB (uruchamiane przez ruch na forum albo przez crona).
+- Działające zadania MyBB. Bez dodatkowej konfiguracji MyBB uruchamia je przy okazji ruchu
+  na forum, więc na cichym forum ponowienia i tryb awaryjny czekają na odwiedzających.
+  Zalecamy prawdziwy cron, np. `* * * * * php /ścieżka/do/forum/task.php` — przy każdym
+  wywołaniu z wiersza poleceń MyBB uruchamia najbliższe zaległe zadanie.
 
 ## Instalacja
 
@@ -205,12 +211,17 @@ moderator zdecydował o poście albo post został edytowany, decyzja człowieka 
 Gdy brama jest chwilowo przeciążona albo niedostępna (lub nie ma połączenia albo
 połączenie przekroczyło czas — `408`), post czeka: zadanie ponawia wysyłkę po czasie
 wskazanym przez bramę albo po coraz dłuższej przerwie (od 1 minuty do 1 godziny). Jeśli do końca czasu oczekiwania się nie uda — tryb awaryjny.
+Taka odmowa wstrzymuje wszystkie wysyłki forum do chwili wskazanej przez bramę (bez
+wskazania — na minutę): w tym czasie wtyczka nie wysyła nowych postów (autor nie czeka na
+bramę, post czeka na zadanie), a zadanie nie wysyła ponowień. Zadanie przerywa przebieg
+na pierwszej paczce, której brama nie przyjęła.
 Gdy czas wskazany przez bramę kończy się dopiero po czasie oczekiwania postu (np. po
 wyczerpaniu dobowego limitu klucza brama odmawia do końca doby), post od razu dostaje tryb
 awaryjny, bez czekania. Przy wyczerpanym dobowym limicie i przy przeciążeniu bramy każda
 strona panelu administratora pokazuje, do której godziny brama nie przyjmuje postów;
-komunikat znika po pierwszej przyjętej wysyłce albo po tej godzinie. W tym czasie wtyczka
-nadal próbuje wysłać każdy nowy post, a brama mu odmawia.
+komunikat znika po pierwszej przyjętej wysyłce albo po tej godzinie. Do tej godziny
+wtyczka nie wysyła postów: nowy post, którego czas oczekiwania skończy się wcześniej, od
+razu dostaje tryb awaryjny.
 
 Gdy obsługa jednego postu kończy się błędem (np. wyjątkiem innej wtyczki podpiętej pod
 moderację MyBB), pozostałe posty są obsługiwane normalnie. Webhook odpowiada wtedy błędem

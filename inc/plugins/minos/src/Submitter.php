@@ -23,6 +23,14 @@ use SplObjectStorage;
  *    notice. A daily-limit or overload refusal is kept with the moment it ends, for the
  *    ACP notice ("the gateway does not accept until …"); the next `202` clears it.
  *
+ * The shared pause: every "retry" answer (a `429` of any kind, a `503` or another `5xx`, a
+ * `408`, no answer at all) also means "send nothing before T" for the whole forum — T is
+ * `ponow_za_s` as the gateway gave it, or {@see BACKOFF_S} without one ({@see PAUSE}).
+ * Until T a new post is not sent in its author's request (the author does not wait for a
+ * gateway that has just refused): it waits as `retry` until T, or gets the failure mode at
+ * once when T falls after its timeout (D9.3a). The task sends nothing before T either, and
+ * a run stops at the first batch the gateway asks to retry.
+ *
  * An edit of a post still waiting for its verdict ({@see onUpdated}): by its author (anyone
  * but a moderator of its forum), a new revision, sent by the task as `mybb:<pid>.<n>` — a
  * verdict for an earlier revision is then acknowledged and not applied; by a moderator, a
@@ -60,6 +68,12 @@ final class Submitter
 
     /** The state key ({@see Platform::state}) of the gateway's last long refusal, for the ACP. */
     public const REFUSAL = 'refusal';
+
+    /**
+     * The state key of the shared pause: `['until' => T, 'kod' => code]` — nothing is sent
+     * before T (the class doc). The next `202` clears it; past T it is ignored.
+     */
+    public const PAUSE = 'pause';
 
     /** The refusal that means "the key's allowance for the day is spent". */
     public const DAILY_LIMIT = 'limit_dobowy_klucza';
@@ -195,6 +209,12 @@ final class Submitter
             $this->decideWithout($row, Status::REASON_NO_TEXT, $settings, $now);
             return;
         }
+        $until = $this->pausedUntil($now);
+        if ($until !== null) {
+            // The gateway has just asked to wait: the author does not wait for its refusal.
+            $this->waitOut([$row], $until, $settings, $now);
+            return;
+        }
         $meta = $signals + self::firstPost($row);
         $this->send([['row' => $row, 'item' => self::item($pid, $text['tekst'], (string)$settings->profile(), $meta)]],
             $settings, $now);
@@ -255,6 +275,10 @@ final class Submitter
     /**
      * Sends waiting rows again (the task), in batches of at most {@see Gateway::MAX_ITEMS}.
      *
+     * Nothing is sent while the shared pause lasts ({@see PAUSE}), and a run stops at the
+     * first batch the gateway asks to retry: the rows not sent wait until the pause ends,
+     * or get the failure mode now when it ends after their timeout ({@see waitOut}).
+     *
      * A row that throws while its item is built, and a batch that throws while it is sent,
      * are logged by step and post id and left for the next run; the other rows and batches
      * go on ({@see Applier::failedStep}).
@@ -266,6 +290,11 @@ final class Submitter
      */
     public function resubmit(array $rows, Settings $settings, int $now): int
     {
+        $until = $this->pausedUntil($now);
+        if ($until !== null) {
+            $this->waitOut($rows, $until, $settings, $now);
+            return 0;
+        }
         $batch = [];
         foreach ($rows as $row) {
             try {
@@ -280,6 +309,12 @@ final class Submitter
         }
         $sent = 0;
         foreach (array_chunk($batch, Gateway::MAX_ITEMS) as $chunk) {
+            // An earlier batch of this run was refused (or another request was): no more.
+            $until = $this->pausedUntil($now);
+            if ($until !== null) {
+                $this->waitOut(array_column($chunk, 'row'), $until, $settings, $now);
+                continue;
+            }
             try {
                 $this->send($chunk, $settings, $now);
                 $sent += count($chunk);
@@ -446,6 +481,7 @@ final class Submitter
                 $this->platform->log('recovered', '', 0, $now);
             }
             $this->platform->setState(self::REFUSAL, null);
+            $this->platform->setState(self::PAUSE, null);
             return;
         }
 
@@ -454,6 +490,9 @@ final class Submitter
             if ($retryS !== null && ($result['kod'] === self::DAILY_LIMIT || in_array($result['kod'], self::OVERLOADED, true))) {
                 $this->platform->setState(self::REFUSAL, ['kod' => $result['kod'], 'since' => $now, 'until' => $now + $retryS]);
             }
+            // The whole forum waits, not only this batch; a longer pause already kept stays.
+            $until = max($now + max(1, $retryS ?? self::BACKOFF_S), (int)$this->pausedUntil($now));
+            $this->platform->setState(self::PAUSE, ['until' => $until, 'kod' => $result['kod']]);
             foreach ($batch as $entry) {
                 $attempts = (int)$entry['row']['attempts'] + 1;
                 $pause = $retryS ?? min(self::MAX_BACKOFF_S, self::BACKOFF_S * (2 ** min(10, $attempts - 1)));
@@ -482,6 +521,45 @@ final class Submitter
             }
             $this->platform->updatePending((int)$entry['row']['pid'], ['error_code' => $result['kod']], Status::RETRY);
             $this->decideWithout($entry['row'], Status::REASON_CONFIG_ERROR, $settings, $now);
+        }
+    }
+
+    /**
+     * The end of the shared pause ({@see PAUSE}), while it lasts.
+     *
+     * @param int $now Unix seconds.
+     * @return int|null T, or null when nothing holds the sending back.
+     */
+    private function pausedUntil(int $now): ?int
+    {
+        $pause = $this->platform->state(self::PAUSE);
+        $until = is_array($pause) ? (int)($pause['until'] ?? 0) : 0;
+        return $until > $now ? $until : null;
+    }
+
+    /**
+     * Rows that may not be sent before T: each waits as `retry` until T, or — when T falls
+     * after its receive timeout, so no verdict could come in time — gets the failure mode
+     * now (`gateway_limit`, rule D9.3a), as a refusal that long would have given it. A row
+     * that throws is that row's problem ({@see Applier::failedStep}); the others go on.
+     *
+     * @param array<int,array<string,mixed>> $rows     Rows waiting as `retry`.
+     * @param int                            $until    T.
+     * @param Settings                       $settings The settings.
+     * @param int                            $now      Unix seconds.
+     */
+    private function waitOut(array $rows, int $until, Settings $settings, int $now): void
+    {
+        foreach ($rows as $row) {
+            try {
+                if ($until > (int)$row['submitted_at'] + $settings->timeoutS()) {
+                    $this->decideWithout($row, Status::REASON_GATEWAY_LIMIT, $settings, $now);
+                } else {
+                    $this->platform->updatePending((int)$row['pid'], ['retry_at' => $until], Status::RETRY);
+                }
+            } catch (\Throwable $e) {
+                $this->applier->failedStep((int)$row['pid'], 'resubmit', $now);
+            }
         }
     }
 

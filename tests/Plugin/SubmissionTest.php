@@ -120,6 +120,7 @@ final class SubmissionTest extends PluginTestCase
         }
         $this->forum->mybb->user = ['uid' => 99, 'postnum' => 50, 'moderateposts' => 0];
         $this->forum->plugin(new RecordingTransport());
+        $this->forum->endPause();
 
         task_minos(['tid' => 1]);
 
@@ -311,6 +312,7 @@ final class SubmissionTest extends PluginTestCase
         $this->forum->db->update_query('posts', ['message' => self::bomb()], "pid='" . $pid . "'");
         $this->forum->platform()->updatePending($pid, ['retry_at' => TIME_NOW - 1]);
         $this->forum->plugin(new RecordingTransport());
+        $this->forum->endPause();
 
         task_minos(['tid' => 1]);
 
@@ -379,15 +381,19 @@ final class SubmissionTest extends PluginTestCase
         ];
     }
 
+    /**
+     * The first `202` clears the notice — here the task's resend after the overload's minute,
+     * with the notice asked about as of the moment of the refusal, so only clearing can end it.
+     */
     public function testTheFirstAcceptedPostClearsTheNotice(): void
     {
-        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(429, 'limit_dobowy_klucza', 36000), RecordingTransport::accepted()]));
-        $this->heldReply();
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(429, 'kolejka_pelna', 60), RecordingTransport::accepted()]));
+        $pid = $this->heldReply();
         self::assertNotNull($this->forum->plugin->admin->notice(TIME_NOW));
 
-        $accepted = $this->heldReply();
+        $this->forum->plugin->task->run(TIME_NOW + 61);
 
-        self::assertSame(Status::PENDING, $this->forum->row($accepted)['status']);
+        self::assertSame(Status::PENDING, $this->forum->row($pid)['status']);
         self::assertNull($this->forum->plugin->admin->notice(TIME_NOW));
     }
 
@@ -434,10 +440,11 @@ final class SubmissionTest extends PluginTestCase
         $this->forum->platform()->updatePending($early, ['submitted_at' => TIME_NOW - 60, 'retry_at' => TIME_NOW - 1]);
         $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(429, 'limit_minutowy_klucza', 180)]));
 
-        task_minos(['tid' => 1]);
+        // After the 503's pause: 19 minutes and a second after the late one was first sent.
+        $this->forum->plugin->task->run(TIME_NOW + 61);
 
         self::assertSame([Status::HELD, Status::REASON_GATEWAY_LIMIT], [$this->forum->row($late)['status'], $this->forum->row($late)['verdict']]);
-        self::assertSame([Status::RETRY, TIME_NOW + 180], [$this->forum->row($early)['status'], (int)$this->forum->row($early)['retry_at']]);
+        self::assertSame([Status::RETRY, TIME_NOW + 61 + 180], [$this->forum->row($early)['status'], (int)$this->forum->row($early)['retry_at']]);
     }
 
     /**
@@ -464,15 +471,25 @@ final class SubmissionTest extends PluginTestCase
         self::assertNull($this->forum->plugin->admin->notice(), 'no configuration error');
     }
 
-    public function testA503OrNoAnswerRetriesAfterABackoff(): void
+    /**
+     * @dataProvider unavailable
+     * @param array{status:int,body:string} $answer
+     */
+    public function testA503OrNoAnswerRetriesAfterABackoff(array $answer, string $code): void
     {
-        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(503, 'kolejka_niedostepna')]));
+        $this->forum->plugin(new RecordingTransport([$answer]));
         $pid = $this->heldReply();
-        self::assertSame([Status::RETRY, TIME_NOW + 60], [$this->forum->row($pid)['status'], (int)$this->forum->row($pid)['retry_at']]);
+        self::assertSame([Status::RETRY, TIME_NOW + 60, $code],
+            [$this->forum->row($pid)['status'], (int)$this->forum->row($pid)['retry_at'], $this->forum->row($pid)['error_code']]);
+    }
 
-        $this->forum->plugin(new RecordingTransport([['status' => 0, 'body' => '']]));
-        $pid = $this->heldReply();
-        self::assertSame([Status::RETRY, 'siec'], [$this->forum->row($pid)['status'], $this->forum->row($pid)['error_code']]);
+    /** @return array<string,array{0:array{status:int,body:string},1:string}> */
+    public function unavailable(): array
+    {
+        return [
+            '503'       => [RecordingTransport::refused(503, 'kolejka_niedostepna'), 'kolejka_niedostepna'],
+            'no answer' => [['status' => 0, 'body' => ''], 'siec'],
+        ];
     }
 
     public function testAConfigurationErrorAppliesTheFailureModeAndIsShownToTheAdministrator(): void

@@ -52,16 +52,15 @@ final class TaskTest extends PluginTestCase
     {
         $this->forum->plugin(new RecordingTransport([
             RecordingTransport::refused(429, 'kolejka_pelna', 60),
-            RecordingTransport::refused(429, 'kolejka_pelna', 60),
             RecordingTransport::accepted(),
         ]));
         $pid = $this->heldReply('Tekst do ponowienia.');
         $notDue = $this->heldReply();
-        $this->forum->platform()->updatePending($pid, ['retry_at' => TIME_NOW - 1]);
+        $this->forum->platform()->updatePending($notDue, ['retry_at' => TIME_NOW + 600]);
 
-        task_minos(['tid' => 1]);
+        $this->forum->plugin->task->run(TIME_NOW + 61);
 
-        self::assertCount(3, $this->forum->transport->requests);
+        self::assertCount(2, $this->forum->transport->requests, 'the refusal, then the resend');
         $item = $this->forum->transport->lastBody()['elementy'][0];
         self::assertSame(['mybb:' . $pid, 'Tekst do ponowienia.'], [$item['id'], $item['tekst']]);
         self::assertSame([Status::PENDING, '2'], [$this->forum->row($pid)['status'], (string)$this->forum->row($pid)['attempts']]);
@@ -79,6 +78,7 @@ final class TaskTest extends PluginTestCase
             $this->forum->platform()->updatePending($pid, ['retry_at' => TIME_NOW - 1]);
         }
         $this->forum->plugin(new RecordingTransport());
+        $this->forum->endPause();
 
         task_minos(['tid' => 1]);
 
@@ -99,6 +99,7 @@ final class TaskTest extends PluginTestCase
             $this->forum->platform()->updatePending($pid, ['retry_at' => TIME_NOW - 1]);
         }
         $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(413, 'limit_dlugosci', null, 1)]));
+        $this->forum->endPause();
 
         task_minos(['tid' => 1]);
 
@@ -117,6 +118,7 @@ final class TaskTest extends PluginTestCase
         $due = $this->heldReply();
         $neverAccepted = $this->heldReply();
         $this->forum->plugin(new RecordingTransport());
+        $this->forum->endPause();
         $accepted = $this->heldReply();
         $claimed = $this->heldReply();
         $platform = $this->forum->platform();
@@ -165,6 +167,7 @@ final class TaskTest extends PluginTestCase
         $this->forum->set(['minos_failure_mode' => 'fail-open']);
         $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(503, 'kolejka_niedostepna'), RecordingTransport::accepted()]));
         $retry = $this->heldReply('Czekał na ponowną wysyłkę.');
+        $this->forum->endPause();
         $pending = $this->heldReply('Czekał na werdykt.');
         self::assertSame([Status::RETRY, Status::PENDING], [$this->forum->row($retry)['status'], $this->forum->row($pending)['status']]);
         $this->forum->set(['minos_enabled' => '0']);
@@ -226,7 +229,7 @@ final class TaskTest extends PluginTestCase
         self::assertStringContainsString(date('Y-m-d H:i', TIME_NOW + 36000), (string)$later->admin->notice(TIME_NOW),
             'the refusal survived the deactivation too');
         $later->installer->activate();
-        $later->task->run(TIME_NOW);
+        $later->task->run(TIME_NOW + 36001); // after the refusal's pause
         self::assertSame(['mybb:' . $waiting], array_column($sent->lastBody()['elementy'] ?? [], 'id'), 'the backlog is sent again');
     }
 
@@ -246,7 +249,8 @@ final class TaskTest extends PluginTestCase
 
         $resending->task->run(TIME_NOW);
         $this->heldReply('Wysłany w tej samej chwili.');
-        $this->request($datacache, $sent)->task->run(TIME_NOW);
+        // After the refusal's pause, so a revived mark would make this run send again.
+        $this->request($datacache, $sent)->task->run(TIME_NOW + 61);
 
         $sends = array_filter($sent->requests, static function (array $request) use ($waiting): bool {
             return in_array('mybb:' . $waiting, array_column(json_decode($request['body'], true)['elementy'], 'id'), true);
@@ -287,6 +291,7 @@ final class TaskTest extends PluginTestCase
         $this->forum->platform()->updatePending($pid, ['retry_at' => TIME_NOW - 1]);
         $this->forum->db->update_query('posts', ['visible' => 1], "pid='" . $pid . "'");
         $this->forum->plugin(new RecordingTransport());
+        $this->forum->endPause();
 
         task_minos(['tid' => 1]);
 

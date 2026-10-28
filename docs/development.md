@@ -103,6 +103,7 @@ insert ─► retry ──202──► pending ──webhook──► applying �
             └─ other 4xx, a 2xx but 202: failure mode (config_error, http_<n>); ACP notice
 pending/retry older than the timeout (≥ 20 min) ─► failure mode (timeout)
 fail-open ─► published + auto_published ──late webhook──► applying ─► held | censored | published
+a "retry" answer ─► the shared pause: nothing sent before its end (below)
 an author's edit while retry/pending, or of a post held as timeout/config_error/text_error
   ─► rev + 1, retry due now, a fresh timeout (sent by the task as mybb:<pid>.<rev>)
 a moderator's edit while retry/pending ─► superseded (the post stays in MyBB's queue)
@@ -141,6 +142,13 @@ applying for more than 5 min ─► back to claimed_from (the task)
   `limit_dobowy_klucza`, `limit_globalny_b2b` or `kolejka_pelna` refusal is kept in the
   datacache entry `minos_refusal` (code, until) for the ACP notice "the gateway does not accept
   until …"; the next `202` clears it, and it is not shown past its end.
+- The shared pause (`Submitter::PAUSE`, datacache entry `minos_pause`: until, code): every
+  "retry" answer (any 429, 408, 5xx, no answer) holds every sending back until
+  now + `ponow_za_s` as given (60 s without one); a longer pause already kept stays. While
+  it lasts a new post is not sent in its author's request and the task sends nothing: a
+  due row waits with `retry_at` = the pause's end, or gets the failure mode at once
+  (`gateway_limit`) when the pause ends after its timeout. A task run stops sending at the
+  first batch the gateway asks to retry. The next `202` clears the pause.
 - `author_first_post` is read in the author's request and kept in `first_post` ('1', '0',
   '' for a guest), so a resubmission from the task sends it as first sent.
 - The submission records the gateway's answer only while the row is still `retry`, so a

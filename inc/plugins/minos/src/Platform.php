@@ -31,8 +31,8 @@ final class Platform
 
     /**
      * The prefix of the plugin's entries in MyBB's datacache (`$cache`): one entry per value
-     * of state (`minos_switched_off`, `minos_refusal`), so requests that change different
-     * values never overwrite each other's.
+     * of state (`minos_switched_off`, `minos_refusal`, `minos_pause`), so requests that
+     * change different values never overwrite each other's.
      */
     public const STATE_PREFIX = 'minos_';
 

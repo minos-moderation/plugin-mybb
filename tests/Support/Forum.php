@@ -8,6 +8,7 @@ use Minos\Client\Signature;
 use Minos\MyBB\Gateway;
 use Minos\MyBB\Platform;
 use Minos\MyBB\Plugin;
+use Minos\MyBB\Submitter;
 use PDO;
 
 /**
@@ -224,6 +225,19 @@ final class Forum
         $GLOBALS['plugins']->run_hooks('datahandler_post_update', $handler);
         $this->db->update_query('posts', $fields, "pid='" . $pid . "'");
         return $handler;
+    }
+
+    /**
+     * The shared pause a "retry" answer started is over: what the test does next happens
+     * after its end. The entry stays, ended now, as it would be found later.
+     */
+    public function endPause(): void
+    {
+        $platform = $this->platform();
+        $pause = $platform->state(Submitter::PAUSE);
+        if (is_array($pause)) {
+            $platform->setState(Submitter::PAUSE, ['until' => TIME_NOW] + $pause);
+        }
     }
 
     /**
