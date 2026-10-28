@@ -87,6 +87,27 @@ final class VerdictFiguresTest extends PluginTestCase
         self::assertSame([20, 21 * 60 + 30, 3], [$figures['p50'], $figures['p95'], $figures['timed']]);
     }
 
+    /**
+     * Late verdicts that change nothing on a post the failure mode published still count:
+     * `nieocenione`, and `bezpieczne` on a post cut at 3000 characters.
+     */
+    public function testALateVerdictThatChangesNothingStillCounts(): void
+    {
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $none = $this->heldReply('Opublikowany bez oceny.');
+        $cut = $this->heldReply(str_repeat('a', 3100));
+        foreach ([$none, $cut] as $pid) {
+            $this->forum->platform()->updatePending($pid, ['accepted_at' => TIME_NOW - 21 * 60]);
+        }
+        $this->forum->plugin->task->run(TIME_NOW);
+        $this->forum->deliver(self::payload($none, ['status' => 'nieocenione', 'kwalifikacja' => null]), null, null, TIME_NOW + 10);
+        $this->forum->deliver(self::payload($cut), null, null, TIME_NOW + 20);
+
+        self::assertSame([1, 1], [(int)$this->forum->post($none)['visible'], (int)$this->forum->post($cut)['visible']]);
+        $figures = $this->forum->plugin->admin->verdictFigures(TIME_NOW + 60);
+        self::assertSame(['bezpieczne' => 1, 'ocenzurowane' => 0, 'zablokowane' => 0, 'nieocenione' => 1], $figures['counts']);
+    }
+
     public function testWithoutVerdictsThePageSaysSoAndStoresNoText(): void
     {
         $pid = $this->heldReply('Tekst, którego nie ma na stronie.');

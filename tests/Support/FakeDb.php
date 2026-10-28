@@ -30,6 +30,9 @@ final class FakeDb
     /** @var int */
     private $affected = 0;
 
+    /** @var array<int,array{0:string,1:callable}> Work to run before a write, once each. */
+    private $before = [];
+
     public function __construct(PDO $pdo, string $prefix)
     {
         $this->pdo = $pdo;
@@ -45,8 +48,24 @@ final class FakeDb
         return $statement;
     }
 
+    /**
+     * Runs work just before the next write whose SQL contains a string — another request
+     * acting between two statements of this one. Test support, not part of MyBB's `$db`.
+     */
+    public function beforeNextWrite(string $needle, callable $work): void
+    {
+        $this->before[] = [$needle, $work];
+    }
+
     public function write_query($sql, $hideErrors = 0)
     {
+        foreach ($this->before as $i => [$needle, $work]) {
+            if (strpos($sql, $needle) !== false) {
+                unset($this->before[$i]);
+                $work();
+                break;
+            }
+        }
         $this->statements[] = $sql;
         $this->affected = (int)$this->pdo->exec($sql);
         return true;

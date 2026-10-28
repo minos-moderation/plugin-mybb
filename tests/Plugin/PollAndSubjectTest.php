@@ -70,6 +70,29 @@ final class PollAndSubjectTest extends PluginTestCase
     }
 
     /**
+     * A moderator changes the poll of a thread waiting for the verdict on its revision with
+     * the poll: a human decision, nothing sent, the verdict on its way not applied.
+     */
+    public function testAModeratorsPollEditOfAWaitingThreadLeavesItToThem(): void
+    {
+        $handler = $this->forum->write(true, 'Treść.', ['subject' => 'Tytuł']);
+        $pid = (int)$handler->return_values['pid'];
+        $poll = $this->forum->addPoll((int)$handler->return_values['tid'], 'Pytanie', ['A', 'B']);
+        task_minos(['tid' => 1]);
+        self::assertSame([Status::PENDING, '1'], [$this->forum->row($pid)['status'], (string)$this->forum->row($pid)['rev']]);
+        $sent = count($this->forum->transport->requests);
+        $GLOBALS['minos_test']['moderators'] = [self::UID];
+
+        $this->forum->editPoll($poll, 'Pytanie moderatora', ['A', 'B', 'C']);
+        task_minos(['tid' => 1]);
+
+        self::assertCount($sent, $this->forum->transport->requests);
+        self::assertSame([Status::SUPERSEDED, Status::REASON_EDITED], [$this->forum->row($pid)['status'], $this->forum->row($pid)['verdict']]);
+        self::assertSame(200, $this->forum->deliver(self::payload($pid, ['id' => 'mybb:' . $pid . '.1'])));
+        self::assertSame(0, (int)$this->forum->post($pid)['visible']);
+    }
+
+    /**
      * A poll added after the thread was published changes a published post: not assessed
      * again (shared rule D9.2 is not adopted yet).
      */

@@ -167,6 +167,25 @@ final class RevisionTest extends PluginTestCase
             [$this->forum->row($pid)['status'], $this->forum->row($pid)['verdict'], (string)$this->forum->row($pid)['rev']]);
     }
 
+    /**
+     * The author's edit lands between the webhook's read of the row and its claim: the claim
+     * names the revision it read, so the verdict about the old text is not applied.
+     */
+    public function testAnEditBetweenTheWebhooksReadAndItsClaimWins(): void
+    {
+        $pid = $this->heldReply('Wersja zero.');
+        $forum = $this->forum;
+        $this->forum->db->beforeNextWrite("SET status='" . Status::APPLYING . "'", static function () use ($forum, $pid): void {
+            $forum->edit($pid, 'Wersja pierwsza.');
+        });
+
+        self::assertSame(200, $this->forum->deliver(self::payload($pid, ['kwalifikacja' => 'zablokowane'])));
+
+        self::assertSame([0, Status::RETRY, '1', ''], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status'],
+            (string)$this->forum->row($pid)['rev'], $this->forum->row($pid)['verdict']]);
+        self::assertSame([], self::moderation());
+    }
+
     public function testAnIdThatIsNoRevisionIsNotAccepted(): void
     {
         $pid = $this->heldReply('Wersja zero.');
