@@ -179,6 +179,46 @@ final class NoTextTest extends PluginTestCase
         self::assertSame([0, Status::PENDING], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
     }
 
+    /**
+     * Long markup MyBB renders without trouble is sent, never held as `text_error` (the
+     * re-review of #7, finding A): a tag with a 60 000-character attribute, 4 000 empty
+     * attributes, a quote or a list of 60 000 characters, on PHP's default `pcre.jit` — a
+     * pattern that exhausts PCRE's JIT stack runs again without JIT. Under fail-open too.
+     *
+     * @dataProvider longMarkup
+     * @param array<string,int> $forum The forum's parsing options.
+     */
+    public function testLongMarkupIsSentNotHeldAsTextError(string $message, array $forum, string $start): void
+    {
+        $GLOBALS['minos_test']['forums'][Forum::FID] = $forum;
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $pid = $this->heldReply($message);
+
+        self::assertCount(1, $this->forum->transport->requests, 'sent');
+        self::assertStringStartsWith($start, $this->forum->transport->lastBody()['elementy'][0]['tekst']);
+        self::assertSame([0, Status::PENDING], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
+    }
+
+    /** @return array<string,array{0:string,1:array<string,int>,2:string}> */
+    public function longMarkup(): array
+    {
+        $html = ['allowhtml' => 1];
+        return [
+            'HTML: a 60 000-character attribute' => ['Obelga obelga <a href=' . str_repeat('x', 60000) . '>link</a>', $html,
+                'Obelga obelga link'],
+            'HTML: a 60 000-character attribute, never closed' => ['Obelga obelga <a href=' . str_repeat('x', 60000), $html,
+                'Obelga obelga <a href=xxx'],
+            'HTML: 4 000 empty attributes' => ['Obelga obelga <a ' . str_repeat('a="" ', 4000) . '>link</a>', $html,
+                'Obelga obelga link'],
+            'a 60 000-character quote' => ['Obelga obelga [quote=Ktoś]' . str_repeat('słowo ', 10000) . '[/quote]', [],
+                "Obelga obelga\nKtoś napisał(a):\nsłowo"],
+            'a 60 000-character list' => ['Obelga obelga [list][*]' . str_repeat('słowo ', 10000) . '[/list]', [],
+                "Obelga obelga\n\nsłowo"],
+            'HTML: a tag never closed, "<!--" in its quote' => ['Miły tekst <b title="<!-- obelga', $html,
+                'Miły tekst <b title="<!-- obelga'],
+        ];
+    }
+
     public function testTheLinkSignalsOfABareAddressAreSent(): void
     {
         $this->heldReply('Zobacz https://www.przyklad.com.pl/strona');

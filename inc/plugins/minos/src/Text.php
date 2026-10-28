@@ -106,8 +106,12 @@ final class Text
      */
     private const INVISIBLE = '/[\s\p{Z}\p{Cf}\p{Cc}\p{M}\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}]+/u';
 
-    /** A tag's attributes, quoted values whole (they may hold `<`, `>`, `<!--`). */
-    private const ATTRIBUTES = '(?:[^<>"\']|"[^"]*"|\'[^\']*\')*';
+    /**
+     * A tag's attributes, quoted values whole (they may hold `<`, `>`, `<!--`). Possessive,
+     * a run of plain characters one step: no backtracking into it, and no step per
+     * character that a long attribute (10 000 characters) would exhaust PCRE's JIT stack with.
+     */
+    private const ATTRIBUTES = '(?:[^<>"\']++|"[^"]*+"|\'[^\']*+\')*+';
 
     /** Tags after which a reader sees a new line (HTML forums). */
     private const HTML_BLOCKS = ['br', 'p', 'div', 'li', 'tr', 'blockquote', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'table', 'ul', 'ol'];
@@ -735,14 +739,16 @@ final class Text
      * Only where HTML opens a comment, though: one pass from left to right takes each tag
      * whole (its quoted values may hold `<!--`, `-->`, `<` or `>`), and the content of an
      * element HTML reads as text (`<textarea>`, `<title>`, `<xmp>`, `<plaintext>`,
-     * `<iframe>`, `<noembed>`, `<noframes>`, `<noscript>`) is kept as it is. In doubt,
-     * the text stays.
+     * `<iframe>`, `<noembed>`, `<noframes>`, `<noscript>`) is kept as it is, as is what
+     * follows the open quote of a tag never closed. In doubt, the text stays.
      */
     private static function html(string $text, bool $textOnly = false): string
     {
         $text = self::replace('#<(/?)(base|meta|script|style)([^>]*)>#i', '&lt;$1$2$3&gt;', $text);
         $text = self::replaceCallback('#<(textarea|title|xmp|iframe|noembed|noframes|noscript)\b' . self::ATTRIBUTES
-            . '>.*?(?:</\1\s*>|\z)|<plaintext\b.*\z|<!--(?:-?>|.*?(?:--!?>|\z))|</?[a-z][a-z0-9]*\b' . self::ATTRIBUTES . '>#is',
+            . '>.*?(?:</\1\s*>|\z)|<plaintext\b.*\z|<!--(?:-?>|.*?(?:--!?>|\z))|</?[a-z][a-z0-9]*\b' . self::ATTRIBUTES . '>'
+            // A tag never closed, its last quote open to the end: what follows stays text.
+            . '|<[a-z][a-z0-9]*\b(?:[^<>"\']++|"[^"]*+"?|\'[^\']*+\'?)*+#is',
             static function (array $m): string {
                 return strncmp($m[0], '<!--', 4) === 0 ? ' ' : $m[0];
             }, $text);
@@ -847,6 +853,11 @@ final class Text
     private static function replace($pattern, $replacement, string $subject): string
     {
         $result = preg_replace($pattern, $replacement, $subject);
+        if (!is_string($result) && self::jitGaveUp()) {
+            $result = self::withoutJit(static function () use ($pattern, $replacement, $subject) {
+                return preg_replace(self::interpreted($pattern), $replacement, $subject);
+            });
+        }
         if (!is_string($result)) {
             throw self::failure();
         }
@@ -861,6 +872,11 @@ final class Text
     private static function replaceCallback(string $pattern, callable $callback, string $subject): string
     {
         $result = preg_replace_callback($pattern, $callback, $subject);
+        if (!is_string($result) && self::jitGaveUp()) {
+            $result = self::withoutJit(static function () use ($pattern, $callback, $subject) {
+                return preg_replace_callback(self::interpreted($pattern), $callback, $subject);
+            });
+        }
         if (!is_string($result)) {
             throw self::failure();
         }
@@ -877,10 +893,62 @@ final class Text
     private static function matchAll(string $pattern, string $subject, &$matches = null, int $flags = PREG_PATTERN_ORDER): int
     {
         $result = preg_match_all($pattern, $subject, $matches, $flags);
+        if (!is_int($result) && self::jitGaveUp()) {
+            $result = self::withoutJit(static function () use ($pattern, $subject, &$matches, $flags) {
+                return preg_match_all(self::interpreted($pattern), $subject, $matches, $flags);
+            });
+        }
         if (!is_int($result)) {
             throw self::failure();
         }
         return $result;
+    }
+
+    /**
+     * Whether the last PCRE call failed for its JIT stack only — a limit of the compiled
+     * code, not of the match: the same pattern then runs again without JIT
+     * ({@see withoutJit}), so a text MyBB renders never becomes `text_error` for it.
+     */
+    private static function jitGaveUp(): bool
+    {
+        return preg_last_error() === PREG_JIT_STACKLIMIT_ERROR;
+    }
+
+    /**
+     * Runs a PCRE call with `pcre.jit` off, then puts the setting back. Where the host does
+     * not let it change, the call is not repeated (null: the failure stands).
+     *
+     * @return mixed The call's result, or null.
+     */
+    private static function withoutJit(callable $call)
+    {
+        if (!function_exists('ini_set') || !function_exists('ini_get')) {
+            return null;
+        }
+        $jit = ini_get('pcre.jit');
+        if (!is_string($jit) || @ini_set('pcre.jit', '0') === false) {
+            return null;
+        }
+        try {
+            return $call();
+        } finally {
+            ini_set('pcre.jit', $jit);
+        }
+    }
+
+    /**
+     * The same pattern under another key of PHP's pattern cache, so that it is compiled
+     * anew while `pcre.jit` is off (a cached pattern keeps its JIT code). The `S` modifier
+     * it adds changes nothing since PHP 7.3.
+     *
+     * @param string|array<int,string> $pattern
+     * @return string|array<int,string>
+     */
+    private static function interpreted($pattern)
+    {
+        return is_array($pattern) ? array_map(static function (string $one): string {
+            return $one . 'S';
+        }, $pattern) : $pattern . 'S';
     }
 
     /**

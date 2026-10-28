@@ -128,7 +128,13 @@ The text readers SEE, following MyBB's own text renderer
   post crafted to exhaust the backtrack limit, e.g. a few hundred unclosed `[url=` tags)
   throws `TextError`, and `Text::forPost` returns `error: true` — never `''`. The post then
   gets the failure mode as `text_error` with nothing sent, not even a new thread's subject
-  alone (`no_text` is for a post whose body shows no text and that has no poll).
+  alone (`no_text` is for a post whose body shows no text and that has no poll). Only a
+  failure of the match itself counts: a call that exhausts PCRE's JIT stack (a long
+  attribute, a 60 000-character quote — markup MyBB renders) runs again with `pcre.jit`
+  off, under another key of PHP's pattern cache, and the text is sent; the patterns over
+  long runs are possessive, so they need no JIT stack per character. What stays
+  `text_error` is a post on which PCRE gives up without JIT too, as on the unclosed
+  `[url=` tags MyBB itself shows as an empty body (question 1 below; shared rule F7).
 - `meta`: `links` (distinct links), `link_domains` (up to 10 registrable domains — the last
   two host labels, or three under a two-label public suffix from a short list; an
   approximation of the Public Suffix List), `author_first_post` for registered authors.
