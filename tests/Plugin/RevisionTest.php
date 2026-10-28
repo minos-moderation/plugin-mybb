@@ -82,6 +82,56 @@ final class RevisionTest extends PluginTestCase
         self::assertTrue($platform->claimPending($pid, TIME_NOW, Status::OPEN, false, 1));
     }
 
+    /**
+     * The author saves another edit while the task's request for the previous revision is on
+     * its way: whatever the gateway answers about revision 1 — accepted, a retry, a
+     * configuration error — is not recorded on revision 2, which goes out on a later run. A
+     * verdict about revision 1 is not applied.
+     *
+     * @dataProvider answersInFlight
+     * @param array{status:int,body:string} $answer
+     */
+    public function testAnEditWhileItsRequestIsOnItsWayIsSentNext(array $answer): void
+    {
+        $pid = $this->heldReply('Wersja zero.');
+        $this->forum->edit($pid, 'Wersja pierwsza.');
+        $forum = $this->forum;
+        $edited = false;
+        $sent = [];
+        $this->forum->plugin(static function (string $url, array $headers, string $body) use ($forum, $pid, $answer, &$edited, &$sent): array {
+            $sent[] = array_column(json_decode($body, true)['elementy'], 'tekst', 'id');
+            if (!$edited) {
+                $edited = true;
+                $forum->edit($pid, 'Wersja druga.');
+                return $answer;
+            }
+            return RecordingTransport::accepted();
+        });
+
+        $this->forum->plugin->task->run(TIME_NOW);
+
+        $row = $this->forum->row($pid);
+        self::assertSame([Status::RETRY, '2', 0, '0'], [$row['status'], (string)$row['rev'], (int)$row['accepted_at'],
+            (string)$row['auto_published']], 'revision 2 waits to be sent, untouched by the answer about revision 1');
+        self::assertSame(200, $this->forum->deliver(self::payload($pid, ['id' => 'mybb:' . $pid . '.1'])));
+        self::assertSame([0, Status::RETRY], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
+
+        $this->forum->plugin->task->run(TIME_NOW + 300);
+
+        self::assertSame(['mybb:' . $pid . '.2' => 'Wersja druga.'], end($sent));
+        self::assertSame([Status::PENDING, '2'], [$this->forum->row($pid)['status'], (string)$this->forum->row($pid)['rev']]);
+    }
+
+    /** @return array<string,array{0:array{status:int,body:string}}> */
+    public function answersInFlight(): array
+    {
+        return [
+            'accepted'            => [RecordingTransport::accepted()],
+            'a retry'             => [RecordingTransport::refused(429, 'kolejka_pelna', 60)],
+            'a configuration error' => [RecordingTransport::refused(403, 'brak_webhooka')],
+        ];
+    }
+
     public function testAnIdThatIsNoRevisionIsNotAccepted(): void
     {
         $pid = $this->heldReply('Wersja zero.');

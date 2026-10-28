@@ -389,7 +389,7 @@ final class Submitter
             'truncated' => $text['truncated'] ? 1 : 0, 'prefix_len' => $text['prefix_len'],
             'text_len' => $text['text_len'], 'sent_sha256' => self::digest($text),
         ];
-        $this->platform->updatePending($pid, $shape, Status::RETRY);
+        $this->platform->updatePending($pid, $shape, Status::RETRY, self::rev($row));
         return [
             'row'  => $shape + $row,
             'item' => self::item($pid, $text['tekst'], (string)$settings->profile(), $signals + self::firstPost($row),
@@ -482,7 +482,9 @@ final class Submitter
     }
 
     /**
-     * Sends a batch and records the answer on each row.
+     * Sends a batch and records the answer on each row — on the revision the request carried
+     * only: an author may edit the post while the request is on its way, and the answer
+     * about the earlier text then changes nothing on the new revision, which goes out next.
      *
      * @param array<int,array{row:array<string,mixed>,item:array<string,mixed>}> $batch
      * @param Settings $settings The settings (active).
@@ -498,7 +500,7 @@ final class Submitter
                 $this->platform->updatePending((int)$entry['row']['pid'], [
                     'status' => Status::PENDING, 'accepted_at' => $now, 'retry_at' => 0,
                     'attempts' => (int)$entry['row']['attempts'] + 1, 'error_code' => '',
-                ], Status::RETRY);
+                ], Status::RETRY, self::rev($entry['row']));
             }
             $last = $this->platform->lastLog(['config_error', 'recovered']);
             if ($last !== null && $last['event'] === 'config_error') {
@@ -522,7 +524,7 @@ final class Submitter
                 $pause = $retryS ?? min(self::MAX_BACKOFF_S, self::BACKOFF_S * (2 ** min(10, $attempts - 1)));
                 $this->platform->updatePending((int)$entry['row']['pid'], [
                     'retry_at' => $now + max(1, $pause), 'attempts' => $attempts, 'error_code' => $result['kod'],
-                ], Status::RETRY);
+                ], Status::RETRY, self::rev($entry['row']));
                 // Rule D9.3(a): the gateway refuses beyond the post's timeout — its
                 // `ponow_za_s` as given, not a pause of the plugin's own — so no verdict can
                 // come in time: the failure mode now, not after the wait.
@@ -540,10 +542,12 @@ final class Submitter
         $element = $result['element'];
         foreach ($batch as $position => $entry) {
             if ($element !== null && count($batch) > 1 && $position !== $element) {
-                $this->platform->updatePending((int)$entry['row']['pid'], ['retry_at' => $now], Status::RETRY);
+                $this->platform->updatePending((int)$entry['row']['pid'], ['retry_at' => $now], Status::RETRY,
+                    self::rev($entry['row']));
                 continue;
             }
-            $this->platform->updatePending((int)$entry['row']['pid'], ['error_code' => $result['kod']], Status::RETRY);
+            $this->platform->updatePending((int)$entry['row']['pid'], ['error_code' => $result['kod']], Status::RETRY,
+                self::rev($entry['row']));
             $this->decideWithout($entry['row'], Status::REASON_CONFIG_ERROR, $settings, $now);
         }
     }
@@ -579,7 +583,7 @@ final class Submitter
                 if ($until > (int)$row['submitted_at'] + $settings->timeoutS()) {
                     $this->decideWithout($row, Status::REASON_GATEWAY_LIMIT, $settings, $now);
                 } else {
-                    $this->platform->updatePending((int)$row['pid'], ['retry_at' => $until], Status::RETRY);
+                    $this->platform->updatePending((int)$row['pid'], ['retry_at' => $until], Status::RETRY, self::rev($row));
                 }
             } catch (\Throwable $e) {
                 $this->applier->failedStep((int)$row['pid'], 'resubmit', $now);
@@ -601,14 +605,25 @@ final class Submitter
     }
 
     /**
-     * Applies the failure mode to a row nobody else has decided.
+     * Applies the failure mode to a row nobody else has decided, at the revision it was read
+     * at (a newer one, started by an edit meanwhile, is not this outcome's).
      *
      * @param array<string,mixed> $row
      */
     private function decideWithout(array $row, string $reason, Settings $settings, int $now): void
     {
-        if ($this->platform->claimPending((int)$row['pid'], $now)) {
+        if ($this->platform->claimPending((int)$row['pid'], $now, Status::OPEN, false, self::rev($row))) {
             $this->applier->failure($row, $reason, $settings, $now);
         }
+    }
+
+    /**
+     * The revision a row was read at.
+     *
+     * @param array<string,mixed> $row
+     */
+    private static function rev(array $row): int
+    {
+        return (int)($row['rev'] ?? 0);
     }
 }

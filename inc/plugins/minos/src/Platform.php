@@ -573,12 +573,18 @@ final class Platform
      * @param string|null              $onlyIf Change it only while it has this status — how
      *     a submission records the gateway's answer without overwriting a verdict that a
      *     fast webhook delivery applied in the meantime.
+     * @param int|null                 $rev    Change it only while it is at this revision — how
+     *     the answer to a request records nothing on a revision an edit started while the
+     *     request was on its way.
      */
-    public function updatePending(int $pid, array $fields, ?string $onlyIf = null): void
+    public function updatePending(int $pid, array $fields, ?string $onlyIf = null, ?int $rev = null): void
     {
         $where = "pid='" . $pid . "'";
         if ($onlyIf !== null) {
             $where .= " AND status='" . $this->db->escape_string($onlyIf) . "'";
+        }
+        if ($rev !== null) {
+            $where .= " AND rev='" . $rev . "'";
         }
         $this->db->update_query(self::PENDING_TABLE, $this->escaped($fields), $where);
     }
