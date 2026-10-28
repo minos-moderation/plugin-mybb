@@ -28,7 +28,7 @@ namespace Minos\MyBB;
  * Only the FIRST 3000 characters are sent; {@see Applier} does not publish a cut post on a
  * verdict about its beginning. Works without mbstring (PCRE with `/u`).
  *
- * Every regular expression runs through one checked helper ({@see replace}, {@see matchOnce}…):
+ * Every regular expression runs through one checked helper ({@see replace}, {@see matchAll}…):
  * when PCRE fails (a post crafted to exhaust its backtrack limit, say), the helper throws
  * {@see TextError} instead of handing back an empty string. {@see forPost} turns that into
  * `error: true` — a text the plugin could not read is not an empty text, and nothing (not
@@ -184,7 +184,7 @@ final class Text
         if (function_exists('mb_strlen')) {
             return mb_strlen($text, 'UTF-8');
         }
-        return self::matchAll('/./su', $text);
+        return count(self::chars($text));
     }
 
     /**
@@ -200,7 +200,7 @@ final class Text
         if (function_exists('mb_substr')) {
             return mb_substr($text, 0, $chars, 'UTF-8');
         }
-        return self::matchOnce('/\A.{0,' . max(0, $chars) . '}/su', $text, $m) === 1 ? $m[0] : '';
+        return implode('', array_slice(self::chars($text), 0, max(0, $chars)));
     }
 
     /**
@@ -452,22 +452,6 @@ final class Text
     {
         $result = preg_replace_callback($pattern, $callback, $subject);
         if (!is_string($result)) {
-            throw self::failure();
-        }
-        return $result;
-    }
-
-    /**
-     * `preg_match`, checked.
-     *
-     * @param array<int|string,string>|null $matches
-     * @return int 1 or 0.
-     * @throws TextError When PCRE fails.
-     */
-    private static function matchOnce(string $pattern, string $subject, &$matches = null): int
-    {
-        $result = preg_match($pattern, $subject, $matches);
-        if (!is_int($result)) {
             throw self::failure();
         }
         return $result;
