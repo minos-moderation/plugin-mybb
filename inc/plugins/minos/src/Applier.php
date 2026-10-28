@@ -42,8 +42,8 @@ use Minos\Client\WebhookPayload;
  * The masked text replaces the message only when it stands for the whole post, character
  * by character: not when the text sent was cut at 3000 characters; not unless every
  * character of the mask is the one that was sent or `█` ({@see Text::maskFits}); not when
- * a mask falls in a new thread's subject (the plugin does not rewrite titles); not when
- * nothing but the subject remains; and not unless the body that was sent IS the message as
+ * a mask falls in what heads the text — a subject, a poll (the plugin never rewrites
+ * titles, subjects or polls); not when nothing but that head remains; and not unless the body that was sent IS the message as
  * stored (line endings aside) — a post with MyCode, HTML or entities renders to another
  * text, and publishing its mask would revive or drop markup; so does a plain one with
  * whitespace the text squeezes (double spaces, tabs, NBSP, blank lines in a row), which
@@ -269,8 +269,7 @@ final class Applier
         if (strlen($digest) !== 64) {
             return null;
         }
-        $text = Text::forPost($post['message'], (int)$row['is_thread'] === 1 ? $post['subject'] : '',
-            $this->platform->forumParsing($post['fid']));
+        $text = Text::ofPost($post, (int)$row['is_thread'] === 1, $this->platform->forumParsing($post['fid']));
         return !$text['error'] && hash_equals($digest, hash('sha256', $text['tekst'])) ? $text['tekst'] : null;
     }
 

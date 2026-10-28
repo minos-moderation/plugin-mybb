@@ -110,8 +110,12 @@ użytkownik jest pod moderacją) — o tych decydują ludzie, tak jak ustawiono 
 Wysyłane jest tylko:
 - identyfikator `mybb:<numer postu>` (po poprawce postu czekającego na werdykt:
   `mybb:<numer postu>.<numer wersji>`) — bez żadnej treści;
-- tekst postu **taki, jaki widzą czytelnicy**, tylko pierwsze 3000 znaków (limit bramy);
-  przy nowym wątku z tytułem na początku. Wtyczka odtwarza to, co MyBB pokazuje na stronie:
+- tekst postu **taki, jaki widzą czytelnicy**, tylko pierwsze 3000 znaków (limit bramy).
+  Na początku to, co czytelnik widzi nad postem: przy nowym wątku jego tytuł, a gdy wątek
+  ma ankietę — także jej pytanie i opcje; przy odpowiedzi jej własny temat, jeśli autor
+  zmienił domyślne „RE: <tytuł wątku>” (MyBB pokazuje temat odpowiedzi w widoku drzewa,
+  w wynikach wyszukiwania, w wersji do druku i w podpowiedzi numeru postu). Wtyczka
+  odtwarza to, co MyBB pokazuje na stronie:
   - na forum bez HTML (domyślnie) znaki `<…>` są zwykłym tekstem i zostają w całości;
     na forum z HTML znaczniki znikają, ale tekst z atrybutów `alt` i `title` zostaje;
   - cytat `[quote=NAZWA]` staje się „NAZWA napisał(a):” i cytowanym tekstem;
@@ -151,7 +155,8 @@ początku lub końcu wiersza albo więcej niż jednym pustym wierszem z rzędu: 
 go z takimi odstępami ściśniętymi, więc maska nie odpowiada zapisanej treści znak w znak
 (różnica samych końców wiersza CR/LF nie przeszkadza). Oryginał opublikowanego postu zostaje w tabeli wtyczki
 (przez 30 dni). Post ocenzurowany zawsze zostaje w kolejce, gdy: był dłuższy niż 3000
-znaków, brama zamaskowała coś w tytule wątku, zamaskowany tekst różni się od wysłanego
+znaków, brama zamaskowała coś w tytule wątku, w temacie odpowiedzi albo w ankiecie (wtyczka
+nigdy ich nie zmienia), zamaskowany tekst różni się od wysłanego
 czymś innym niż znaki `█` (inna długość, inne litery), brama nie przysłała zamaskowanego
 tekstu albo nie udało się zapisać zamaskowanej treści.
 
@@ -251,8 +256,14 @@ numer postu — nigdy treść błędu.
 ## Ograniczenia
 
 - Ocenianych jest tylko pierwsze 3000 znaków postu.
-- Tytuły odpowiedzi nie są oceniane (MyBB nadaje im zwykle „RE: …”); tytuł nowego wątku —
-  tak.
+- Temat odpowiedzi jest oceniany tylko wtedy, gdy autor go zmienił — domyślne „RE: <tytuł
+  wątku>” nie mówi nic nowego; tytuł nowego wątku — zawsze.
+- Ankieta jest oceniana razem z pierwszym postem wątku tylko wtedy, gdy powstała, kiedy wątek
+  czekał na werdykt. MyBB pozwala dodać ankietę do wątku z kolejki moderacji tylko
+  moderatorom (formularz ankiety odmawia autorowi), więc autor dodaje ją zwykle po publikacji
+  wątku — takiej ankiety wtyczka nie ocenia, tak jak poprawek opublikowanych postów. Ankietę
+  zmieniają w MyBB tylko moderatorzy: zmiana ankiety wątku czekającego na werdykt, jak
+  poprawka moderatora, zostawia wątek ludziom.
 - Edycje opublikowanych postów nie są ponownie oceniane (poza zakresem tej wersji).
 - **Subskrybenci wątku i forum NIE dostają powiadomień** (e-mail ani prywatnej wiadomości)
   o postach, które przeszły przez wtyczkę — także po ich publikacji. MyBB wysyła je tylko

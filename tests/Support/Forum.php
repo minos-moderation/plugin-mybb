@@ -228,6 +228,45 @@ final class Forum
     }
 
     /**
+     * The current user adds a poll to a thread, the way MyBB 1.8.41's `polls.php`
+     * (`do_newpoll`) does: the poll row, the thread's `poll`, then `polls_do_newpoll_end`
+     * with the thread's row (as read before) in the global `$thread`.
+     *
+     * @param int               $tid      The thread.
+     * @param string            $question The question.
+     * @param array<int,string> $options  The options, as typed.
+     * @return int The poll's id.
+     */
+    public function addPoll(int $tid, string $question, array $options): int
+    {
+        $thread = (array)$this->db->fetch_array($this->db->simple_select('threads', '*', "tid='" . $tid . "'"));
+        $poll = $this->db->insert_query('polls', ['tid' => $tid, 'question' => $this->db->escape_string($question),
+            'options' => $this->db->escape_string(implode('||~|~||', $options)),
+            'votes' => implode('||~|~||', array_fill(0, count($options), '0')), 'numoptions' => count($options)]);
+        $this->db->update_query('threads', ['poll' => $poll], "tid='" . $tid . "'");
+        $GLOBALS['thread'] = $thread;
+        $GLOBALS['plugins']->run_hooks('polls_do_newpoll_end');
+        return $poll;
+    }
+
+    /**
+     * A moderator changes a poll, the way `polls.php` (`do_editpoll`) does: the poll row
+     * updated, then `polls_do_editpoll_end` with the thread's row in the global `$thread`.
+     *
+     * @param int               $poll     The poll.
+     * @param string            $question The question.
+     * @param array<int,string> $options  The options.
+     */
+    public function editPoll(int $poll, string $question, array $options): void
+    {
+        $GLOBALS['thread'] = (array)$this->db->fetch_array($this->db->simple_select('threads', '*', "poll='" . $poll . "'"));
+        $this->db->update_query('polls', ['question' => $this->db->escape_string($question),
+            'options' => $this->db->escape_string(implode('||~|~||', $options)), 'numoptions' => count($options)],
+            "pid='" . $poll . "'");
+        $GLOBALS['plugins']->run_hooks('polls_do_editpoll_end');
+    }
+
+    /**
      * The shared pause a "retry" answer started is over: what the test does next happens
      * after its end. The entry stays, ended now, as it would be found later.
      */
@@ -307,7 +346,10 @@ final class Forum
                 . " nextrun INTEGER NOT NULL DEFAULT 0, lastrun INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1,"
                 . " logging INTEGER NOT NULL DEFAULT 0, locked INTEGER NOT NULL DEFAULT 0)",
             "CREATE TABLE {$p}threads (tid INTEGER PRIMARY KEY, fid INTEGER NOT NULL DEFAULT 0, subject TEXT NOT NULL DEFAULT '',"
-                . " uid INTEGER NOT NULL DEFAULT 0, firstpost INTEGER NOT NULL DEFAULT 0, visible INTEGER NOT NULL DEFAULT 1)",
+                . " uid INTEGER NOT NULL DEFAULT 0, firstpost INTEGER NOT NULL DEFAULT 0, visible INTEGER NOT NULL DEFAULT 1,"
+                . " poll INTEGER NOT NULL DEFAULT 0)",
+            "CREATE TABLE {$p}polls (pid INTEGER PRIMARY KEY, tid INTEGER NOT NULL DEFAULT 0, question TEXT NOT NULL DEFAULT '',"
+                . " options TEXT NOT NULL DEFAULT '', votes TEXT NOT NULL DEFAULT '', numoptions INTEGER NOT NULL DEFAULT 0)",
             "CREATE TABLE {$p}posts (pid INTEGER PRIMARY KEY, tid INTEGER NOT NULL DEFAULT 0, fid INTEGER NOT NULL DEFAULT 0,"
                 . " uid INTEGER NOT NULL DEFAULT 0, subject TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '',"
                 . " ipaddress TEXT NOT NULL DEFAULT '', visible INTEGER NOT NULL DEFAULT 1)",

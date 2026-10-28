@@ -43,9 +43,13 @@ use SplObjectStorage;
  * unable to submit (no key or secret, an unusable gateway address), it holds the post and
  * applies the failure mode at once, without sending.
  *
- * What an item carries: `id` `mybb:<pid>` (`mybb:<pid>.<n>` for revision n ≥ 1), `tekst` ({@see Text::forPost}: what readers of the
- * post see), `profil`, and `meta` with `links`, `link_domains` and — for a registered author,
- * when MyBB knows it — `author_first_post`.
+ * A poll created or changed while its thread waits ({@see onPollChanged}) is such an edit of
+ * the thread's first post: its question and options are part of the text.
+ *
+ * What an item carries: `id` `mybb:<pid>` (`mybb:<pid>.<n>` for revision n ≥ 1), `tekst`
+ * ({@see Text::ofPost}: what readers of the post see — a new thread's subject and poll, a
+ * reply's own subject, the post), `profil`, and `meta` with `links`, `link_domains` and —
+ * for a registered author, when MyBB knows it — `author_first_post`.
  * Never an e-mail, an IP address, a username or a user id ({@see item}).
  * No PHP 8 syntax.
  */
@@ -171,10 +175,13 @@ final class Submitter
         if ($pid <= 0 || (int)($values['visible'] ?? 1) !== 0) {
             return; // not in the queue after all: nothing to decide
         }
-        $message = (string)($data['message'] ?? '');
-        $subject = $thread ? (string)($data['subject'] ?? '') : '';
-        $text = Text::forPost($message, $subject, $this->platform->forumParsing((int)($data['fid'] ?? 0)));
-        $signals = $text['error'] ? null : self::linkSignals($subject . "\n" . $message);
+        // The post as stored, as every later rendering reads it (the thread's title, a poll).
+        $post = $this->platform->post($pid) ?? [
+            'fid' => (int)($data['fid'] ?? 0), 'message' => (string)($data['message'] ?? ''),
+            'subject' => (string)($data['subject'] ?? ''), 'thread_subject' => '', 'poll' => null,
+        ];
+        $text = Text::ofPost($post, $thread, $this->platform->forumParsing((int)$post['fid']));
+        $signals = $text['error'] ? null : self::linkSignals(Text::sourceOf($post, $thread));
         // Read now, in the author's request: a resubmission (the task) has no author.
         $first = $this->platform->currentUserHasNoPosts();
         $row = [
@@ -250,7 +257,25 @@ final class Submitter
     }
 
     /**
-     * An edit of a post by the current user ({@see onUpdated}).
+     * `polls_do_newpoll_end` / `polls_do_editpoll_end`: a poll is part of its thread's first
+     * post, so creating or changing it is an edit of that post by the current user
+     * ({@see onUpdated}). In MyBB 1.8.41 only moderators change a poll, and a thread's author
+     * can add one to a thread still in the queue only by posting `polls.php` directly — its
+     * form refuses them; a poll added after publication is an edit of a published post, not
+     * assessed again.
+     *
+     * @param int $now Unix seconds.
+     */
+    public function onPollChanged(int $now): void
+    {
+        $pid = $this->platform->pollThreadFirstPost();
+        if ($pid > 0) {
+            $this->edited($pid, $now);
+        }
+    }
+
+    /**
+     * An edit of a post by the current user ({@see onUpdated}, {@see onPollChanged}).
      *
      * @param int $pid The post.
      * @param int $now Unix seconds.
@@ -350,9 +375,8 @@ final class Submitter
             }
             return null;
         }
-        $text = Text::forPost($post['message'], (int)$row['is_thread'] === 1 ? $post['subject'] : '',
-            $this->platform->forumParsing($post['fid']));
-        $signals = $text['error'] ? null : self::linkSignals($post['subject'] . "\n" . $post['message']);
+        $text = Text::ofPost($post, (int)$row['is_thread'] === 1, $this->platform->forumParsing($post['fid']));
+        $signals = $text['error'] ? null : self::linkSignals(Text::sourceOf($post, (int)$row['is_thread'] === 1));
         if ($signals === null) {
             $this->unreadable($row, $settings, $now);
             return null;

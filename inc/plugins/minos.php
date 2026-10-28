@@ -25,6 +25,9 @@ $plugins->add_hook('datahandler_post_insert_post_end', 'minos_hook_inserted_post
 $plugins->add_hook('datahandler_post_insert_thread_end', 'minos_hook_inserted_thread');
 // An edit of a post still waiting for its verdict.
 $plugins->add_hook('datahandler_post_update', 'minos_hook_updated');
+// A poll created or changed: part of its thread's first post (`polls.php`).
+$plugins->add_hook('polls_do_newpoll_end', 'minos_hook_poll_changed');
+$plugins->add_hook('polls_do_editpoll_end', 'minos_hook_poll_changed');
 // The form shown again after a failed validation: the post was not inserted.
 $plugins->add_hook('newreply_start', 'minos_hook_form_shown');
 $plugins->add_hook('newthread_start', 'minos_hook_form_shown');
@@ -139,6 +142,15 @@ function minos_hook_inserted_thread($handler)
 function minos_hook_updated($handler)
 {
     \Minos\MyBB\Plugin::instance()->submitter->onUpdated($handler, TIME_NOW);
+}
+
+/**
+ * `polls_do_newpoll_end`, `polls_do_editpoll_end` (no arguments: `polls.php` keeps the
+ * thread in its global `$thread`).
+ */
+function minos_hook_poll_changed()
+{
+    \Minos\MyBB\Plugin::instance()->submitter->onPollChanged(TIME_NOW);
 }
 
 /**

@@ -29,6 +29,9 @@ final class Platform
     /** The settings group's name. */
     public const SETTING_GROUP = 'minos';
 
+    /** Between a poll's options in MyBB's `polls.options` column. */
+    private const POLL_OPTIONS_SEPARATOR = '||~|~||';
+
     /**
      * The prefix of the plugin's entries in MyBB's datacache (`$cache`): one entry per value
      * of state (`minos_switched_off`, `minos_refusal`, `minos_pause`), so requests that
@@ -329,33 +332,62 @@ final class Platform
     // ---------------------------------------------------------------- posts
 
     /**
-     * A post as it is now, with whether it opens its thread.
+     * A post as it is now, with whether it opens its thread, its thread's title, and — for
+     * the first post of a thread with a poll — the poll as `showthread.php` reads it
+     * (`threads.poll` → `polls`; the options are one string, `||~|~||` between them, of
+     * which `numoptions` are shown).
      *
      * @param int $pid The post.
-     * @return array{pid:int,tid:int,fid:int,visible:int,subject:string,message:string,first:bool}|null
+     * @return array{pid:int,tid:int,fid:int,visible:int,subject:string,message:string,first:bool,thread_subject:string,poll:array{question:string,options:array<int,string>}|null}|null
      *     Null when it no longer exists.
      */
     public function post(int $pid): ?array
     {
         $query = $this->db->query(
-            'SELECT p.pid, p.tid, p.fid, p.visible, p.subject, p.message, t.firstpost'
+            'SELECT p.pid, p.tid, p.fid, p.visible, p.subject, p.message, t.firstpost, t.subject AS thread_subject,'
+            . ' pl.pid AS poll_id, pl.question AS poll_question, pl.options AS poll_options, pl.numoptions AS poll_numoptions'
             . ' FROM ' . $this->prefix . 'posts p'
             . ' LEFT JOIN ' . $this->prefix . 'threads t ON (t.tid=p.tid)'
+            . ' LEFT JOIN ' . $this->prefix . "polls pl ON (pl.pid=t.poll AND t.poll>'0')"
             . " WHERE p.pid='" . $pid . "'"
         );
         $row = $this->db->fetch_array($query);
         if (!is_array($row) || !isset($row['pid'])) {
             return null;
         }
+        $first = (int)$row['firstpost'] === (int)$row['pid'];
+        $poll = null;
+        if ($first && (int)($row['poll_id'] ?? 0) > 0) {
+            $poll = [
+                'question' => (string)$row['poll_question'],
+                'options'  => array_slice(explode(self::POLL_OPTIONS_SEPARATOR, (string)$row['poll_options']), 0,
+                    max(0, (int)$row['poll_numoptions'])),
+            ];
+        }
         return [
-            'pid'     => (int)$row['pid'],
-            'tid'     => (int)$row['tid'],
-            'fid'     => (int)$row['fid'],
-            'visible' => (int)$row['visible'],
-            'subject' => (string)$row['subject'],
-            'message' => (string)$row['message'],
-            'first'   => (int)$row['firstpost'] === (int)$row['pid'],
+            'pid'            => (int)$row['pid'],
+            'tid'            => (int)$row['tid'],
+            'fid'            => (int)$row['fid'],
+            'visible'        => (int)$row['visible'],
+            'subject'        => (string)$row['subject'],
+            'message'        => (string)$row['message'],
+            'first'          => $first,
+            'thread_subject' => (string)($row['thread_subject'] ?? ''),
+            'poll'           => $poll,
         ];
+    }
+
+    /**
+     * The first post of the thread whose poll `polls.php` has just created or changed: its
+     * `polls_do_newpoll_end` and `polls_do_editpoll_end` hooks run in the script's global
+     * scope with the thread's row in `$thread`, and pass no arguments.
+     *
+     * @return int The post id; 0 when there is no such thread row.
+     */
+    public function pollThreadFirstPost(): int
+    {
+        $thread = $GLOBALS['thread'] ?? null;
+        return is_array($thread) ? (int)($thread['firstpost'] ?? 0) : 0;
     }
 
     /**

@@ -80,8 +80,14 @@ The text readers SEE, following MyBB's own text renderer
 - MyCode: `[quote=NAME]` → "NAME napisał(a):"; `[url=X]Y[/url]` → "Y (X)"; `[img]X[/img]`,
   `[video=…]X[/video]` → X; `[code]`/`[php]` keep their content; formatting tags go; MyCode
   MyBB would not parse stays literally.
-- A new thread's subject goes in front (always escaped, never parsed). Only the first 3000
-  characters are sent.
+- What heads the post goes in front, a blank line between the parts (`Text::ofPost`): a
+  new thread's subject (always escaped, never parsed), then its poll — the question
+  escaped like a subject, each option on its own line through the post rules above, as
+  `showthread.php` shows them; for a reply, its own subject when it is not MyBB's default
+  ("RE: " and the thread's title, the title cut to 82 characters and "..." when longer
+  than 85, or the title itself — `Text::ownSubject`). All of it is `prefix_len`: a mask
+  there holds the post. Only the first 3000 characters are sent.
+- The link signals count the links of what is sent, head included (`Text::sourceOf`).
 - Every regular expression runs through one checked helper in `Text`: a PCRE failure (a
   post crafted to exhaust the backtrack limit, e.g. a few hundred unclosed `[url=` tags)
   throws `TextError`, and `Text::forPost` returns `error: true` — never `''`. The post then
@@ -334,6 +340,9 @@ reading the code, not by running a live forum:
 | settings groups and settings (the `hello` plugin's pattern), `optionscode` types `onoff`, `yesno`, `text`, `numeric` with `min`/`max`, `select`, `forumselect`, `php` (evaluated as a double-quoted string; its "Edit setting" page refused; disabled while the plugin is deactivated) | `admin/modules/config/settings.php`, `inc/plugins/hello.php` | `Installer`, `Platform::saveSettings`, `setOptionscode` |
 | `newreply_start` / `newthread_start` (the form shown again after errors), `DataHandler::get_errors` | `newreply.php`, `newthread.php`, `inc/datahandler.php` | `Submitter` |
 | `get_forum()['allowhtml'/'allowmycode'/'allowimgcode'/'allowvideocode']`, `htmlspecialchars_uni`, `Postparser::text_parse_message` (the rules `Text` follows) | `inc/functions.php`, `inc/class_parser.php` | `Platform::forumParsing`, `Text` |
+| `polls_do_newpoll_end`, `polls_do_editpoll_end` (no arguments; the thread's row in the global `$thread`, read before the poll was written) | `polls.php` | `Platform::pollThreadFirstPost`, `Submitter::onPollChanged` |
+| a thread's poll: `threads.poll` → `polls` (`question`, `options` joined by `\|\|~\|~\|\|`, `numoptions` of them shown); the question through `htmlspecialchars_uni`, each option through `parse_message` with the forum's options | `showthread.php`, `install/resources/mysql_db_tables.php` | `Platform::post`, `Text` |
+| a reply's default subject: "RE: " and the thread's title (cut to 82 characters and "..." past 85; when quoting, "RE: " and the quoted post's subject without its "RE:") | `newreply.php`, `inc/datahandlers/post.php` (`verify_subject`) | `Text::ownSubject` |
 | `Moderation::unapprove_posts`, `unapprove_threads` | `inc/class_moderation.php` | `Platform::unapprove` (a late `zablokowane`) |
 | subscription notifications: inline in `insert_post`/`insert_thread`, only for `visible == 1`; none on approval | `inc/datahandlers/post.php`, `inc/class_moderation.php`, `modcp.php` | not sent (see above) |
 | `admin_config_settings_change` before `upsetting` is saved | `admin/modules/config/settings.php` | `Admin::onSettingsChange` |
@@ -346,6 +355,30 @@ reading the code, not by running a live forum:
 | `$cache->read($name, true)` (a hard read: from the database or the cache handler, not the copy loaded with the page), `update($name, $contents)` (`replace_query` on `datacache`, serialized, the whole entry), `delete($name)`. One entry per value of state, so two requests never write back each other's stale copy | `inc/class_datacache.php` | `Platform::state`, `setState`, `removeState` |
 | `$db` helpers: `simple_select`, `query`, `fetch_array`, `fetch_field`, `insert_query`, `update_query`, `delete_query`, `escape_string`, `affected_rows`, `table_exists`, `drop_table`, `write_query`, `build_create_table_collation`, `type`; `field_exists($field, $table)` and `add_column($table, $column, $definition)` (prefix added; `ALTER TABLE … ADD`) in every driver, the PDO ones included | `inc/db_mysqli.php`, `inc/db_pgsql.php`, `inc/db_sqlite.php`, `inc/AbstractPdoDbDriver.php`, `inc/db_mysql_pdo.php`, `inc/db_pgsql_pdo.php`, `inc/init.php` | `Platform` |
 | the minimal bootstrap `IN_MYBB`, `NO_ONLINE`, `THIS_SCRIPT`, `inc/init.php` (database, settings, cache, plugins; no session) | `inc/init.php`, `task.php` | `minos-webhook.php` |
+
+Read in the 1.8.41 source — questions 3 to 5 of the live check (minos-moderation/minos#47),
+still to be confirmed by the job on a real forum:
+
+- **3. Polls.** A poll is not part of `newthread.php`: with "post a poll" ticked, it
+  redirects to `polls.php?action=newpoll&tid=…` after `insert_thread`, and the poll is
+  created by `do_newpoll` (hooks `polls_do_newpoll_start`, `_process` before the insert,
+  `_end` after it and after `threads.poll` is set). The form (`newpoll`) refuses a thread
+  that is not visible to anyone but a moderator (`error_invalidthread`), so the author of a
+  thread the plugin holds cannot reach it; `do_newpoll` itself checks only the thread's
+  author (or `canmanagepolls`) and the forum's permissions, so a direct post still adds a
+  poll to a held thread. `showthread.php` offers the author "add poll" on a published
+  thread (within `polltimelimit` hours). Editing a poll (`do_editpoll`, hook
+  `polls_do_editpoll_end`) needs `canmanagepolls`: moderators only. So before the verdict a
+  poll exists only when a moderator or a direct post made it — the plugin then sends it as a
+  new revision (an author's) or leaves the thread to a human (a moderator's); a poll added
+  after publication is a change of a published post, not assessed (D9.2 not adopted).
+- **4. Who edits a post in the queue**: see "The row's life" — moderators, and its author
+  only with `showownunapproved` on.
+- **5. A reply's subject is shown**: the default theme's `showthread_threaded_bit` prints it
+  as the link text in the threaded view, `search_results_posts_post` in post search
+  results, `printthread_post` in the printable version, and `postbit_posturl` puts it in
+  the `title` of the post-number link in the linear view (`build_postbit` escapes it with
+  `htmlspecialchars_uni`). So an own subject is sent; the default one tells nothing new.
 
 Not verified — to check on a live forum before a release:
 

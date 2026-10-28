@@ -25,6 +25,10 @@ namespace Minos\MyBB;
  *   patterns refuse (`[size=OBELGA]`), any tag in a forum with MyCode off — stays
  *   literally, as readers see it.
  *
+ * What heads the post for its readers comes first: a new thread's subject, then the
+ * question and options of its poll (MyBB shows the poll above the first post); a reply's
+ * own subject, when its author changed MyBB's default "RE: <thread title>" ({@see ofPost}).
+ *
  * Only the FIRST 3000 characters are sent; {@see Applier} does not publish a cut post on a
  * verdict about its beginning. Works without mbstring (PCRE with `/u`).
  *
@@ -39,8 +43,23 @@ final class Text
     /** The gateway's per-item ceiling, in characters (`limit_dlugosci` above it). */
     public const MAX_CHARS = 3000;
 
-    /** Between a new thread's subject and its first post in the sent text. */
+    /** Between a subject, a poll and the post in the sent text. */
     public const SUBJECT_SEPARATOR = "\n\n";
+
+    /** Between a poll's question and each of its options in the sent text. */
+    public const POLL_SEPARATOR = "\n";
+
+    /** How MyBB 1.8.41 begins a reply's default subject (`newreply.php`, the post datahandler). */
+    public const REPLY_PREFIX = 'RE: ';
+
+    /**
+     * MyBB shortens a thread title longer than {@see TITLE_MAX_CHARS} characters to this many,
+     * and "...", in a reply's default subject (`newreply.php`).
+     */
+    private const DEFAULT_SUBJECT_CHARS = 82;
+
+    /** The longest subject MyBB accepts (`PostDataHandler::verify_subject`). */
+    private const TITLE_MAX_CHARS = 85;
 
     /** The character the gateway masks with, one per masked character. */
     public const MASK = '█';
@@ -71,35 +90,112 @@ final class Text
     private const HTML_BLOCKS = ['br', 'p', 'div', 'li', 'tr', 'blockquote', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'table', 'ul', 'ol'];
 
     /**
-     * The text to send for a new post.
+     * The text to send for a post as {@see Platform::post} reads it: for a thread's first
+     * post its subject and its poll, for a reply its own subject ({@see ownSubject}).
+     *
+     * @param array<string,mixed> $post        The post: `message`, `subject`,
+     *     `thread_subject` and `poll` (`question`, `options`, or null).
+     * @param bool                $opensThread The post opens its thread.
+     * @param array<string,mixed> $forum       The forum's parsing options.
+     * @return array{tekst:string,truncated:bool,prefix_len:int,text_len:int,error:bool} As {@see forPost}.
+     */
+    public static function ofPost(array $post, bool $opensThread, array $forum = []): array
+    {
+        if ($opensThread) {
+            $poll = is_array($post['poll'] ?? null) ? $post['poll'] : null;
+            return self::forPost((string)$post['message'], (string)$post['subject'], $forum, $poll);
+        }
+        return self::forPost((string)$post['message'],
+            self::ownSubject((string)$post['subject'], (string)($post['thread_subject'] ?? '')), $forum);
+    }
+
+    /**
+     * The raw text the link signals of a post are read from: what {@see ofPost} sends, as
+     * stored (subject, poll, message).
+     *
+     * @param array<string,mixed> $post        As for {@see ofPost}.
+     * @param bool                $opensThread The post opens its thread.
+     * @return string The parts, one per line.
+     */
+    public static function sourceOf(array $post, bool $opensThread): string
+    {
+        $parts = [$opensThread ? (string)$post['subject']
+            : self::ownSubject((string)$post['subject'], (string)($post['thread_subject'] ?? ''))];
+        if ($opensThread && is_array($post['poll'] ?? null)) {
+            $parts[] = (string)$post['poll']['question'];
+            foreach ((array)$post['poll']['options'] as $option) {
+                $parts[] = (string)$option;
+            }
+        }
+        $parts[] = (string)$post['message'];
+        return implode("\n", $parts);
+    }
+
+    /**
+     * A reply's subject when its readers learn something from it: '' for MyBB's default
+     * ("RE: " and the thread's title, the title shortened to 82 characters and "..." when
+     * longer than 85) and for the thread's title itself. MyBB shows a reply's subject in the
+     * threaded view, in search results, in the printable version and as the title of the
+     * post's link in the linear view (MyBB 1.8.41's default templates).
+     *
+     * @param string $subject       The reply's subject as stored.
+     * @param string $threadSubject Its thread's title as stored.
+     * @return string The subject, or ''.
+     */
+    public static function ownSubject(string $subject, string $threadSubject): string
+    {
+        $subject = trim($subject);
+        $defaults = ['', $threadSubject, self::REPLY_PREFIX . $threadSubject];
+        if (strlen($threadSubject) > self::TITLE_MAX_CHARS) {
+            try {
+                if (self::length($threadSubject) > self::TITLE_MAX_CHARS) {
+                    $defaults[] = self::REPLY_PREFIX . self::head($threadSubject, self::DEFAULT_SUBJECT_CHARS) . '...';
+                }
+            } catch (TextError $e) {
+                // Without mbstring, a title PCRE cannot split: the subject is sent.
+            }
+        }
+        return in_array($subject, $defaults, true) ? '' : $subject;
+    }
+
+    /**
+     * The text to send for a post.
      *
      * @param string              $message The post's message as stored (MyCode source).
-     * @param string              $subject A new thread's subject, put in front of the message
-     *     so the title is assessed too; '' for a reply.
+     * @param string              $subject A subject to put in front of the message, so it is
+     *     assessed too: a new thread's, or a reply's own; '' for none.
      * @param array<string,mixed> $forum   The forum's `allowhtml`, `allowmycode`,
      *     `allowimgcode`, `allowvideocode` ({@see DEFAULT_FORUM} for missing ones).
+     * @param array{question:string,options:array<int,string>}|null $poll A thread's poll,
+     *     after the subject: its question, then its options, as MyBB shows them.
      * @return array{tekst:string,truncated:bool,prefix_len:int,text_len:int,error:bool} `tekst`
      *     is what goes on the wire ('' when readers see no text at all); `truncated` says
-     *     whether it was cut; `prefix_len` counts the characters the subject and its
-     *     separator take at its head; `text_len` its length in characters. `error` is true
-     *     when the text could not be read at all (a PCRE failure): `tekst` is then '' and
-     *     must not be taken for a post without text.
+     *     whether it was cut; `prefix_len` counts the characters the subject, the poll and
+     *     their separators take at its head; `text_len` its length in characters. `error` is
+     *     true when the text could not be read at all (a PCRE failure): `tekst` is then ''
+     *     and must not be taken for a post without text.
      */
-    public static function forPost(string $message, string $subject = '', array $forum = []): array
+    public static function forPost(string $message, string $subject = '', array $forum = [], ?array $poll = null): array
     {
         try {
             // A subject is always shown escaped, never as HTML or MyCode.
-            $subject = self::squeeze(self::numericEntities(self::valid($subject)));
+            $heads = [self::squeeze(self::numericEntities(self::valid($subject)))];
+            if ($poll !== null) {
+                $heads[] = self::poll($poll, $forum);
+            }
+            $head = implode(self::SUBJECT_SEPARATOR, array_values(array_filter($heads, static function (string $part): bool {
+                return $part !== '';
+            })));
             $body = self::visible($message, $forum);
-            if ($subject === '') {
+            if ($head === '') {
                 $text = $body;
                 $prefix = 0;
             } elseif ($body === '') {
-                $text = $subject;
-                $prefix = self::length($subject);
+                $text = $head;
+                $prefix = self::length($head);
             } else {
-                $text = $subject . self::SUBJECT_SEPARATOR . $body;
-                $prefix = self::length($subject) + self::length(self::SUBJECT_SEPARATOR);
+                $text = $head . self::SUBJECT_SEPARATOR . $body;
+                $prefix = self::length($head) + self::length(self::SUBJECT_SEPARATOR);
             }
 
             $truncated = self::length($text) > self::MAX_CHARS;
@@ -242,6 +338,26 @@ final class Text
             }
         }
         return true;
+    }
+
+    /**
+     * A poll as MyBB 1.8.41's `showthread.php` shows it: the question escaped (like a
+     * subject), each option through the post parser with the forum's options, one per line.
+     *
+     * @param array{question:string,options:array<int,string>} $poll
+     * @param array<string,mixed>                               $forum The forum's parsing options.
+     * @return string The text; '' for a poll without any.
+     * @throws TextError When PCRE fails on it.
+     */
+    private static function poll(array $poll, array $forum): string
+    {
+        $lines = [self::squeeze(self::numericEntities(self::valid((string)($poll['question'] ?? ''))))];
+        foreach ((array)($poll['options'] ?? []) as $option) {
+            $lines[] = self::squeeze(str_replace("\n", ' ', self::visible((string)$option, $forum)));
+        }
+        return implode(self::POLL_SEPARATOR, array_values(array_filter($lines, static function (string $line): bool {
+            return $line !== '';
+        })));
     }
 
     /**
