@@ -87,12 +87,17 @@ The text readers SEE, following MyBB's own text renderer
   ("RE: " and the thread's title, the title cut to 82 characters and "..." when longer
   than 85, or the title itself — `Text::ownSubject`). All of it is `prefix_len`: a mask
   there holds the post. Only the first 3000 characters are sent.
+- A title or a reply's own subject alone is not a text to assess (shared rule F7 in
+  client-php's `docs/plugin-behaviour.md`): when the body shows no text and there is no
+  poll, `tekst` is `''` and the post gets the failure mode at once as `no_text`, nothing
+  sent (fail-open publishes it marked `auto_published`). A poll is text (S5): an empty body
+  with a poll sends the title and the poll.
 - The link signals count the links of what is sent, head included (`Text::sourceOf`).
 - Every regular expression runs through one checked helper in `Text`: a PCRE failure (a
   post crafted to exhaust the backtrack limit, e.g. a few hundred unclosed `[url=` tags)
   throws `TextError`, and `Text::forPost` returns `error: true` — never `''`. The post then
   gets the failure mode as `text_error` with nothing sent, not even a new thread's subject
-  alone (`no_text` is only for a post readers see no text in).
+  alone (`no_text` is for a post whose body shows no text and that has no poll).
 - `meta`: `links` (distinct links), `link_domains` (up to 10 registrable domains — the last
   two host labels, or three under a two-label public suffix from a short list; an
   approximation of the Public Suffix List), `author_first_post` for registered authors.
@@ -168,7 +173,7 @@ applying for more than 5 min ─► back to claimed_from (the task)
   `retry` due now, `submitted_at` = now (a fresh timeout), nothing of the earlier attempt
   kept (digest, attempts, outcome). The same for a row the failure mode held because no
   verdict came for its text (`Status::REVISED_REASONS`: `timeout`, `config_error`,
-  `text_error`). The task sends it as `mybb:<pid>.<rev>`, never the editor's request. The
+  `text_error`, `no_text` — a body or a poll added later gives it a text). The task sends it as `mybb:<pid>.<rev>`, never the editor's request. The
   receiver accepts `mybb:<pid>` and `mybb:<pid>.<n>` (n ≥ 1, no leading zero) and applies a
   verdict only to the row's current revision: its claim names the revision, so an edit
   between the receiver's read and its claim wins. A verdict for another revision gets `200`

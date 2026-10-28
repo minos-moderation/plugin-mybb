@@ -110,10 +110,16 @@ final class TextTest extends TestCase
         self::assertSame(0, Text::forPost('Treść postu.')['prefix_len']);
     }
 
-    public function testAPostReadersSeeNoTextInSendsNothing(): void
+    /**
+     * A title or a subject alone is not a text to assess (shared rule F7); a poll is text.
+     */
+    public function testAPostReadersSeeNoTextInSendsNothingNotEvenItsTitle(): void
     {
         self::assertSame('', Text::forPost('[attachment=7]')['tekst']);
-        self::assertSame('Tytuł', Text::forPost('[attachment=7]', 'Tytuł')['tekst']);
+        self::assertSame(['', false], [Text::forPost('[attachment=7]', 'Tytuł')['tekst'], Text::forPost('', 'Tytuł')['error']]);
+        $poll = Text::forPost('[attachment=7]', 'Tytuł', [], ['question' => 'Pytanie', 'options' => ['A', 'B']]);
+        self::assertSame("Tytuł\n\nPytanie\nA\nB", $poll['tekst']);
+        self::assertSame($poll['text_len'], $poll['prefix_len'], 'all of it is head: a mask there holds the post');
     }
 
     /**

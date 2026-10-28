@@ -124,8 +124,10 @@ Wysyłane jest tylko:
   Na początku to, co czytelnik widzi nad postem: przy nowym wątku jego tytuł, a gdy wątek
   ma ankietę — także jej pytanie i opcje; przy odpowiedzi jej własny temat, jeśli autor
   zmienił domyślne „RE: <tytuł wątku>” (MyBB pokazuje temat odpowiedzi w widoku drzewa,
-  w wynikach wyszukiwania, w wersji do druku i w podpowiedzi numeru postu). Wtyczka
-  odtwarza to, co MyBB pokazuje na stronie:
+  w wynikach wyszukiwania, w wersji do druku i w podpowiedzi numeru postu). Sam tytuł
+  albo sam temat nigdy nie jest wysyłany: post, którego treść nie ma tekstu, a wątek nie ma
+  ankiety, od razu dostaje tryb awaryjny (niżej). Wtyczka odtwarza to, co MyBB pokazuje na
+  stronie:
   - na forum bez HTML (domyślnie) znaki `<…>` są zwykłym tekstem i zostają w całości;
     na forum z HTML znaczniki znikają, ale tekst z atrybutów `alt` i `title` zostaje;
   - cytat `[quote=NAZWA]` staje się „NAZWA napisał(a):” i cytowanym tekstem;
@@ -190,8 +192,8 @@ zastosowania, więc:
   `.2`…), z nowym czasem oczekiwania. Wysyła ją zadanie przy najbliższym przebiegu, nie
   żądanie autora. Werdykt o wcześniejszej wersji, jeśli jeszcze nadejdzie, jest pomijany.
   Tak samo po poprawce postu, który tryb awaryjny zostawił w kolejce, bo werdykt nie
-  nadszedł w czasie, brama odrzuciła wysyłkę z powodu błędu konfiguracji albo nie udało się
-  odczytać tekstu;
+  nadszedł w czasie, brama odrzuciła wysyłkę z powodu błędu konfiguracji, nie udało się
+  odczytać tekstu albo post nie miał tekstu do oceny;
 - gdy post poprawia moderator, decyduje człowiek: wtyczka niczego nie wysyła, a post
   zostaje w kolejce moderacji i na liście „Posty, które wymagają uwagi” (stan
   „Rozstrzygnięty przez człowieka”, powód „edytowany przez moderatora przed werdyktem”).
@@ -214,7 +216,10 @@ werdyktu nie ma:
   administratora;
 - wtyczka jest włączona, ale jej ustawienia są niekompletne (brak klucza albo sekretu,
   adres bramy bez `https://`, nieznany profil) — nic nie jest wysyłane;
-- post nie ma tekstu do oceny (np. sam załącznik);
+- post nie ma tekstu do oceny (np. sam załącznik) — także nowy wątek albo odpowiedź
+  z własnym tematem, jeśli ich treść nie ma tekstu: sam tytuł nie jest tekstem do oceny
+  i nie jest wysyłany. Pytanie i opcje ankiety są tekstem, więc wątek z ankietą i pustą
+  treścią jest wysyłany z tytułem i ankietą;
 - nie udało się odczytać tekstu postu (np. treść tak zbudowana, że przetwarzanie wyrażeń
   regularnych przerywa się z błędem) — wtyczka nie wysyła wtedy niczego, nawet samego
   tytułu wątku, a w dzienniku zapisuje zdarzenie z numerem postu;
@@ -285,7 +290,7 @@ numer postu — nigdy treść błędu.
 - Temat odpowiedzi jest oceniany tylko wtedy, gdy autor go zmienił — domyślne „RE: <tytuł
   wątku>” nie mówi nic nowego; tytuł nowego wątku — zawsze.
 - Ankieta jest oceniana razem z pierwszym postem wątku tylko wtedy, gdy powstała, kiedy wątek
-  czekał na werdykt. MyBB pozwala dodać ankietę do wątku z kolejki moderacji tylko
+  czekał na werdykt albo stał w kolejce bez oceny (np. z pustą treścią). MyBB pozwala dodać ankietę do wątku z kolejki moderacji tylko
   moderatorom (formularz ankiety odmawia autorowi), więc autor dodaje ją zwykle po publikacji
   wątku — takiej ankiety wtyczka nie ocenia, tak jak poprawek opublikowanych postów. Ankietę
   zmieniają w MyBB tylko moderatorzy: zmiana ankiety wątku czekającego na werdykt, jak

@@ -28,6 +28,9 @@ namespace Minos\MyBB;
  * What heads the post for its readers comes first: a new thread's subject, then the
  * question and options of its poll (MyBB shows the poll above the first post); a reply's
  * own subject, when its author changed MyBB's default "RE: <thread title>" ({@see ofPost}).
+ * A title or a subject alone is not a text to assess (shared rule F7): a post whose body
+ * shows no text and that carries no poll gets '' — nothing is sent. A poll is text: a first
+ * post with an empty body and a poll sends the title and the poll.
  *
  * Only the FIRST 3000 characters are sent; {@see Applier} does not publish a cut post on a
  * verdict about its beginning. Works without mbstring (PCRE with `/u`).
@@ -169,7 +172,8 @@ final class Text
      * @param array{question:string,options:array<int,string>}|null $poll A thread's poll,
      *     after the subject: its question, then its options, as MyBB shows them.
      * @return array{tekst:string,truncated:bool,prefix_len:int,text_len:int,error:bool} `tekst`
-     *     is what goes on the wire ('' when readers see no text at all); `truncated` says
+     *     is what goes on the wire ('' when the body shows no text and there is no poll — a
+     *     subject alone is never sent, shared rule F7); `truncated` says
      *     whether it was cut; `prefix_len` counts the characters the subject, the poll and
      *     their separators take at its head; `text_len` its length in characters. `error` is
      *     true when the text could not be read at all (a PCRE failure): `tekst` is then ''
@@ -180,13 +184,16 @@ final class Text
         try {
             // A subject is always shown escaped, never as HTML or MyCode.
             $heads = [self::squeeze(self::numericEntities(self::valid($subject)))];
-            if ($poll !== null) {
-                $heads[] = self::poll($poll, $forum);
-            }
+            $pollText = $poll !== null ? self::poll($poll, $forum) : '';
+            $heads[] = $pollText;
             $head = implode(self::SUBJECT_SEPARATOR, array_values(array_filter($heads, static function (string $part): bool {
                 return $part !== '';
             })));
             $body = self::visible($message, $forum);
+            if ($body === '' && $pollText === '') {
+                // A title alone is not a text to assess (F7): nothing goes out, not even it.
+                return ['tekst' => '', 'truncated' => false, 'prefix_len' => 0, 'text_len' => 0, 'error' => false];
+            }
             if ($head === '') {
                 $text = $body;
                 $prefix = 0;

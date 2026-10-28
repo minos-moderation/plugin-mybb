@@ -164,6 +164,54 @@ final class PollAndSubjectTest extends PluginTestCase
     }
 
     /**
+     * Shared rule F7: a title — a new thread's, or a reply's own subject — over a body that
+     * shows no text is not a text to assess. The post gets the failure mode at once and
+     * nothing is sent; under fail-open it is published, marked as published unassessed.
+     *
+     * @dataProvider titlesAlone
+     */
+    public function testATitleAloneIsNeverSent(string $mode, bool $thread, int $visible, string $status): void
+    {
+        $this->forum->set(['minos_failure_mode' => $mode]);
+        $options = $thread ? ['subject' => 'Obraźliwy tytuł'] : ['subject' => 'Obraźliwy temat', 'tid' => $this->thread('Wątek')];
+        $pid = (int)$this->forum->write($thread, '[attachment=4]', $options)->return_values['pid'];
+        task_minos(['tid' => 1]);
+
+        self::assertSame([], $this->forum->transport->requests, 'nothing is sent, not even the title');
+        $row = $this->forum->row($pid);
+        self::assertSame([$visible, $status, Status::REASON_NO_TEXT, $visible === 1 ? '1' : '0'],
+            [(int)$this->forum->post($pid)['visible'], $row['status'], $row['verdict'], (string)$row['auto_published']]);
+    }
+
+    /** @return array<string,array{0:string,1:bool,2:int,3:string}> */
+    public function titlesAlone(): array
+    {
+        return [
+            'a thread, fail-closed'           => ['fail-closed', true, 0, Status::HELD],
+            'a thread, fail-open'             => ['fail-open', true, 1, Status::PUBLISHED],
+            'a reply\'s own subject, fail-closed' => ['fail-closed', false, 0, Status::HELD],
+            'a reply\'s own subject, fail-open'   => ['fail-open', false, 1, Status::PUBLISHED],
+        ];
+    }
+
+    /**
+     * A poll is text (shared rule S5): a thread whose first post shows no text, held as
+     * `no_text`, is sent with its title and poll once its author adds the poll.
+     */
+    public function testAPollGivesAnEmptyThreadATextToAssess(): void
+    {
+        $handler = $this->forum->write(true, '[attachment=4]', ['subject' => 'Tytuł']);
+        $pid = (int)$handler->return_values['pid'];
+        self::assertSame([Status::HELD, Status::REASON_NO_TEXT], [$this->forum->row($pid)['status'], $this->forum->row($pid)['verdict']]);
+
+        $this->forum->addPoll((int)$handler->return_values['tid'], 'Pytanie X', ['Opcja Y', 'Opcja Z']);
+        task_minos(['tid' => 1]);
+
+        $item = $this->forum->transport->lastBody()['elementy'][0] ?? [];
+        self::assertSame(['mybb:' . $pid . '.1', "Tytuł\n\nPytanie X\nOpcja Y\nOpcja Z"], [$item['id'] ?? null, $item['tekst'] ?? null]);
+    }
+
+    /**
      * A published thread with a given title, to reply to.
      */
     private function thread(string $title): int
