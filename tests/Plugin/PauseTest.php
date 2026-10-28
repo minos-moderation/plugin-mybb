@@ -76,6 +76,32 @@ final class PauseTest extends PluginTestCase
     }
 
     /**
+     * A `ponow_za_s` far beyond any timeout (4·10⁹ s), in the author's request and in the
+     * task: the rows get the failure mode, and none gets a `retry_at` past its timeout —
+     * MySQL and PostgreSQL refuse such a value, and MyBB stops the page on a database error.
+     * The notice keeps the gateway's moment.
+     */
+    public function testAFarPonowZaSWritesNoRetryPastTheTimeout(): void
+    {
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(503, 'kolejka_niedostepna')]));
+        $resent = $this->heldReply('Wysłany ponownie przez zadanie.');
+        $this->forum->endPause();
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(429, 'limit_dobowy_klucza', 4000000000)]));
+        $refused = $this->heldReply('Odrzucony w żądaniu autora.');
+        $this->forum->endPause();
+        $this->forum->plugin->task->run(TIME_NOW + 61);
+
+        self::assertCount(2, $this->forum->transport->requests);
+        foreach ([$refused, $resent] as $pid) {
+            $row = $this->forum->row($pid);
+            self::assertSame([Status::HELD, Status::REASON_GATEWAY_LIMIT], [$row['status'], $row['verdict']], "post {$pid}");
+            self::assertLessThanOrEqual((int)$row['submitted_at'] + 20 * 60, (int)$row['retry_at'], "post {$pid}: no retry past its timeout");
+        }
+        self::assertStringContainsString(date('Y-m-d H:i', TIME_NOW + 61 + 4000000000),
+            (string)$this->forum->plugin->admin->notice(TIME_NOW + 61), 'the notice keeps the gateway\'s moment');
+    }
+
+    /**
      * The task while the pause lasts: no request; a row the pause outlasts gets the failure
      * mode in the same run (the audit's probe M4: no longer `retry` after 19 minutes), the
      * others wait until it ends.

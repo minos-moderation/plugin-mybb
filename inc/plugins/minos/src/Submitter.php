@@ -520,17 +520,26 @@ final class Submitter
             $until = max($now + max(1, $retryS ?? self::BACKOFF_S), (int)$this->pausedUntil($now));
             $this->platform->setState(self::PAUSE, ['until' => $until, 'kod' => $result['kod']]);
             foreach ($batch as $entry) {
-                $attempts = (int)$entry['row']['attempts'] + 1;
-                $pause = $retryS ?? min(self::MAX_BACKOFF_S, self::BACKOFF_S * (2 ** min(10, $attempts - 1)));
-                $this->platform->updatePending((int)$entry['row']['pid'], [
-                    'retry_at' => $now + max(1, $pause), 'attempts' => $attempts, 'error_code' => $result['kod'],
-                ], Status::RETRY, self::rev($entry['row']));
-                // Rule D9.3(a): the gateway refuses beyond the post's timeout — its
+                $row = $entry['row'];
+                $attempts = (int)$row['attempts'] + 1;
+                $deadline = (int)$row['submitted_at'] + $settings->timeoutS();
+                // Rule D9.3(a) first: the gateway refuses beyond the post's timeout — its
                 // `ponow_za_s` as given, not a pause of the plugin's own — so no verdict can
-                // come in time: the failure mode now, not after the wait.
-                if ($retryS !== null && $now + $retryS > (int)$entry['row']['submitted_at'] + $settings->timeoutS()) {
-                    $this->decideWithout($entry['row'], Status::REASON_GATEWAY_LIMIT, $settings, $now);
+                // come in time: the failure mode now, not after the wait. Such a row gets no
+                // `retry_at`: a far `ponow_za_s` would not even fit the column (MySQL and
+                // PostgreSQL refuse the value, and MyBB stops the page on a database error).
+                if ($retryS !== null && $now + $retryS > $deadline) {
+                    $this->platform->updatePending((int)$row['pid'], ['attempts' => $attempts, 'error_code' => $result['kod']],
+                        Status::RETRY, self::rev($row));
+                    $this->decideWithout($row, Status::REASON_GATEWAY_LIMIT, $settings, $now);
+                    continue;
                 }
+                $pause = $retryS ?? min(self::MAX_BACKOFF_S, self::BACKOFF_S * (2 ** min(10, $attempts - 1)));
+                // Never later than the timeout, when the task gives the row the failure mode anyway.
+                $this->platform->updatePending((int)$row['pid'], [
+                    'retry_at' => min($now + max(1, $pause), max($now + 1, $deadline)), 'attempts' => $attempts,
+                    'error_code' => $result['kod'],
+                ], Status::RETRY, self::rev($row));
             }
             $this->platform->log('retry', $result['kod'], (int)$batch[0]['row']['pid'], $now);
             return;
