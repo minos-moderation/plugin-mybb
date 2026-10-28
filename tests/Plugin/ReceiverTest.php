@@ -74,18 +74,91 @@ final class ReceiverTest extends PluginTestCase
         self::assertSame(Status::PUBLISHED, $this->forum->row($pid)['status']);
     }
 
-    public function testOnlyAPostWithAStoredSecretAndAnActivePluginIsHandled(): void
+    public function testOnlyPostIsAccepted(): void
     {
         $pid = $this->heldReply();
         self::assertSame(405, $this->forum->plugin->receiver->handle('GET', null, '', time()));
-
-        $this->forum->cache->data['plugins'] = ['active' => []];
-        self::assertSame(503, $this->forum->deliver(self::payload($pid)));
-        $this->forum->cache->data['plugins'] = ['active' => ['minos' => 'minos']];
-
-        $this->forum->set(['minos_webhook_secret' => '']);
-        self::assertSame(503, $this->forum->deliver(self::payload($pid), ''), 'an empty secret verifies nothing');
         $this->assertStillWaiting($pid);
+    }
+
+    public function testADeactivatedPluginAnswers404AndChangesNothing(): void
+    {
+        $pid = $this->heldReply();
+        $this->forum->cache->data['plugins'] = ['active' => []];
+        self::assertSame(404, $this->forum->deliver(self::payload($pid)));
+        $this->assertStillWaiting($pid);
+    }
+
+    /**
+     * @dataProvider verdicts
+     * @param array<string,mixed> $fields
+     */
+    public function testASwitchedOffPluginAnswers404AndChangesNothing(array $fields): void
+    {
+        $this->forum->set(['minos_failure_mode' => 'fail-open', 'minos_blocked' => 'soft-delete']);
+        $pid = $this->heldReply('abc zły');
+        $this->forum->set(['minos_enabled' => '0']);
+        self::assertSame(404, $this->forum->deliver(self::payload($pid, $fields)));
+        $this->assertStillWaiting($pid);
+    }
+
+    /** @return array<string,array{0:array<string,mixed>}> */
+    public function verdicts(): array
+    {
+        return [
+            'bezpieczne'   => [[]],
+            'zablokowane'  => [['kwalifikacja' => 'zablokowane']],
+            'ocenzurowane' => [['kwalifikacja' => 'ocenzurowane', 'ocenzurowany' => 'abc ███']],
+            'nieocenione'  => [['status' => 'nieocenione']],
+        ];
+    }
+
+    public function testWithoutAUsableSecretADeliveryIs401(): void
+    {
+        $pid = $this->heldReply();
+        $this->forum->set(['minos_webhook_secret' => '   ']);
+        self::assertSame(401, $this->forum->deliver(self::payload($pid), '   '), 'a blank secret verifies nothing');
+        self::assertSame(401, $this->forum->deliver(self::payload($pid), ''));
+        $this->assertStillWaiting($pid);
+    }
+
+    /**
+     * The audit's probe M5: switched off under fail-open, a delivery and the task leave both
+     * held posts held (today: 200, and both published unassessed).
+     */
+    public function testSwitchedOffNeitherAVerdictNorTheTaskPublishesHeldPosts(): void
+    {
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $a = $this->heldReply('Post A.');
+        $b = $this->heldReply('Post B.');
+        $this->forum->set(['minos_enabled' => '0']);
+        $this->forum->plugin();
+
+        self::assertSame(404, $this->forum->deliver(self::payload($a)));
+        $this->forum->platform()->updatePending($b, ['accepted_at' => TIME_NOW - 21 * 60]);
+        task_minos(['tid' => 1]);
+
+        foreach ([$a, $b] as $pid) {
+            self::assertSame([0, Status::PENDING, '0'],
+                [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status'], (string)$this->forum->row($pid)['auto_published']]);
+        }
+        self::assertSame([], self::moderation());
+    }
+
+    /**
+     * The audit's probe C3: fail-closed with soft-delete, switched off, a `zablokowane`
+     * delivery (today: the post is soft-deleted).
+     */
+    public function testSwitchedOffABlockedVerdictDeletesNothing(): void
+    {
+        $this->forum->set(['minos_blocked' => 'soft-delete']);
+        $pid = $this->heldReply('Post A.');
+        $this->forum->set(['minos_enabled' => '0']);
+        $this->forum->plugin();
+
+        self::assertSame(404, $this->forum->deliver(self::payload($pid, ['kwalifikacja' => 'zablokowane'])));
+        self::assertSame([0, Status::PENDING], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
+        self::assertSame([], self::moderation());
     }
 
     public function testAThreadIsApprovedAsAThread(): void

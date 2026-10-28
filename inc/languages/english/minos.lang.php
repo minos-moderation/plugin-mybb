@@ -18,7 +18,7 @@ $l['minos_group_title'] = 'Minos — moderacja postów';
 $l['minos_group_desc'] = 'Moderacja nowych postów przez bramę Wergiliusza. Adres webhooka do zgłoszenia razem z kluczem: {1}';
 
 $l['minos_setting_enabled'] = 'Włączona';
-$l['minos_setting_enabled_desc'] = 'Gdy wyłączona, nowe posty trafiają na forum tak, jakby wtyczki nie było. Werdykty dla postów wysłanych wcześniej są nadal stosowane.';
+$l['minos_setting_enabled_desc'] = 'Wyłączona wtyczka nic nie robi: nie zatrzymuje nowych postów, nie stosuje werdyktów ani trybu awaryjnego. Posty już zatrzymane zostają w kolejce moderacji dla ludzi, a werdykty doręczone w tym czasie przepadają.';
 $l['minos_setting_gateway_url'] = 'Adres bramy';
 $l['minos_setting_gateway_url_desc'] = 'Adres bramy Wergiliusza. Musi zaczynać się od https:// (http:// tylko dla atrapy bramy uruchomionej na tym samym komputerze).';
 $l['minos_setting_api_key'] = 'Klucz API';

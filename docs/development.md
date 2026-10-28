@@ -107,6 +107,10 @@ an edit of an auto-published post ─► auto_published = 0 (a late verdict no l
 applying for more than 5 min ─► back to claimed_from (the task)
 ```
 
+- Switched off ("Włączona = nie") or deactivated, the plugin does nothing: the webhook
+  answers `404` before the signature, the task gives back no claim, applies no failure
+  mode and sends nothing (it only forgets old data), and no new post is held. What was
+  held stays in MyBB's queue. No usable secret: `401`.
 - A row starts as `retry` with `retry_at` a minute ahead, so a request that dies half-way
   is sent again by the task and never mistaken for an accepted one.
 - `Platform::claimPending` moves a row from `pending`/`retry` (or, for a late verdict, from

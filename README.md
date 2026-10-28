@@ -65,7 +65,7 @@ Minos.
 
 | Ustawienie | Znaczenie | Domyślnie |
 |---|---|---|
-| Włączona | Wyłączona wtyczka nie zatrzymuje nowych postów; werdykty dla postów wysłanych wcześniej są nadal stosowane. | tak |
+| Włączona | Wyłączona wtyczka nic nie robi: nie zatrzymuje nowych postów, nie stosuje werdyktów ani trybu awaryjnego. Posty już zatrzymane zostają w kolejce moderacji dla ludzi, a werdykty doręczone w tym czasie przepadają. | tak |
 | Adres bramy | Adres bramy Wergiliusza. Musi zaczynać się od `https://` (`http://` tylko dla atrapy bramy na tym samym komputerze). | `https://gateway.wergiliusz.app` |
 | Klucz API | Klucz B2B `wgb2b_…`. Po zapisaniu panel pokazuje tylko jego początek. Puste pole przy zapisie zostawia zapisany klucz; pole „Usuń zapisaną wartość” go kasuje. | — |
 | Sekret webhooka | Sekret do sprawdzania podpisu werdyktów. Zapisywany i pokazywany jak klucz. | — |
@@ -188,8 +188,10 @@ zadanie ponawia wysyłkę po czasie wskazanym przez bramę albo po coraz dłużs
   `inc/settings.php`, jawnym tekstem. Panel administratora pokazuje tylko ich początek
   (a strony „Edytuj ustawienie” MyBB dla nich nie otwiera), ale zobaczy je każdy, kto ma
   dostęp do bazy, jej kopii zapasowych albo do plików forum.
-- Gdy wtyczka jest dezaktywowana, webhook odpowiada błędem i nie stosuje werdyktów; posty
-  już zatrzymane zostają w kolejce moderacji dla ludzi.
+- Gdy wtyczka jest dezaktywowana albo wyłączona („Włączona = nie”), webhook odpowiada
+  `404` i nie stosuje werdyktów, a zadanie nie stosuje trybu awaryjnego ani nie ponawia
+  wysyłki; posty już zatrzymane zostają w kolejce moderacji dla ludzi. Brama ponawia
+  doręczenie werdyktu najwyżej przez kilkanaście minut, potem go porzuca.
 
 ## Odinstalowanie
 

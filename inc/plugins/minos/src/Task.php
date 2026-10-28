@@ -18,6 +18,11 @@ namespace Minos\MyBB;
  * 3. Old log entries (30 days) and rows decided long ago (90 days, with the original text
  *    of censored posts) are forgotten.
  *
+ * While the plugin is switched off ("Włączona = nie") the run does none of steps 0–2: no
+ * claim is given back, no failure mode applied, nothing sent — switching it off releases
+ * nothing already held, and those posts stay in MyBB's queue for humans. Step 3 still runs:
+ * forgetting old data is no moderation.
+ *
  * Each run handles at most {@see LIMIT} rows per step; the rest wait five minutes.
  * No PHP 8 syntax.
  */
@@ -60,6 +65,10 @@ final class Task
     public function run(int $now): array
     {
         $settings = new Settings($this->platform->settings());
+        if (!$settings->enabled()) {
+            $this->forget($now);
+            return ['timeouts' => 0, 'resent' => 0];
+        }
         $this->platform->releaseStaleClaims($now - self::CLAIM_TTL_S);
 
         $timeouts = 0;
@@ -76,8 +85,18 @@ final class Task
             $resent = $this->submitter->resubmit($this->platform->dueRetries($now, self::LIMIT), $settings, $now);
         }
 
+        $this->forget($now);
+        return ['timeouts' => $timeouts, 'resent' => $resent];
+    }
+
+    /**
+     * Step 3: old log entries and rows decided long ago are forgotten.
+     *
+     * @param int $now Unix seconds.
+     */
+    private function forget(int $now): void
+    {
         $this->platform->pruneLog($now - self::LOG_RETENTION_S);
         $this->platform->pruneDecided($now - self::DECIDED_RETENTION_S);
-        return ['timeouts' => $timeouts, 'resent' => $resent];
     }
 }

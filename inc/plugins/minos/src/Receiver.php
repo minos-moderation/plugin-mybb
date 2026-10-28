@@ -13,17 +13,22 @@ use Minos\Client\WebhookPayload;
  *
  * 1. The body is the RAW bytes (`php://input`), read by the entry script before anything
  *    parses it.
- * 2. `X-Wergiliusz-Podpis` is verified with the client library's `Signature::verify`
+ * 2. A plugin that is deactivated, or switched off ("Włączona = nie"), does nothing: `404`,
+ *    before the signature is even looked at, and no row or post changes. The gateway
+ *    retries any answer but `2xx` until its TTL, then drops the verdict; the posts already
+ *    held stay in MyBB's queue for humans.
+ * 3. `X-Wergiliusz-Podpis` is verified with the client library's `Signature::verify`
  *    (a fresh timestamp, a matching HMAC, compared in constant time): `401` otherwise, and
- *    the gateway tries again. Without a stored secret nothing can be verified: `503`.
- * 3. `WebhookPayload::parse` reads it (`400` for a body that is no payload at all). An id
+ *    the gateway tries again. Without a usable stored secret nothing can be verified:
+ *    `401` too.
+ * 4. `WebhookPayload::parse` reads it (`400` for a body that is no payload at all). An id
  *    that is not `mybb:<pid>`, a post the plugin is not waiting for, and a delivery already
  *    applied (deliveries repeat) get `200` and nothing else.
- * 4. The verdict is applied ({@see Applier}) — the claim on the row makes sure a repeated or
+ * 5. The verdict is applied ({@see Applier}) — the claim on the row makes sure a repeated or
  *    concurrent delivery applies nothing twice. A verdict for a post the failure mode
  *    already published (`fail-open`) is applied late while nobody touched the post
  *    ({@see Applier::late}); a moderator's decision stays final.
- * 5. The answer is a bare `200`; the gateway discards its body. The work in step 4 is a
+ * 6. The answer is a bare `200`; the gateway discards its body. The work in step 5 is a
  *    few queries, well inside the gateway's 10 seconds.
  *
  * The answers never say more than their status: no reason, no id, no secret.
@@ -57,13 +62,13 @@ final class Receiver
         if (strtoupper($method) !== 'POST') {
             return 405;
         }
-        if (!$this->platform->isPluginActive()) {
-            return 503; // the gateway retries until its TTL; the posts stay in the queue
-        }
         $settings = new Settings($this->platform->settings());
+        if (!$this->platform->isPluginActive() || !$settings->enabled()) {
+            return 404; // switched off: nothing is applied, the posts stay in the queue
+        }
         $secret = $settings->webhookSecret();
         if ($secret === null) {
-            return 503;
+            return 401; // nothing can be verified without a secret
         }
         if ($signature === null || !Signature::verify($secret, $signature, $body, $now)) {
             return 401;

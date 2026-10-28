@@ -100,21 +100,53 @@ final class TaskTest extends PluginTestCase
         self::assertSame(TIME_NOW, (int)$this->forum->row($first)['retry_at'], 'the other item goes again next run');
     }
 
-    public function testNothingIsResentWhileThePluginIsOffButTimeoutsStillApply(): void
+    /**
+     * @dataProvider failureModes
+     */
+    public function testASwitchedOffPluginSweepsNothing(string $mode): void
     {
+        // Under fail-open a sweep would publish the held posts: switching off must release nothing.
+        $this->forum->set(['minos_failure_mode' => $mode]);
         $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(503, 'kolejka_niedostepna')]));
         $due = $this->heldReply();
-        $late = $this->heldReply();
-        $this->forum->platform()->updatePending($due, ['retry_at' => TIME_NOW - 1]);
-        $this->forum->platform()->updatePending($late, ['submitted_at' => TIME_NOW - 21 * 60]);
+        $neverAccepted = $this->heldReply();
+        $this->forum->plugin(new RecordingTransport());
+        $accepted = $this->heldReply();
+        $claimed = $this->heldReply();
+        $platform = $this->forum->platform();
+        $platform->updatePending($due, ['retry_at' => TIME_NOW - 1]);
+        $platform->updatePending($neverAccepted, ['submitted_at' => TIME_NOW - 21 * 60]);
+        $this->age($accepted, 21 * 60);
+        self::assertTrue($platform->claimPending($claimed, TIME_NOW - 6 * 60));
         $this->forum->set(['minos_enabled' => '0']);
         $this->forum->plugin(new RecordingTransport());
+        $logged = $this->logEntries();
 
         task_minos(['tid' => 1]);
 
-        self::assertSame([], $this->forum->transport->requests);
-        self::assertSame(Status::RETRY, $this->forum->row($due)['status']);
-        self::assertSame(Status::HELD, $this->forum->row($late)['status'], 'never accepted, and waited too long');
+        self::assertSame([], $this->forum->transport->requests, 'nothing is sent');
+        self::assertSame([], self::moderation(), 'no post is touched');
+        foreach ([$due => Status::RETRY, $neverAccepted => Status::RETRY, $accepted => Status::PENDING, $claimed => Status::APPLYING] as $pid => $status) {
+            self::assertSame([0, $status], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']], "post {$pid}");
+        }
+        self::assertSame($logged, $this->logEntries(), 'no timeout, no error');
+    }
+
+    /** @return array<string,array{0:string}> */
+    public function failureModes(): array
+    {
+        return ['fail-closed' => ['fail-closed'], 'fail-open' => ['fail-open']];
+    }
+
+    public function testASwitchedOffPluginStillForgetsOldData(): void
+    {
+        $platform = $this->forum->platform();
+        $platform->log('retry', 'kolejka_pelna', 0, TIME_NOW - 31 * 86400);
+        $this->forum->set(['minos_enabled' => '0']);
+
+        task_minos(['tid' => 1]);
+
+        self::assertSame([], $this->logEntries());
     }
 
     public function testAResendOfAPostAHumanDecidedIsDropped(): void
