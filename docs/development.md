@@ -30,13 +30,13 @@ The classes:
 | `Settings` | Reads and checks the settings; everything that decides publish or hold is read fail-closed. |
 | `Text` | Post → `tekst`: what readers see (MyBB's rendering rules, per forum), the first 3000 characters; the link signals. |
 | `TextError` | A PCRE failure inside `Text`: the text could not be read (`error: true`, never `''`). |
-| `Gateway` | `POST /api/v1/b2b/oceny` over cURL; reads answers into accepted (`202` only) / retry (429, 408, 5xx, no answer) / config error. |
+| `Gateway` | `POST /api/v1/b2b/oceny` over cURL; reads answers into accepted (`202` only, for the items its `przyjete` names) / retry (429, 408, 5xx, no answer, a 2xx other than 202) / config error. |
 | `Submitter` | The hold (validate hooks), the submission (insert-end hooks), resubmission, edits. |
 | `Receiver` | The webhook's checklist: method, signature (`Signature::check`; a refusal counted with its reason only), payload, id, claim, apply. |
 | `Applier` | A verdict or the failure mode → approve, hold, soft-delete, or publish the masked text. |
 | `Task` | Timeouts, due retries, pruning. |
 | `Installer` | Settings group, tables, task; the lifecycle functions. |
-| `Admin` | Masked secrets on the settings page, the ACP notice (problems, a configuration error, a daily limit or overload until a given time, refused signatures), the Tools → Logs page with the last 7 days' verdict figures. |
+| `Admin` | Masked secrets on the settings page, the ACP notice (problems, a configuration error, a 2xx other than 202 at the gateway's address, a daily limit or overload until a given time, refused signatures), the Tools → Logs page with the last 7 days' verdict figures. |
 | `Plugin` | Builds the objects once per request. |
 
 ## How the plugin holds a post
@@ -146,9 +146,10 @@ The text readers SEE, following MyBB's own text renderer
 ```
 insert ─► retry ──202──► pending ──webhook──► applying ─► published | censored | held | deleted
             │ ▲                                              superseded | gone
-            │ └─ 429/408/5xx/no answer: retry_at = ponow_za_s, or 60 s doubling to 1 h
+            │ └─ 429/408/5xx/no answer/a 2xx but 202: retry_at = ponow_za_s, or 60 s doubling to 1 h
+            │ └─ a 202 whose przyjete leaves the item out: the backoff (nieprzyjete)
             ├─ ponow_za_s ending after submitted_at + timeout: failure mode now (gateway_limit)
-            └─ other 4xx, a 2xx but 202: failure mode (config_error, http_<n>); ACP notice
+            └─ other 4xx, a redirect: failure mode (config_error, the code or http_<n>); ACP notice
 pending/retry older than the timeout (≥ 20 min) ─► failure mode (timeout)
 fail-open ─► published + auto_published ──late webhook──► applying ─► held | censored | published
 a "retry" answer ─► the shared pause: nothing sent before its end (below)
@@ -198,8 +199,16 @@ applying for more than 5 min ─► back to claimed_from (the task)
   `limit_dobowy_klucza`, `limit_globalny_b2b` or `kolejka_pelna` refusal is kept in the
   datacache entry `minos_refusal` (code, until) for the ACP notice "the gateway does not accept
   until …"; the next `202` clears it, and it is not shown past its end.
+- Shared rule F5a: only a `202` accepts, and only the items its `przyjete` names; an item
+  it leaves out is sent again after the backoff (`error_code` `nieprzyjete`, no pause). A
+  `2xx` other than `202` — also one whose body names every item — is no acceptance:
+  something else answers at the gateway's address (a hosting page, a proxy, a wrong
+  address). It is retried with the backoff and the shared pause, like a `503`, never a
+  configuration error, and kept in the datacache entry `minos_foreign_answer` (code,
+  moment) for the ACP notice "something else answers at the gateway's address" until the
+  next `202`. A `408` is a network failure: retried, and a pause.
 - The shared pause (`Submitter::PAUSE`, datacache entry `minos_pause`: until, code): every
-  "retry" answer (any 429, 408, 5xx, no answer) holds every sending back until
+  "retry" answer (any 429, 408, 5xx, a 2xx but 202, no answer) holds every sending back until
   now + `ponow_za_s` as given (60 s without one); a longer pause already kept stays. While
   it lasts a new post is not sent in its author's request and the task sends nothing: a
   due row waits with `retry_at` = the pause's end, or gets the failure mode at once
@@ -298,7 +307,10 @@ through the plugin's own autoloader) and the mock gateway from
 `vendor/minos-moderation/client-php/mock-gateway`. `fixtures/forum-cli.php`, run from the
 staged root too, installs the plugin and posts through its hooks with the real cURL
 transport, so both sides run the distributable; the mock's worker delivers, including a
-censored post published over HTTP. CI runs everything on PHP 7.4 and 8.3.
+censored post published over HTTP. `fixtures/foreign-router.php` stands in for what may
+answer at the gateway's address without being the gateway — a `200`, `201` or `204` whose
+body names the post, a `408` — which the mock never answers (shared rule F5a). CI runs
+everything on PHP 7.4 and 8.3.
 
 `tests/Live/` is not part of that run: it needs a real MyBB 1.8.41 forum and a database,
 and runs only through `bin/verify-mybb-1841.sh` (see "Verified on a live forum").

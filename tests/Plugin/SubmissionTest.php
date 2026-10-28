@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Minos\MyBB\Tests\Plugin;
 
 use Minos\MyBB\Status;
+use Minos\MyBB\Submitter;
 use Minos\MyBB\Tests\Support\FakePostHandler;
 use Minos\MyBB\Tests\Support\Forum;
 use Minos\MyBB\Tests\Support\PluginTestCase;
@@ -448,18 +449,88 @@ final class SubmissionTest extends PluginTestCase
     }
 
     /**
-     * The audit's probe C6: a `200` from something in front of the gateway (a hosting page)
-     * accepted nothing — a configuration error, shown, not 20 minutes of silent waiting.
+     * The audit's probe C6 under shared rule F5a: a `2xx` other than `202` — a hosting page,
+     * a proxy, even a body whose `przyjete` names the post — accepted nothing. The post is
+     * retried after the backoff and the forum pauses its sending, as after a `503`; it is no
+     * configuration error, and the post stays held. The ACP names the code (never the body)
+     * until the next `202`, which accepts the post.
+     *
+     * @dataProvider foreignAnswers
+     * @param array{status:int,body:string} $answer
      */
-    public function testA200IsNoAcceptance(): void
+    public function testA2xxOtherThan202IsRetriedNotAConfigurationError(array $answer, string $code): void
     {
-        $this->forum->plugin(new RecordingTransport([['status' => 200, 'body' => '<html>portal hostingu</html>']]));
+        $this->forum->plugin(new RecordingTransport([$answer, RecordingTransport::accepted()]));
         $pid = $this->heldReply();
-        self::assertSame([Status::HELD, Status::REASON_CONFIG_ERROR, 'http_200'],
-            [$this->forum->row($pid)['status'], $this->forum->row($pid)['verdict'], $this->forum->row($pid)['error_code']]);
+
+        $row = $this->forum->row($pid);
+        self::assertSame([Status::RETRY, '', $code, 1, TIME_NOW + 60, 0],
+            [$row['status'], $row['verdict'], $row['error_code'], (int)$row['attempts'], (int)$row['retry_at'],
+                (int)$this->forum->post($pid)['visible']]);
+        self::assertSame(['until' => TIME_NOW + 60, 'kod' => $code], $this->forum->platform()->state(Submitter::PAUSE),
+            'the shared pause, as after a 503');
         $notice = (string)$this->forum->plugin->admin->notice();
-        self::assertStringContainsString('http_200', $notice);
+        self::assertStringContainsString($code, $notice);
         self::assertStringNotContainsString('portal', $notice, 'never the body');
+        self::assertNull($this->forum->platform()->lastLog(['config_error']), 'no configuration error');
+
+        $this->forum->plugin->task->run(TIME_NOW + 60);
+        self::assertSame(Status::PENDING, $this->forum->row($pid)['status'], 'the next 202 accepts it');
+        self::assertNull($this->forum->plugin->admin->notice(TIME_NOW + 60), 'and clears the notice');
+    }
+
+    /** @return array<string,array{0:array{status:int,body:string},1:string}> */
+    public function foreignAnswers(): array
+    {
+        return [
+            'a hosting page (200)'           => [['status' => 200, 'body' => '<html>portal hostingu</html>'], 'http_200'],
+            'a 200 naming the post'          => [RecordingTransport::accepted(null, 200), 'http_200'],
+            'a 201 naming the post'          => [RecordingTransport::accepted(null, 201), 'http_201'],
+            'a 204'                          => [['status' => 204, 'body' => ''], 'http_204'],
+        ];
+    }
+
+    /**
+     * A `202` accepts the items its `przyjete` names: one it leaves out was not taken, and is
+     * sent again after the backoff — not waited for as accepted. The acceptance ends the
+     * pause either way.
+     */
+    public function testA202AcceptsOnlyTheItemsItNames(): void
+    {
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(503, 'kolejka_niedostepna')]));
+        $pids = [$this->heldReply('Pierwszy.'), $this->heldReply('Drugi.'), $this->heldReply('Trzeci.')];
+        $this->forum->endPause();
+        foreach ($pids as $pid) {
+            $this->forum->platform()->updatePending($pid, ['retry_at' => TIME_NOW]);
+        }
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::accepted(['mybb:' . $pids[0], 'mybb:' . $pids[2]]),
+            RecordingTransport::accepted()]));
+
+        $this->forum->plugin->task->run(TIME_NOW);
+
+        self::assertCount(1, $this->forum->transport->requests, 'one batch of three');
+        self::assertSame([Status::PENDING, Status::RETRY, Status::PENDING], array_map(function (int $pid): string {
+            return $this->forum->row($pid)['status'];
+        }, $pids));
+        $left = $this->forum->row($pids[1]);
+        self::assertSame([Submitter::NOT_ACCEPTED, 0, TIME_NOW + 60],
+            [$left['error_code'], (int)$left['accepted_at'], (int)$left['retry_at']], 'sent again after the backoff');
+        self::assertNull($this->forum->platform()->state(Submitter::PAUSE), 'the 202 ended the pause');
+
+        $this->forum->plugin->task->run(TIME_NOW + 60);
+        self::assertSame(['mybb:' . $pids[1]], array_column($this->forum->transport->lastBody()['elementy'], 'id'));
+        self::assertSame(Status::PENDING, $this->forum->row($pids[1])['status']);
+    }
+
+    /**
+     * A `202` that names nothing accepted nothing: the post is sent again, never waited for.
+     */
+    public function testA202NamingNothingAcceptsNothing(): void
+    {
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::accepted([])]));
+        $pid = $this->heldReply();
+        self::assertSame([Status::RETRY, Submitter::NOT_ACCEPTED, 0],
+            [$this->forum->row($pid)['status'], $this->forum->row($pid)['error_code'], (int)$this->forum->row($pid)['accepted_at']]);
     }
 
     public function testA408IsRetriedAsANetworkFailure(): void

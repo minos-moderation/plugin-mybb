@@ -7,9 +7,11 @@
  * tree, and the real cURL transport talks to the mock gateway.
  *
  * Reads a JSON job on stdin — `install` (settings to store after installing and
- * activating), `user`, `posts` (`[thread, message, subject]`), `edits` (pid → new message,
- * written as MyBB's `update_post` writes it) and `task` (run the plugin's task once) — and
- * prints the pids as JSON.
+ * activating), `set` (settings to store), `user`, `posts` (`[thread, message, subject]`),
+ * `edits` (pid → new message, written as MyBB's `update_post` writes it), `task` (run the
+ * plugin's task once) and `task_at` (run it once as at that Unix time) — and prints the
+ * pids, the moment it ran and the plugin's sending state (`pause`, `foreign_answer`) as
+ * JSON.
  */
 
 define('IN_MYBB', 1);
@@ -24,6 +26,9 @@ if (isset($minosJob['install'])) {
     $minosPlugin->installer->install();
     $minosPlugin->installer->activate();
     $minosForum->set((array)$minosJob['install']);
+}
+if (isset($minosJob['set'])) {
+    $minosForum->set((array)$minosJob['set']);
 }
 if (isset($minosJob['user'])) {
     $minosForum->mybb->user = (array)$minosJob['user'];
@@ -40,4 +45,10 @@ if (!empty($minosJob['task'])) {
     require_once MYBB_ROOT . 'inc/tasks/minos.php';
     task_minos(['tid' => 1]);
 }
-echo json_encode(['pids' => $minosPids, 'plugin' => (new ReflectionClass(\Minos\MyBB\Plugin::class))->getFileName()]);
+if (isset($minosJob['task_at'])) {
+    \Minos\MyBB\Plugin::instance()->task->run((int)$minosJob['task_at']);
+}
+$minosPlatform = \Minos\MyBB\Plugin::instance()->platform;
+echo json_encode(['pids' => $minosPids, 'plugin' => (new ReflectionClass(\Minos\MyBB\Plugin::class))->getFileName(),
+    'now' => TIME_NOW, 'state' => ['pause' => $minosPlatform->state(\Minos\MyBB\Submitter::PAUSE),
+        'foreign_answer' => $minosPlatform->state(\Minos\MyBB\Submitter::FOREIGN)]]);

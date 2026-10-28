@@ -165,11 +165,11 @@ final class FailureIsolationTest extends PluginTestCase
         }
         $this->forum->endPause();
         $calls = 0;
-        $this->forum->plugin(function () use (&$calls): array {
+        $this->forum->plugin(function (string $url, array $headers, string $body) use (&$calls): array {
             if (++$calls === 1) {
                 throw new \RuntimeException(\Moderation::SECRET_TEXT);
             }
-            return RecordingTransport::accepted();
+            return RecordingTransport::answerTo($body);
         });
 
         task_minos(['tid' => 1]);

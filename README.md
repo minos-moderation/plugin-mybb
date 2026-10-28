@@ -218,9 +218,7 @@ werdyktu nie ma:
 - brama odmówiła przyjęcia postu do chwili, która wypada po końcu jego czasu oczekiwania
   (np. wyczerpany dobowy limit klucza albo przeciążenie) — tryb awaryjny od razu;
 - brama odrzuciła wysyłkę z powodu błędu konfiguracji (np. zły klucz, profil spoza listy
-  klucza, brak zapisanego webhooka) albo odpowiedziała czymś innym niż przyjęciem `202`
-  (np. stroną dostawcy hostingu z kodem `200`) — kod błędu pojawia się w panelu
-  administratora;
+  klucza, brak zapisanego webhooka) — kod błędu pojawia się w panelu administratora;
 - wtyczka jest włączona, ale jej ustawienia są niekompletne (brak klucza albo sekretu,
   adres bramy bez `https://`, nieznany profil) — nic nie jest wysyłane;
 - post nie ma tekstu do oceny — także nowy wątek albo odpowiedź z własnym tematem, jeśli
@@ -247,12 +245,18 @@ moderator zdecydował o poście albo post został edytowany, decyzja człowieka 
 
 Które odpowiedzi bramy są ponawiane: `429` (limity klucza, wspólny limit bramy, pełna
 kolejka), `503` i każde inne `5xx`, `408` oraz brak odpowiedzi (błąd połączenia, przekroczony
-czas). Przyjęciem jest wyłącznie `202`. Każda inna odpowiedź — pozostałe `4xx`,
-przekierowanie, `2xx` inne niż `202` — to błąd konfiguracji: tryb awaryjny od razu i
-komunikat z kodem w panelu administratora.
+czas), a także każde `2xx` inne niż `202` — nawet z treścią podobną do przyjęcia: pod adresem
+bramy odpowiada wtedy coś innego niż brama (np. strona dostawcy hostingu albo serwer
+pośredniczący), więc post nie został przyjęty; panel administratora pokazuje wtedy kod tej
+odpowiedzi i prosi o sprawdzenie adresu bramy, aż do pierwszej przyjętej wysyłki. Przyjęciem
+jest wyłącznie `202`, i to tylko dla postów, które brama wymieniła w odpowiedzi (`przyjete`);
+post, którego tam nie ma, wtyczka wysyła ponownie. Każda inna odpowiedź — pozostałe `4xx`
+i przekierowanie — to błąd konfiguracji: tryb awaryjny od razu i komunikat z kodem w panelu
+administratora.
 
-Gdy brama jest chwilowo przeciążona albo niedostępna (lub nie ma połączenia albo
-połączenie przekroczyło czas — `408`), post czeka: zadanie ponawia wysyłkę po czasie
+Gdy brama jest chwilowo przeciążona albo niedostępna (lub nie ma połączenia, połączenie
+przekroczyło czas — `408` — albo pod jej adresem odpowiada coś innego), post czeka: zadanie
+ponawia wysyłkę po czasie
 wskazanym przez bramę albo po coraz dłuższej przerwie (od 1 minuty do 1 godziny). Jeśli do końca czasu oczekiwania się nie uda — tryb awaryjny.
 Taka odmowa wstrzymuje wszystkie wysyłki forum do chwili wskazanej przez bramę (bez
 wskazania — na minutę): w tym czasie wtyczka nie wysyła nowych postów (autor nie czeka na
@@ -277,8 +281,10 @@ numer postu — nigdy treść błędu.
 
 - **Komunikat na każdej stronie panelu**, gdy wtyczka jest włączona, ale nie może działać
   (czego brakuje), gdy brama odrzuciła ostatnią wysyłkę z powodu błędu konfiguracji
-  (kod błędu i czas) albo gdy brama nie przyjmuje postów do określonej godziny (wyczerpany
-  dobowy limit klucza, przeciążenie — kod i godzina). Znika po pierwszej udanej wysyłce.
+  (kod błędu i czas), gdy pod adresem bramy odpowiedziało coś innego niż brama (`2xx` inne
+  niż `202` — kod i czas) albo gdy brama nie przyjmuje postów do określonej godziny
+  (wyczerpany dobowy limit klucza, przeciążenie — kod i godzina). Znika po pierwszej udanej
+  wysyłce.
   Także gdy webhook odrzuca doręczenia z nieprawidłowym podpisem: ile ich było od
   ostatniego przyjętego doręczenia, kiedy przyszło ostatnie i na co wskazuje powód — zły
   sekret webhooka, zegar serwera przesunięty o ponad 5 minut albo nagłówek podpisu, który

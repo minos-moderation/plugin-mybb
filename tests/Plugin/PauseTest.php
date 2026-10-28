@@ -11,7 +11,8 @@ use Minos\MyBB\Tests\Support\PluginTestCase;
 use Minos\MyBB\Tests\Support\RecordingTransport;
 
 /**
- * The shared pause: after the gateway asks to retry (a 429 of any kind, a 503, no answer),
+ * The shared pause: after the gateway asks to retry (a 429 of any kind, a 503, a 408, no
+ * answer, a 2xx other than 202),
  * nothing is sent before the moment it named — neither in an author's request nor by the
  * task — and a task run stops at the first batch the gateway refuses.
  */
@@ -84,6 +85,8 @@ final class PauseTest extends PluginTestCase
             'a 502 from a proxy'      => [['status' => 502, 'body' => '<html>'], 60],
             'no answer'               => [['status' => 0, 'body' => ''], 60],
             'a 408'                   => [['status' => 408, 'body' => ''], 60],
+            'a 200 that is no 202'    => [RecordingTransport::accepted(null, 200), 60],
+            'a 204'                   => [['status' => 204, 'body' => ''], 60],
         ];
     }
 
