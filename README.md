@@ -133,7 +133,7 @@ tylko wtedy, gdy jest on **dokładnie** tym, co wysłała, z niektórymi znakami
 przez `█`, a post jest zwykłym tekstem. **Post z formatowaniem (MyCode, cytat, link)
 zostaje w kolejce, a zamaskowany tekst widać w dzienniku** (Minos — dziennik, kolumna
 „Tekst zamaskowany przez bramę”). Oryginał opublikowanego postu zostaje w tabeli wtyczki
-(przez 90 dni). Post ocenzurowany zawsze zostaje w kolejce, gdy: był dłuższy niż 3000
+(przez 30 dni). Post ocenzurowany zawsze zostaje w kolejce, gdy: był dłuższy niż 3000
 znaków, brama zamaskowała coś w tytule wątku, zamaskowany tekst różni się od wysłanego
 czymś innym niż znaki `█` (inna długość, inne litery), brama nie przysłała zamaskowanego
 tekstu albo nie udało się zapisać zamaskowanej treści.
@@ -204,6 +204,10 @@ numer postu — nigdy treść błędu.
   ocenzurowanym zatrzymanym w kolejce — tekst zamaskowany przez bramę) oraz dziennik
   zdarzeń. Dziennik zawiera wyłącznie kody i
   numery postów — nigdy treść, klucz ani sekret. Wpisy starsze niż 30 dni są usuwane.
+- **Jak długo wtyczka przechowuje dane postu**: wiersz rozstrzygniętego postu — z werdyktem,
+  kategoriami, oryginałem opublikowanego postu ocenzurowanego i zamaskowanym tekstem
+  postu zatrzymanego w kolejce — jest usuwany 30 dni po rozstrzygnięciu. Sam wysłany
+  tekst nie jest przechowywany (tylko jego skrót SHA-256).
 
 ## Ograniczenia
 

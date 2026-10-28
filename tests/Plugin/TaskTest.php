@@ -213,19 +213,28 @@ final class TaskTest extends PluginTestCase
         self::assertSame(Status::SUPERSEDED, $this->forum->row($pid)['status']);
     }
 
-    public function testOldLogEntriesAndDecisionsAreForgotten(): void
+    public function testOldLogEntriesAndDecisionsAreForgottenAfterThirtyDays(): void
     {
         $platform = $this->forum->platform();
         $platform->log('retry', 'kolejka_pelna', 0, TIME_NOW - 31 * 86400);
         $platform->log('retry', 'kolejka_pelna', 0, TIME_NOW - 86400);
-        $old = $this->heldReply();
-        $this->forum->deliver(self::payload($old));
-        $platform->updatePending($old, ['decided_at' => TIME_NOW - 91 * 86400]);
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $old = $this->heldReply('abc zły');
+        $this->forum->deliver(self::payload($old, ['kwalifikacja' => 'ocenzurowane', 'ocenzurowany' => 'abc ███']));
+        self::assertSame('abc zły', $this->forum->row($old)['original_text'], 'an original the row keeps');
+        $recent = $this->heldReply();
+        $this->forum->deliver(self::payload($recent));
+        $waiting = $this->heldReply();
+        $platform->updatePending($old, ['decided_at' => TIME_NOW - 31 * 86400]);
+        $platform->updatePending($recent, ['decided_at' => TIME_NOW - 29 * 86400]);
+        $platform->updatePending($waiting, ['submitted_at' => TIME_NOW - 60, 'accepted_at' => TIME_NOW - 60]);
 
         task_minos(['tid' => 1]);
 
         self::assertCount(1, $this->logEntries());
-        self::assertNull($this->forum->row($old));
+        self::assertNull($this->forum->row($old), 'a decision older than 30 days is forgotten, its original with it');
+        self::assertNotNull($this->forum->row($recent));
+        self::assertNotNull($this->forum->row($waiting), 'an undecided row is never forgotten');
     }
 
     public function testATimeoutBelowTwentyMinutesIsRaisedToTwenty(): void

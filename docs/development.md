@@ -169,7 +169,9 @@ applying for more than 5 min ─► back to claimed_from (the task)
   written keeps the post held.
 
 `PREFIX_minos_log` holds events with a code and a post id — never content, a key or a
-secret. Log entries are kept 30 days, decided rows 90 days.
+secret. Log entries are kept 30 days; decided rows — with the verdict, the original text
+of a censored post and the mask of a held one — 30 days after their decision (shared rule
+D9.11, `Task::DECIDED_RETENTION_S`).
 
 ## Tests
 

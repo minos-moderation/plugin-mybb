@@ -15,8 +15,9 @@ namespace Minos\MyBB;
  *    an answer after the TTL plus a few minutes as `nieocenione`".
  * 2. Rows whose retry is due are sent again — only while the plugin is on and configured;
  *    otherwise they wait for step 1.
- * 3. Old log entries (30 days) and rows decided long ago (90 days, with the original text
- *    of censored posts) are forgotten.
+ * 3. Old log entries (30 days) and rows decided long ago (30 days, with the original text
+ *    of a censored post, the mask of a held one and the verdict) are forgotten — the
+ *    shared retention rule D9.11.
  *
  * While the plugin is switched off ("Włączona = nie") the run does none of steps 0–2: no
  * claim is given back, no failure mode applied, nothing sent — switching it off releases
@@ -41,8 +42,8 @@ final class Task
     /** How long log entries are kept. */
     public const LOG_RETENTION_S = 30 * 86400;
 
-    /** How long decided rows are kept. */
-    public const DECIDED_RETENTION_S = 90 * 86400;
+    /** How long decided rows are kept: the original, the mask and the verdict (rule D9.11). */
+    public const DECIDED_RETENTION_S = 30 * 86400;
 
     /** The state key ({@see Platform::state}) set while the plugin is switched off. */
     public const SWITCHED_OFF = 'switched_off';
