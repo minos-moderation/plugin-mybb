@@ -49,6 +49,12 @@ final class Status
     /** Reasons recorded in `verdict` when no verdict came (besides `nieocenione`). */
     public const REASON_TIMEOUT = 'timeout';
     public const REASON_CONFIG_ERROR = 'config_error';
+
+    /**
+     * Recorded in `verdict` when the plugin is switched on but its settings cannot submit
+     * anything (no key or secret, an unusable gateway address, an unknown profile).
+     */
+    public const REASON_NOT_CONFIGURED = 'not_configured';
     public const REASON_NO_TEXT = 'no_text';
 
     /**

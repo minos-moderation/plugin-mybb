@@ -96,6 +96,7 @@ final class Installer
         }
         $this->platform->removeSettings();
         $this->platform->removeTask();
+        $this->platform->removeState();
         if ($this->platform->input('no') === null) {
             $this->platform->dropTables();
         }
@@ -115,10 +116,17 @@ final class Installer
     /**
      * `minos_deactivate()`: switches the task off, and disables the key and secret fields —
      * without the plugin's hooks a typed value would be dropped silently on save, so the
-     * page says so instead. Activation restores them.
+     * page says so instead. Activation restores them. It also notes that the plugin was off,
+     * so the task's first run after activation sends again what was waiting
+     * ({@see Task::run}).
+     *
+     * @param int|null $now Unix seconds (now by default).
      */
-    public function deactivate(): void
+    public function deactivate(?int $now = null): void
     {
+        if (!isset($this->platform->state()[Task::SWITCHED_OFF])) {
+            $this->platform->setState(Task::SWITCHED_OFF, $now ?? time());
+        }
         $this->platform->setTaskEnabled(false);
         foreach (Settings::SECRET_NAMES as $name) {
             $this->platform->setOptionscode($name, self::maskedInput($name, $this->platform->lang('minos_secret_inactive')));
@@ -153,7 +161,9 @@ final class Installer
             return implode("\n", $lines);
         };
         $definitions = [
-            Settings::ENABLED         => ['enabled', 'onoff', '1'],
+            // A fresh install starts switched off: on before a key and secret are stored,
+            // every new post would get the failure mode.
+            Settings::ENABLED         => ['enabled', 'onoff', '0'],
             Settings::GATEWAY_URL     => ['gateway_url', 'text', Settings::DEFAULT_GATEWAY_URL],
             Settings::API_KEY         => ['api_key', self::maskedInput(Settings::API_KEY), ''],
             Settings::WEBHOOK_SECRET  => ['webhook_secret', self::maskedInput(Settings::WEBHOOK_SECRET), ''],

@@ -149,6 +149,56 @@ final class TaskTest extends PluginTestCase
         self::assertSame([], $this->logEntries());
     }
 
+    /**
+     * Switching the plugin on again sends what was waiting when it was switched off, with a
+     * fresh timeout — instead of the failure mode for the whole backlog at once (under
+     * fail-open: publishing every one of them unassessed).
+     */
+    public function testSwitchingBackOnSendsAgainWhatWasWaitingWithAFreshTimeout(): void
+    {
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(503, 'kolejka_niedostepna'), RecordingTransport::accepted()]));
+        $retry = $this->heldReply('Czekał na ponowną wysyłkę.');
+        $pending = $this->heldReply('Czekał na werdykt.');
+        self::assertSame([Status::RETRY, Status::PENDING], [$this->forum->row($retry)['status'], $this->forum->row($pending)['status']]);
+        $this->forum->set(['minos_enabled' => '0']);
+        task_minos(['tid' => 1]);
+        // Three hours pass while it is off.
+        $this->age($pending, 3 * 3600);
+        $this->forum->platform()->updatePending($retry, ['submitted_at' => TIME_NOW - 3 * 3600, 'retry_at' => TIME_NOW - 3 * 3600]);
+        $this->forum->set(['minos_enabled' => '1']);
+        $this->forum->plugin(new RecordingTransport());
+
+        task_minos(['tid' => 1]);
+        task_minos(['tid' => 1]);
+
+        self::assertCount(1, $this->forum->transport->requests, 'sent again once, in one batch');
+        self::assertSame(['mybb:' . $retry, 'mybb:' . $pending], array_column($this->forum->transport->lastBody()['elementy'], 'id'));
+        foreach ([$retry, $pending] as $pid) {
+            $row = $this->forum->row($pid);
+            self::assertSame([0, Status::PENDING, TIME_NOW, TIME_NOW],
+                [(int)$this->forum->post($pid)['visible'], $row['status'], (int)$row['submitted_at'], (int)$row['accepted_at']],
+                'waiting again, with a fresh timeout');
+        }
+        self::assertContains('resumed', array_column($this->logEntries(), 'event'));
+        self::assertSame([], self::moderation(), 'nothing published unassessed');
+    }
+
+    public function testActivationAfterADeactivationSendsAgainWhatWasWaiting(): void
+    {
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $pid = $this->heldReply('Czekał podczas dezaktywacji.');
+        minos_deactivate();
+        $this->age($pid, 3 * 3600);
+        minos_activate();
+        $this->forum->plugin(new RecordingTransport());
+
+        task_minos(['tid' => 1]);
+
+        self::assertSame(['mybb:' . $pid], array_column($this->forum->transport->lastBody()['elementy'] ?? [], 'id'));
+        self::assertSame([0, Status::PENDING], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
+    }
+
     public function testAResendOfAPostAHumanDecidedIsDropped(): void
     {
         $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(503, 'kolejka_niedostepna')]));

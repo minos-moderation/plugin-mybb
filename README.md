@@ -54,7 +54,8 @@ Minos.
    Zainstaluj i aktywuj**. Instalacja tworzy grupę ustawień, dwie tabele
    (`<prefiks>minos_pending`, `<prefiks>minos_log`) i zadanie.
 4. **Konfiguracja → Ustawienia → Minos — moderacja postów**: wpisz klucz API i sekret
-   webhooka, wybierz profil oceny i tryb awaryjny.
+   webhooka, wybierz profil oceny i tryb awaryjny, a na końcu ustaw **Włączona = tak**.
+   Świeża instalacja startuje wyłączona.
 5. Przekaż operatorowi bramy adres webhooka do zapisania przy kluczu:
    `https://<adres-forum>/minos-webhook.php`. Wtyczka pokazuje go w opisie wtyczki,
    w opisie grupy ustawień i przy polu sekretu.
@@ -65,7 +66,7 @@ Minos.
 
 | Ustawienie | Znaczenie | Domyślnie |
 |---|---|---|
-| Włączona | Wyłączona wtyczka nic nie robi: nie zatrzymuje nowych postów, nie stosuje werdyktów ani trybu awaryjnego. Posty już zatrzymane zostają w kolejce moderacji dla ludzi, a werdykty doręczone w tym czasie przepadają. | tak |
+| Włączona | Wyłączona wtyczka nic nie robi: nie zatrzymuje nowych postów, nie stosuje werdyktów ani trybu awaryjnego. Posty już zatrzymane zostają w kolejce moderacji dla ludzi, a werdykty doręczone w tym czasie przepadają. | nie |
 | Adres bramy | Adres bramy Wergiliusza. Musi zaczynać się od `https://` (`http://` tylko dla atrapy bramy na tym samym komputerze). | `https://gateway.wergiliusz.app` |
 | Klucz API | Klucz B2B `wgb2b_…`. Po zapisaniu panel pokazuje tylko jego początek. Puste pole przy zapisie zostawia zapisany klucz; pole „Usuń zapisaną wartość” go kasuje. | — |
 | Sekret webhooka | Sekret do sprawdzania podpisu werdyktów. Zapisywany i pokazywany jak klucz. | — |
@@ -77,8 +78,9 @@ Minos.
 | Fora | Fora, w których wtyczka moderuje nowe posty. | wszystkie |
 | Pomijaj moderatorów | Posty moderatorów, supermoderatorów i administratorów trafiają na forum bez oceny. | tak |
 
-Gdy wtyczka jest włączona, ale czegoś brakuje (klucza, sekretu, poprawnego adresu bramy),
-nie zatrzymuje nowych postów, a każda strona panelu administratora mówi, czego brakuje.
+Gdy wtyczka jest włączona, ale czegoś brakuje (klucza, sekretu, poprawnego adresu bramy,
+znanego profilu), nie wysyła postów do oceny: każdy nowy post od razu dostaje tryb
+awaryjny, a każda strona panelu administratora mówi, czego brakuje.
 
 **Klucz i sekret zapisuj przy aktywnej wtyczce.** Zapisuje je kod wtyczki, więc przy
 dezaktywowanej wtyczce pola klucza i sekretu są wyłączone (z informacją, dlaczego) —
@@ -144,6 +146,8 @@ werdyktu nie ma:
 - werdykt nie nadszedł w czasie oczekiwania;
 - brama odrzuciła wysyłkę z powodu błędu konfiguracji (np. zły klucz, profil spoza listy
   klucza, brak zapisanego webhooka) — kod błędu pojawia się w panelu administratora;
+- wtyczka jest włączona, ale jej ustawienia są niekompletne (brak klucza albo sekretu,
+  adres bramy bez `https://`, nieznany profil) — nic nie jest wysyłane;
 - post nie ma tekstu do oceny (np. sam załącznik);
 - nie udało się odczytać tekstu postu (np. treść tak zbudowana, że przetwarzanie wyrażeń
   regularnych przerywa się z błędem) — wtyczka nie wysyła wtedy niczego, nawet samego
@@ -191,7 +195,10 @@ zadanie ponawia wysyłkę po czasie wskazanym przez bramę albo po coraz dłużs
 - Gdy wtyczka jest dezaktywowana albo wyłączona („Włączona = nie”), webhook odpowiada
   `404` i nie stosuje werdyktów, a zadanie nie stosuje trybu awaryjnego ani nie ponawia
   wysyłki; posty już zatrzymane zostają w kolejce moderacji dla ludzi. Brama ponawia
-  doręczenie werdyktu najwyżej przez kilkanaście minut, potem go porzuca.
+  doręczenie werdyktu najwyżej przez kilkanaście minut, potem go porzuca. Po ponownym
+  włączeniu (albo aktywacji) pierwszy przebieg zadania wysyła jeszcze raz posty, które
+  wciąż czekały na werdykt, z nowym czasem oczekiwania — zamiast hurtem stosować do nich
+  tryb awaryjny.
 
 ## Odinstalowanie
 

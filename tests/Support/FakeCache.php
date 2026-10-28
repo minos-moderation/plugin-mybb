@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace Minos\MyBB\Tests\Support;
 
 /**
- * MyBB's `$cache`: `read`, `update` and `update_tasks`. The plugin is active by default.
+ * MyBB's `$cache` (datacache): `read`, `update`, `delete` and `update_tasks`. The plugin is
+ * active by default.
  */
 final class FakeCache
 {
@@ -23,6 +24,11 @@ final class FakeCache
     public function update($name, $contents)
     {
         $this->data[$name] = $contents;
+    }
+
+    public function delete($name, $greedy = false)
+    {
+        unset($this->data[$name]);
     }
 
     public function update_tasks()

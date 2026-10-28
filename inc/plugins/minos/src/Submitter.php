@@ -22,7 +22,9 @@ use SplObjectStorage;
  * A post the plugin does not touch: a draft, an edit, a post in a forum it does not
  * cover, a moderator's post (by setting), a post MyBB holds anyway (the forum moderates
  * new posts, or the user is under moderation — humans asked for those), a post written on
- * someone else's behalf, and every post while the plugin is off or misconfigured.
+ * someone else's behalf, and every post while the plugin is switched off. Switched on but
+ * unable to submit (no key or secret, an unusable gateway address), it holds the post and
+ * applies the failure mode at once, without sending.
  *
  * What an item carries: `id` `mybb:<pid>`, `tekst` ({@see Text::forPost}: what readers of the
  * post see), `profil`, and `meta` with `links`, `link_domains` and — for a registered author,
@@ -85,7 +87,7 @@ final class Submitter
             return;
         }
         $settings = new Settings($this->platform->settings());
-        if (!$settings->active()) {
+        if (!$settings->enabled()) {
             return;
         }
         $uid = (int)($data['uid'] ?? 0);
@@ -155,6 +157,11 @@ final class Submitter
         $row = $this->platform->pending($pid) ?? $row;
 
         $settings = new Settings($this->platform->settings());
+        if (!$settings->active()) {
+            // Switched on, but nothing can be sent: the failure mode, at once.
+            $this->decideWithout($row, Status::REASON_NOT_CONFIGURED, $settings, $now);
+            return;
+        }
         if ($signals === null) {
             $this->unreadable($row, $settings, $now);
             return;

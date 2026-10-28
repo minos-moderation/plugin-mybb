@@ -40,7 +40,7 @@ final class InstallerTest extends TestCase
         self::assertTrue($this->forum->db->table_exists('minos_pending'));
         self::assertTrue($this->forum->db->table_exists('minos_log'));
         self::assertSame([
-            'minos_enabled' => '1', 'minos_gateway_url' => 'https://gateway.wergiliusz.app', 'minos_api_key' => '',
+            'minos_enabled' => '0', 'minos_gateway_url' => 'https://gateway.wergiliusz.app', 'minos_api_key' => '',
             'minos_webhook_secret' => '', 'minos_profile' => 'forum_adult', 'minos_failure_mode' => 'fail-closed',
             'minos_timeout' => '20', 'minos_censored' => 'publish', 'minos_blocked' => 'queue', 'minos_forums' => '-1',
             'minos_skip_moderators' => '1',
@@ -52,6 +52,20 @@ final class InstallerTest extends TestCase
         $task = $this->task();
         self::assertSame(['minos', '0'], [$task['file'], (string)$task['enabled']]);
         self::assertCount(12, explode(',', $task['minute']), 'every five minutes');
+    }
+
+    public function testAFreshInstallStartsSwitchedOffAndHoldsNothing(): void
+    {
+        minos_install();
+        minos_activate();
+        $this->forum->mybb->user = ['uid' => 7, 'postnum' => 3, 'moderateposts' => 0];
+
+        $handler = $this->forum->write(false, 'Post na świeżo zainstalowanym forum.');
+
+        self::assertSame(1, (int)$handler->return_values['visible'], 'switched off until the administrator switches it on');
+        self::assertSame([], $this->forum->transport->requests);
+        self::assertNull($this->forum->row((int)$handler->return_values['pid']));
+        self::assertNull($this->forum->plugin->admin->notice(), 'switched off is no problem to report');
     }
 
     public function testActivationSwitchesTheTaskOnAndKeepsStoredValues(): void

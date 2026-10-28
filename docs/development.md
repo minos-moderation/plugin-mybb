@@ -111,6 +111,13 @@ applying for more than 5 min ─► back to claimed_from (the task)
   answers `404` before the signature, the task gives back no claim, applies no failure
   mode and sends nothing (it only forgets old data), and no new post is held. What was
   held stays in MyBB's queue. No usable secret: `401`.
+- Switched off, the task notes it in the plugin's datacache entry (`switched_off`), and so
+  does a deactivation. The first run after the plugin is on again moves every
+  `pending`/`retry` row back to `retry` with `submitted_at = retry_at = now` (a fresh
+  timeout; `Platform::rearmWaiting`) and sends it in the same run, under the same id.
+- Switched on but unable to submit (`Settings::problems()`: no key or secret, an unusable
+  gateway address, an unknown profile), a new post is still held, and gets the failure
+  mode at once as `not_configured`, unsent. A fresh install starts switched off.
 - A row starts as `retry` with `retry_at` a minute ahead, so a request that dies half-way
   is sent again by the task and never mistaken for an accepted one.
 - `Platform::claimPending` moves a row from `pending`/`retry` (or, for a late verdict, from
@@ -270,6 +277,7 @@ reading the code, not by running a live forum:
 | tasks: the `tasks` columns, `task_<file>($task)`, `fetch_next_run`, `add_task_log`, `$cache->update_tasks()`, a comma list of minutes | `inc/functions_task.php`, `admin/modules/tools/tasks.php`, `install/resources/mysql_db_tables.php` | `Platform`, `inc/tasks/minos.php` |
 | `$lang->load($section, true, true)` with the `english` fallback, `{1}` placeholders | `inc/class_language.php` | `Platform::lang` |
 | `$cache->read('plugins')['active']` | `admin/modules/config/plugins.php` | `Platform::isPluginActive` |
+| `$cache->read($name)`, `update($name, $contents)` (`replace_query` on `datacache`, serialized), `delete($name)`; every `datacache` row is loaded with the page | `inc/class_datacache.php` | `Platform::state`, `setState`, `removeState` |
 | `$db` helpers: `simple_select`, `query`, `fetch_array`, `fetch_field`, `insert_query`, `update_query`, `delete_query`, `escape_string`, `affected_rows`, `table_exists`, `drop_table`, `write_query`, `build_create_table_collation`, `type` | `inc/db_mysqli.php`, `inc/db_pgsql.php`, `inc/db_sqlite.php`, `inc/AbstractPdoDbDriver.php`, `inc/init.php` | `Platform` |
 | the minimal bootstrap `IN_MYBB`, `NO_ONLINE`, `THIS_SCRIPT`, `inc/init.php` (database, settings, cache, plugins; no session) | `inc/init.php`, `task.php` | `minos-webhook.php` |
 

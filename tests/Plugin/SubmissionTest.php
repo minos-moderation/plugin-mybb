@@ -161,10 +161,6 @@ final class SubmissionTest extends PluginTestCase
                 $forum->set(['minos_enabled' => '0']);
                 return [];
             }, 1],
-            'no key' => [static function (Forum $forum): array {
-                $forum->set(['minos_api_key' => '']);
-                return [];
-            }, 1],
             'another forum' => [static function (Forum $forum): array {
                 $forum->set(['minos_forums' => '5,6']);
                 return [];
@@ -184,6 +180,42 @@ final class SubmissionTest extends PluginTestCase
             'written on someone else\'s behalf' => [static function (): array {
                 return ['uid' => 99];
             }, 1],
+        ];
+    }
+
+    /**
+     * Switched on but unable to submit: every new post gets the failure mode at once, with
+     * nothing sent (the audit's probe C4: a key with an inner space used to switch
+     * holding off, publishing every post unassessed even under fail-closed).
+     *
+     * @dataProvider unusableSettings
+     * @param array<string,string> $settings
+     */
+    public function testSwitchedOnButUnableToSubmitEveryNewPostGetsTheFailureMode(array $settings): void
+    {
+        $this->forum->set($settings);
+        $held = $this->heldReply('Post przy niekompletnych ustawieniach.');
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $published = (int)$this->forum->write(true, 'Wątek przy niekompletnych ustawieniach.')->return_values['pid'];
+
+        self::assertSame([], $this->forum->transport->requests, 'nothing can be sent');
+        self::assertSame([0, Status::HELD, Status::REASON_NOT_CONFIGURED],
+            [(int)$this->forum->post($held)['visible'], $this->forum->row($held)['status'], $this->forum->row($held)['verdict']]);
+        self::assertSame([1, Status::PUBLISHED, Status::REASON_NOT_CONFIGURED],
+            [(int)$this->forum->post($published)['visible'], $this->forum->row($published)['status'], $this->forum->row($published)['verdict']]);
+        self::assertNotNull($this->forum->plugin->admin->notice(), 'every ACP page says why');
+    }
+
+    /** @return array<string,array{0:array<string,string>}> */
+    public function unusableSettings(): array
+    {
+        return [
+            'no key'                     => [['minos_api_key' => '']],
+            'a key with an inner space'  => [['minos_api_key' => 'wgb2b_test_forum key_000000000000']],
+            'a key without its prefix'   => [['minos_api_key' => 'test_forum_key_000000000000']],
+            'no secret'                  => [['minos_webhook_secret' => '']],
+            'a gateway address not HTTPS' => [['minos_gateway_url' => 'http://gateway.wergiliusz.app']],
+            'an unknown profile'         => [['minos_profile' => 'demo_all']],
         ];
     }
 

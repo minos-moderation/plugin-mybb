@@ -9,10 +9,10 @@ namespace Minos\MyBB;
  *
  * Every value that decides whether a post is published or held is read FAIL-CLOSED: an
  * unknown failure mode means `fail-closed`, an unknown `ocenzurowane` handling means
- * "keep in the queue". A setting that makes the plugin unable to work at all (no key, no
- * secret, a gateway address that is not HTTPS) switches holding off instead — the forum
- * then behaves as if the plugin were not there, and the ACP says why ({@see problems}).
- * No PHP 8 syntax.
+ * "keep in the queue". A plugin that is switched on but cannot submit (no key or secret,
+ * a gateway address that is not HTTPS, an unknown profile — {@see problems}) does not stop
+ * holding: every new post gets the failure mode, nothing is sent, and the ACP says why.
+ * A fresh install starts switched off. No PHP 8 syntax.
  */
 final class Settings
 {
@@ -80,7 +80,9 @@ final class Settings
     }
 
     /**
-     * Whether new posts are held and sent: switched on and nothing in {@see problems}.
+     * Whether new posts can be sent: switched on and nothing in {@see problems}. (A plugin
+     * that is switched on holds new posts either way; without this, they get the failure
+     * mode.)
      *
      * @return bool True when the plugin can do its work.
      */

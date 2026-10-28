@@ -21,7 +21,9 @@ namespace Minos\MyBB;
  * While the plugin is switched off ("Włączona = nie") the run does none of steps 0–2: no
  * claim is given back, no failure mode applied, nothing sent — switching it off releases
  * nothing already held, and those posts stay in MyBB's queue for humans. Step 3 still runs:
- * forgetting old data is no moderation.
+ * forgetting old data is no moderation. The run notes that the plugin was off (so does a
+ * deactivation, {@see Installer::deactivate}); the first run after it is switched on again
+ * sends what was waiting again, with a fresh timeout, before step 1 could fail it.
  *
  * Each run handles at most {@see LIMIT} rows per step; the rest wait five minutes.
  * No PHP 8 syntax.
@@ -39,6 +41,9 @@ final class Task
 
     /** How long decided rows are kept. */
     public const DECIDED_RETENTION_S = 90 * 86400;
+
+    /** The state key ({@see Platform::state}) set while the plugin is switched off. */
+    public const SWITCHED_OFF = 'switched_off';
 
     /** @var Platform */
     private $platform;
@@ -66,10 +71,20 @@ final class Task
     {
         $settings = new Settings($this->platform->settings());
         if (!$settings->enabled()) {
+            if (!isset($this->platform->state()[self::SWITCHED_OFF])) {
+                $this->platform->setState(self::SWITCHED_OFF, $now);
+            }
             $this->forget($now);
             return ['timeouts' => 0, 'resent' => 0];
         }
         $this->platform->releaseStaleClaims($now - self::CLAIM_TTL_S);
+        if (isset($this->platform->state()[self::SWITCHED_OFF])) {
+            // On again: what waited while the plugin was off is sent again, with a fresh
+            // timeout, instead of getting the failure mode all at once.
+            $this->platform->rearmWaiting($now);
+            $this->platform->setState(self::SWITCHED_OFF, null);
+            $this->platform->log('resumed', '', 0, $now);
+        }
 
         $timeouts = 0;
         foreach ($this->platform->expiredPending($now - $settings->timeoutS(), self::LIMIT) as $row) {

@@ -29,6 +29,9 @@ final class Platform
     /** The settings group's name. */
     public const SETTING_GROUP = 'minos';
 
+    /** The plugin's entry in MyBB's datacache (`$cache`): a small array of state. */
+    public const STATE_CACHE = 'minos';
+
     /** @var object MyBB's `$mybb`. */
     private $mybb;
 
@@ -114,6 +117,45 @@ final class Platform
     {
         $plugins = $this->cache->read('plugins');
         return is_array($plugins) && isset($plugins['active'][self::CODENAME]);
+    }
+
+    /**
+     * The plugin's state kept between requests (MyBB's datacache, loaded with every page).
+     *
+     * @return array<string,mixed> Empty when nothing is kept.
+     */
+    public function state(): array
+    {
+        $state = $this->cache->read(self::STATE_CACHE);
+        return is_array($state) ? $state : [];
+    }
+
+    /**
+     * Keeps one value of the plugin's state, or forgets it.
+     *
+     * @param string $key   The value's name.
+     * @param mixed  $value The value; null forgets it.
+     */
+    public function setState(string $key, $value): void
+    {
+        $state = $this->state();
+        if ($value === null) {
+            if (!array_key_exists($key, $state)) {
+                return;
+            }
+            unset($state[$key]);
+        } else {
+            $state[$key] = $value;
+        }
+        $this->cache->update(self::STATE_CACHE, $state);
+    }
+
+    /**
+     * Removes the plugin's datacache entry (uninstall).
+     */
+    public function removeState(): void
+    {
+        $this->cache->delete(self::STATE_CACHE);
     }
 
     /**
@@ -443,6 +485,22 @@ final class Platform
             $where .= " AND status='" . $this->db->escape_string($onlyIf) . "'";
         }
         $this->db->update_query(self::PENDING_TABLE, $this->escaped($fields), $where);
+    }
+
+    /**
+     * Makes every row still waiting for a verdict wait afresh: it is sent again at once and
+     * gets a new receive timeout (the plugin was switched off while it waited, and its
+     * verdict may have been refused and dropped meanwhile).
+     *
+     * @param int $now Unix seconds.
+     * @return int How many rows.
+     */
+    public function rearmWaiting(int $now): int
+    {
+        $this->db->update_query(self::PENDING_TABLE, [
+            'status' => Status::RETRY, 'submitted_at' => $now, 'accepted_at' => 0, 'retry_at' => $now,
+        ], "status IN ('" . implode("','", Status::OPEN) . "')");
+        return (int)$this->db->affected_rows();
     }
 
     /**
