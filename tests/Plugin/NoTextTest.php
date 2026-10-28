@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Minos\MyBB\Tests\Plugin;
 
 use Minos\MyBB\Status;
+use Minos\MyBB\Text;
 use Minos\MyBB\Tests\Support\Forum;
 use Minos\MyBB\Tests\Support\PluginTestCase;
 
@@ -83,6 +84,45 @@ final class NoTextTest extends PluginTestCase
             'HTML: an image beside text, its hints with it' => ['Tekst <img src="https://example.com/a.png" alt="podpis">',
                 ['allowhtml' => 1], 'Tekst podpis'],
         ];
+    }
+
+    /**
+     * Links nested hundreds deep, each closed: MyBB renders them, and so does the plugin —
+     * the reading of what shows ({@see \Minos\MyBB\Text::shows}) neither gives up (a
+     * failure there means "send") nor grows faster than the text: the post is sent at once,
+     * under fail-open too, never published unassessed as `text_error`.
+     *
+     * @dataProvider depths
+     */
+    public function testDeeplyNestedLinksAreSentAtOnce(int $depth): void
+    {
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $message = 'Obelga obelga ' . str_repeat('[url=http://a.pl]', $depth) . 'x' . str_repeat('[/url]', $depth);
+        $started = microtime(true);
+        $pid = $this->heldReply($message);
+        $seconds = microtime(true) - $started;
+
+        self::assertCount(1, $this->forum->transport->requests);
+        self::assertStringStartsWith('Obelga obelga', $this->forum->transport->lastBody()['elementy'][0]['tekst']);
+        self::assertSame([0, Status::PENDING], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
+        self::assertLessThan(1.0, $seconds, "{$depth} levels in {$seconds} s");
+    }
+
+    /** @return array<string,array{0:int}> */
+    public function depths(): array
+    {
+        return ['300 levels' => [300], '350 levels' => [350], '1000 levels' => [1000]];
+    }
+
+    /**
+     * A reading of what shows that PCRE gives up on counts as text: in doubt, send. (A post
+     * whose text cannot be read at all stays `text_error`, as MyBB shows it empty.)
+     */
+    public function testWhenTheReadingOfWhatShowsFailsItCountsAsText(): void
+    {
+        $bomb = 'Widoczne SLOWO ' . str_repeat('[url=http://a.pl]x', 1000);
+        self::assertTrue(Text::shows($bomb));
+        self::assertTrue(Text::forPost($bomb)['error']);
     }
 
     public function testTheLinkSignalsOfABareAddressAreSent(): void

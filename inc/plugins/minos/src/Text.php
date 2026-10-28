@@ -305,14 +305,20 @@ final class Text
      * `<a href="X"> </a>`). A bare address the reader sees (`https://…`, `[url]X[/url]`, an
      * image or video tag MyBB does not render) is text. MyBB 1.8.41's reader view, recorded
      * by the live run (`tests/fixtures/mybb-1.8.41/reader-view.json`), is the reference.
+     * When PCRE fails on this reading, the answer is yes: in doubt, the text is sent.
      *
      * @param string              $message The message as stored.
      * @param array<string,mixed> $forum   The forum's parsing options.
-     * @throws TextError When PCRE fails on it.
      */
     public static function shows(string $message, array $forum = []): bool
     {
-        return self::render($message, $forum, true) !== '';
+        try {
+            return self::render($message, $forum, true) !== '';
+        } catch (TextError $e) {
+            // Not knowing is no reason to send less: the post goes out as {@see visible}
+            // renders it (whose own failure is `error`, a separate matter).
+            return true;
+        }
     }
 
     /**
@@ -529,8 +535,8 @@ final class Text
     /**
      * The MyCode after quotes and code blocks, reduced to the text a reader sees
      * ({@see shows}): an image MyBB shows as an image is gone; a video MyBB embeds is gone;
-     * a link is its label, read the same way first, and gone when that shows nothing. What
-     * MyBB leaves on the page as typed stays, as in {@see inline}.
+     * a link is its label — what the label shows, read by the same passes. What MyBB leaves
+     * on the page as typed stays, as in {@see inline}. No recursion: each pass is linear.
      *
      * @param array<string,mixed> $forum The forum's parsing options.
      */
@@ -540,12 +546,14 @@ final class Text
         $video = !empty($forum['allowvideocode']);
         for ($pass = 0; $pass < 20; $pass++) {
             $before = $text;
-            // A link first, with its whole label: `[url=X][img]…[/img][/url]` is an image
-            // link, not the text "[url=X][/url]" that removing the image first would leave.
-            foreach (['#\[url=((?!javascript)[a-z]+?://)([^\r\n"<]+?)\](.+?)\[/url\]#si' => 3,
-                '#\[url=((?!javascript:)[^\r\n"<&\(\)]+?)\](.+?)\[/url\]#si' => 2] as $pattern => $label) {
-                $text = self::replaceCallback($pattern, static function (array $m) use ($forum, $label): string {
-                    return ' ' . self::squeeze(self::shownMyCode($m[$label], $forum)) . ' ';
+            // A link first, by its label, before the images: `[url=X][img]…[/img][/url]` is an
+            // image link, not the text "[url=X][/url]" that removing the image first would
+            // leave. MyBB shows a `data:` address instead of the link (`mycode_parse_url`).
+            foreach (['#\[url=((?!javascript)[a-z]+?://)([^\r\n"<]+?)\](.+?)\[/url\]#si' => [3, 1, 2],
+                '#\[url=((?!javascript:)[^\r\n"<&\(\)]+?)\](.+?)\[/url\]#si' => [2, 1, 1]] as $pattern => $parts) {
+                $text = self::replaceCallback($pattern, static function (array $m) use ($parts): string {
+                    $address = $parts[1] === $parts[2] ? $m[$parts[1]] : $m[$parts[1]] . $m[$parts[2]];
+                    return ' ' . (stripos($address, 'data:') === 0 ? $address : $m[$parts[0]]) . ' ';
                 }, $text);
             }
             if ($images) {

@@ -109,7 +109,9 @@ The text readers SEE, following MyBB's own text renderer
   `no_text`. A bare address the reader sees is text (`https://…`, `[url]X[/url]`, an image
   or video tag MyBB leaves as a link or as typed); beside other text, an image's address
   and a hint are sent as before. The cases are MyBB 1.8.41's reader view as the live run
-  recorded it (`reader-view.json`, checked by `ReaderViewTest`).
+  recorded it (`reader-view.json`, checked by `ReaderViewTest`). The reading is linear (a
+  link is replaced by its label, no recursion), and when PCRE gives up on it the body
+  counts as text: in doubt, the post is sent.
 - The link signals count the links of what is sent, head included (`Text::sourceOf`).
 - Every regular expression runs through one checked helper in `Text`: a PCRE failure (a
   post crafted to exhaust the backtrack limit, e.g. a few hundred unclosed `[url=` tags)
