@@ -86,6 +86,21 @@ final class NoTextTest extends PluginTestCase
     }
 
     /**
+     * What a post reads as before its first markup decides at once only when it is on the
+     * page as written: a NUL is not — the plugin reads `[code]` blocks through a placeholder
+     * of NUL, a number and NUL, so such a prefix followed by markup is read in full (the
+     * review of #8, M2: without NUL among the stops, this image-only post counted as text).
+     * Read through `Text` directly: the stand-in database (SQLite through PDO) cannot store a
+     * NUL in a post.
+     */
+    public function testANulPlaceholderBeforeMarkupIsNotTakenAsText(): void
+    {
+        $message = "\x000\x00[code][/code][img]https://example.com/a.png[/img]";
+        self::assertFalse(Text::shows($message));
+        self::assertSame('', Text::forPost($message, 'Tytuł')['tekst'], 'nothing to send, not even the title');
+    }
+
+    /**
      * Whether a post shows text is read once when its first words show (the review of S7c,
      * minor c: 2 000 `[img]` tags never closed after a word cost a second reading of every
      * image pattern, three times the plain reading with `pcre.jit` off). The answer is the
