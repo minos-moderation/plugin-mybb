@@ -28,6 +28,7 @@ final class Settings
     public const BLOCKED = 'minos_blocked';
     public const FORUMS = 'minos_forums';
     public const SKIP_MODERATORS = 'minos_skip_moderators';
+    public const NOTIFY_SUBSCRIBERS = 'minos_notify_subscribers';
 
     /** The two secret settings: never rendered back, never logged. */
     public const SECRET_NAMES = [self::API_KEY, self::WEBHOOK_SECRET];
@@ -233,6 +234,19 @@ final class Settings
     public function skipModerators(): bool
     {
         return (string)($this->raw[self::SKIP_MODERATORS] ?? '1') !== '0';
+    }
+
+    /**
+     * Whether a post the plugin publishes notifies the thread's and the forum's subscribers
+     * as MyBB notifies them of a post visible at once (shared rule D9.8): MyBB itself sends
+     * nothing when a post leaves its moderation queue.
+     *
+     * @return bool The `minos_notify_subscribers` setting; on unless set to 0 (off only to
+     *     avoid double notifications when another plugin sends them).
+     */
+    public function notifySubscribers(): bool
+    {
+        return (string)($this->raw[self::NOTIFY_SUBSCRIBERS] ?? '1') !== '0';
     }
 
     /**

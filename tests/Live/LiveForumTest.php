@@ -357,7 +357,9 @@ final class LiveForumTest extends TestCase
         self::assertGreaterThan(0, $answers['visible_at_once']['thread_pm'], 'the control reaches the PM subscriber');
         self::assertGreaterThan(0, $answers['visible_at_once']['forum_mail'], 'the control reaches the forum subscriber');
 
-        // Published by the plugin through the webhook.
+        // Published by the plugin through the webhook — with its own notifications off, so
+        // what MyBB itself sends on the approval shows.
+        $board->settings(['minos_notify_subscribers' => '0']);
         $answers['approved_by_webhook'] = $this->notificationsFor(function () use ($board, $author): void {
             $pid = $board->reply($author, self::$tid, 'Odpowiedź zatwierdzona przez webhook.');
             $topic = $board->thread($author, 'Wątek zatwierdzony przez webhook', 'Treść wątku zatwierdzonego przez webhook.');
@@ -365,6 +367,7 @@ final class LiveForumTest extends TestCase
             $board->deliver();
             self::assertSame([1, 1], [(int)$board->post($pid)['visible'], (int)$board->post($topic['pid'])['visible']]);
         });
+        $board->settings(['minos_notify_subscribers' => '1']);
 
         // Approved by a moderator in the ModCP queue (the mock never answers this one).
         $answers['approved_in_modcp'] = $this->notificationsFor(function () use ($board, $author): void {
@@ -374,6 +377,80 @@ final class LiveForumTest extends TestCase
         });
         self::$answers['q2_notifications'] = $answers;
         self::assertSame(['thread_mail' => 0, 'forum_mail' => 0, 'thread_pm' => 0], $answers['approved_by_webhook']);
+
+        $this->pluginNotifiesAsAtOnce($author, $answers['visible_at_once']);
+    }
+
+    /**
+     * K-31 (shared rule D9.8): with "Powiadamiaj subskrybentów…" on (the default), a reply
+     * and a thread the plugin publishes through the webhook queue what MyBB queues for posts
+     * visible at once — the e-mails and the private message, once; the failure mode's
+     * publication (fail-open, MyBB's `task.php`) too, and the late verdict after it nothing
+     * more; a blocked reply nothing. No warning: neither in MyBB's task log nor, with MyBB's
+     * error log on for the scenario, from the webhook (both run without a session user).
+     *
+     * @param array<string,int> $atOnce What MyBB queued for posts visible at once.
+     */
+    private function pluginNotifiesAsAtOnce(Browser $author, array $atOnce): void
+    {
+        $board = self::$board;
+        // MyBB's error log for the scenario: a warning in the plugin's notifications (the
+        // webhook and the task run without a session user) would land there.
+        @unlink($board->root . '/error.log');
+        $board->settings(['errorlogmedium' => 'log', 'errorloglocation' => './error.log']);
+        $answers = [];
+        $bodies = [];
+        $answers['published_by_the_plugin'] = $this->notificationsFor(function () use ($board, $author, &$bodies): void {
+            $pid = $board->reply($author, self::$tid, 'Odpowiedź, o której dowiedzą się subskrybenci.');
+            $topic = $board->thread($author, 'Wątek, o którym dowie się dział', 'Treść wątku dla subskrybentów działu.');
+            foreach ([$pid, $topic['pid']] as $id) {
+                $body = (string)json_encode(['id' => 'mybb:' . $id, 'status' => 'ocenione', 'kwalifikacja' => 'bezpieczne',
+                    'kategorie' => [], 'wsparcie' => false, 'wersja' => '3f0c9a41d2b7e8c5']);
+                $webhook = $board->guest();
+                $bodies[] = [$webhook->postRaw('minos-webhook.php', $body, ['Content-Type: application/json',
+                    Signature::HEADER . ': ' . Signature::sign($board->mockConfig()->webhookSecret, $body, time())]), $webhook->status];
+            }
+            self::assertSame([1, 1], [(int)$board->post($pid)['visible'], (int)$board->post($topic['pid'])['visible']]);
+            $board->deliver(); // the mock's own deliveries: already applied
+        });
+        $answers['webhook_answers'] = array_map(static function (array $answer): array {
+            return ['status' => $answer[1], 'body' => $answer[0]];
+        }, $bodies);
+
+        $board->settings(['minos_failure_mode' => 'fail-open']);
+        $late = 0;
+        $answers['published_by_the_failure_mode'] = $this->notificationsFor(function () use ($board, $author, &$late): void {
+            $late = $board->reply($author, self::$tid, 'Odpowiedź z późnym werdyktem [minos:blokuj].');
+            $board->exec('UPDATE {p}minos_pending SET accepted_at=? WHERE pid=?', [time() - 21 * 60, $late]);
+            $board->task('minos');
+            self::assertSame(['published', '1'], [$board->pending($late)['status'], (string)$board->pending($late)['auto_published']]);
+        });
+        $answers['late_verdict_after_it'] = $this->notificationsFor(function () use ($board, $late): void {
+            $board->deliver();
+            self::assertSame(0, (int)$board->post($late)['visible'], 'the late zablokowane sent it back to the queue');
+        });
+        $board->settings(['minos_failure_mode' => 'fail-closed']);
+        $answers['blocked'] = $this->notificationsFor(function () use ($board, $author): void {
+            $pid = $board->reply($author, self::$tid, 'Odpowiedź zablokowana [minos:blokuj].');
+            $board->deliver();
+            self::assertSame(['held', 'zablokowane'], [$board->pending($pid)['status'], $board->pending($pid)['verdict']]);
+        });
+        $answers['task_log_warnings'] = (int)$board->value("SELECT COUNT(*) FROM {p}tasklog WHERE data LIKE '%Warning%'");
+        $board->settings(['errorlogmedium' => 'none']);
+        $log = is_file($board->root . '/error.log') ? (string)file_get_contents($board->root . '/error.log') : '';
+        preg_match_all('#<error>.*?</error>#s', $log, $errors);
+        $answers['plugin_errors_logged'] = count(array_filter($errors[0], static function (string $error): bool {
+            return strpos($error, 'plugins/minos') !== false || strpos($error, 'minos-webhook.php') !== false;
+        }));
+        self::$answers['k31_notifications'] = $answers;
+
+        self::assertSame($atOnce, $answers['published_by_the_plugin'], 'what MyBB sends for posts visible at once');
+        self::assertSame(['thread_mail' => 1, 'forum_mail' => 0, 'thread_pm' => 1], $answers['published_by_the_failure_mode']);
+        self::assertSame(['thread_mail' => 0, 'forum_mail' => 0, 'thread_pm' => 0], $answers['late_verdict_after_it'], 'never again');
+        self::assertSame(['thread_mail' => 0, 'forum_mail' => 0, 'thread_pm' => 0], $answers['blocked']);
+        self::assertSame([['status' => 200, 'body' => ''], ['status' => 200, 'body' => '']], $answers['webhook_answers']);
+        self::assertSame(0, $answers['task_log_warnings'], 'MyBB logs a task\'s warnings in its task log');
+        self::assertSame(0, $answers['plugin_errors_logged'], 'nor in MyBB\'s error log, from the webhook');
     }
 
     /**

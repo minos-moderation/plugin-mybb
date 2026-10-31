@@ -7,8 +7,9 @@ namespace Minos\MyBB;
 /**
  * The ONE place the plugin touches MyBB: its globals (`$mybb`, `$db`, `$cache`, `$lang`,
  * `$page`), its functions (`is_moderator`, `forum_permissions`, `get_forum`,
- * `rebuild_settings`, `fetch_next_run`, `add_task_log`, `get_post_link`), its `Moderation`
- * class and its tables.
+ * `rebuild_settings`, `fetch_next_run`, `add_task_log`, `get_post_link`,
+ * `get_thread_link`, `my_substr`), its classes (`Moderation`, `postParser`, `MyLanguage`,
+ * `PMDataHandler`) and its tables.
  * Every other class works through this one, so a MyBB change lands here, and the tests run
  * the real class against hand-written stand-ins for those globals (`tests/Stubs/`).
  *
@@ -99,6 +100,9 @@ final class Platform
 
     /** @var bool */
     private $langLoaded = false;
+
+    /** @var array<string,object> MyBB's `MyLanguage` per language, with `messages` and `global` loaded. */
+    private $languages = [];
 
     /**
      * @param object $mybb   `$mybb`.
@@ -465,6 +469,103 @@ final class Platform
             $moderation->unapprove_threads([$post['tid']]);
         } else {
             $moderation->unapprove_posts([$post['pid']]);
+        }
+    }
+
+    /**
+     * What MyBB reads before it inserts a post visible at once, and its subscription
+     * notifications then compare with: the thread's last post and visibility
+     * (`insert_post`: `get_thread`) and the forum's last post (`insert_thread`: the forum's
+     * row). Read before the plugin publishes a post ({@see notifySubscribers}): the approval
+     * moves both last posts on.
+     *
+     * @param array{tid:int,fid:int} $post The post ({@see post}).
+     * @return array{thread_lastpost:int,thread_visible:int,forum_lastpost:int}
+     */
+    public function lastPosts(array $post): array
+    {
+        $query = $this->db->simple_select('threads', 'lastpost, visible', "tid='" . (int)$post['tid'] . "'");
+        $thread = $this->db->fetch_array($query);
+        $query = $this->db->simple_select('forums', 'lastpost', "fid='" . (int)$post['fid'] . "'");
+        $forum = $this->db->fetch_array($query);
+        return [
+            'thread_lastpost' => is_array($thread) ? (int)$thread['lastpost'] : 0,
+            'thread_visible'  => is_array($thread) ? (int)$thread['visible'] : 0,
+            'forum_lastpost'  => is_array($forum) ? (int)$forum['lastpost'] : 0,
+        ];
+    }
+
+    /**
+     * Queues the subscription notifications MyBB queues for a post visible at once, for a
+     * post the plugin has just published: MyBB 1.8.41 sends them only from `insert_post` and
+     * `insert_thread` (`inc/datahandlers/post.php`, the blocks after "Fetch any users
+     * subscribed to this thread" and "Queue up any forum subscription notices", only when
+     * `$visible == 1`), never from `Moderation::approve_*` (shared rule D9.8, A4 of
+     * client-php's `docs/plugin-behaviour.md`). The conditions are MyBB's, copied:
+     *
+     * - a reply, in a thread that is visible: the thread's subscribers with instant
+     *   notification (`threadsubscriptions.notification` 1 = e-mail into `mailqueue`, 2 = a
+     *   private message), but its author; a new thread: the forum's subscribers (e-mail),
+     *   but its author and members of a banned group;
+     * - "do not notify again before the visit": only a subscriber active after the thread's
+     *   (the forum's) last post before this one (`u.lastactive > lastpost`, read before the
+     *   approval: {@see lastPosts});
+     * - the right to view: `forum_permissions()` `canview` and `canviewthreads`, and in a
+     *   forum where users see only their own threads (`canonlyviewownthreads`) a subscriber
+     *   who is neither the thread's starter (replies) nor a moderator;
+     * - the recipient's language: their own when installed, else the board's
+     *   (`orig_bblanguage` for replies, `bblanguage` for threads), else `english`;
+     * - the text: MyBB's `emailsubject_subscription`/`email_subscription`,
+     *   `pmsubject_subscription`/`pm_subscription` and `emailsubject_forumsubscription`/
+     *   `email_forumsubscription` with the excerpt `text_parse_message` makes of the post as
+     *   it is now (the masked text of a censored post), cut to `subscribeexcerpt`; a guest
+     *   without a name is "Guest" in the recipient's language;
+     * - a private message as `send_pm($pm, -1, true)` sends it: from "MyBB Engine" (uid 0),
+     *   the administrator's override, nothing when the board has private messages off —
+     *   through MyBB's `PMDataHandler`, with the strings already in the recipient's language
+     *   and no IP address (the webhook and the task have no session);
+     * - `$cache->update_mailqueue()` when an e-mail was queued.
+     *
+     * Not run: the `datahandler_post_insert_subscribed` hook (it passes the post datahandler,
+     * which a publication by the plugin does not have). The block is MyBB 1.8.41's: its
+     * upkeep follows MyBB's releases, and the live run compares the counts on a real forum.
+     *
+     * @param array{pid:int,tid:int,fid:int,first:bool} $post   The post ({@see post}), now visible.
+     * @param array{thread_lastpost:int,thread_visible:int,forum_lastpost:int} $before {@see lastPosts}, read before the approval.
+     * @return int How many notifications were queued.
+     */
+    public function notifySubscribers(array $post, array $before): int
+    {
+        $query = $this->db->query(
+            'SELECT p.pid, p.uid, p.username, p.message, p.visible, t.tid, t.fid, t.uid AS thread_uid,'
+            . ' t.subject AS thread_subject, f.name AS forum_name'
+            . ' FROM ' . $this->prefix . 'posts p'
+            . ' LEFT JOIN ' . $this->prefix . 'threads t ON (t.tid=p.tid)'
+            . ' LEFT JOIN ' . $this->prefix . 'forums f ON (f.fid=t.fid)'
+            . " WHERE p.pid='" . (int)$post['pid'] . "'"
+        );
+        $row = $this->db->fetch_array($query);
+        if (!is_array($row) || (int)$row['visible'] !== 1 || (!$post['first'] && (int)$before['thread_visible'] !== 1)) {
+            return 0; // not published, or a reply in a thread still in the queue: MyBB notifies nobody
+        }
+        $this->boardLanguage();
+        if (!class_exists('postParser', false)) {
+            require_once $this->root . 'inc/class_parser.php';
+        }
+        // The webhook and the task have no session user: MyBB's permission functions compare
+        // with `$mybb->user['uid']`, which is then a guest's 0, for this call only.
+        $sessionless = !isset($this->mybb->user['uid']);
+        if ($sessionless) {
+            $this->mybb->user['uid'] = 0;
+        }
+        try {
+            return $post['first']
+                ? $this->notifyForum($row, new \postParser(), (int)$before['forum_lastpost'])
+                : $this->notifyThread($row, new \postParser(), (int)$before['thread_lastpost']);
+        } finally {
+            if ($sessionless) {
+                unset($this->mybb->user['uid']);
+            }
         }
     }
 
@@ -1096,6 +1197,224 @@ final class Platform
     }
 
     // ---------------------------------------------------------------- internals
+
+    /**
+     * `insert_post`'s thread subscription block, for a published reply.
+     *
+     * @param array<string,mixed> $row      The post with its thread and forum.
+     * @param object              $parser   MyBB's `postParser`.
+     * @param int                 $lastpost The thread's last post before this one.
+     * @return int Notifications queued.
+     */
+    private function notifyThread(array $row, $parser, int $lastpost): int
+    {
+        $settings = $this->settings();
+        $subject = $parser->parse_badwords((string)$row['thread_subject']);
+        $excerpt = $parser->text_parse_message((string)$row['message'],
+            ['me_username' => (string)$row['username'], 'filter_badwords' => 1]);
+        $excerpt = my_substr($excerpt, 0, (int)($settings['subscribeexcerpt'] ?? 100)) . (string)$this->lang->emailbit_viewthread;
+        $link = str_replace('&amp;', '&', get_thread_link((int)$row['tid'], 0, 'newpost'));
+        $query = $this->db->query(
+            'SELECT u.username, u.email, u.uid, u.language, s.notification'
+            . ' FROM ' . $this->prefix . 'threadsubscriptions s'
+            . ' LEFT JOIN ' . $this->prefix . 'users u ON (u.uid=s.uid)'
+            . " WHERE (s.notification='1' OR s.notification='2') AND s.tid='" . (int)$row['tid'] . "'"
+            . " AND s.uid != '" . (int)$row['uid'] . "'"
+            . " AND u.lastactive>'" . $lastpost . "'"
+        );
+        $members = [];
+        while (($member = $this->db->fetch_array($query)) && is_array($member)) {
+            $members[] = $member;
+        }
+        $done = [];
+        $queued = 0;
+        $mailed = false;
+        foreach ($members as $member) {
+            $uid = (int)$member['uid'];
+            if (isset($done[$uid])) {
+                continue;
+            }
+            $done[$uid] = true;
+            if (!$this->mayReadThread((int)$row['fid'], $uid, (int)$row['thread_uid'] !== $uid)) {
+                continue;
+            }
+            $lang = $this->languageFor((string)$member['language'], (string)($settings['orig_bblanguage'] ?? ''));
+            $author = (int)$row['uid'] === 0 && (string)$row['username'] === '' ? (string)$lang->guest : (string)$row['username'];
+            if ((int)$member['notification'] === 1) {
+                $this->queueMail((string)$member['email'], $lang->sprintf((string)$lang->emailsubject_subscription, $subject),
+                    $lang->sprintf((string)$lang->email_subscription, (string)$member['username'], $author,
+                        (string)($settings['bbname'] ?? ''), $subject, $excerpt, (string)($settings['bburl'] ?? ''), $link,
+                        (string)(int)$row['tid']));
+                $mailed = true;
+            } else {
+                $this->sendPm($uid, $lang->sprintf((string)$lang->pmsubject_subscription, $subject),
+                    $lang->sprintf((string)$lang->pm_subscription, (string)$member['username'], $author, $subject, $excerpt,
+                        (string)($settings['bburl'] ?? ''), $link, (string)(int)$row['tid']));
+            }
+            $queued++;
+        }
+        if ($mailed) {
+            $this->cache->update_mailqueue();
+        }
+        return $queued;
+    }
+
+    /**
+     * `insert_thread`'s forum subscription block, for a published thread.
+     *
+     * @param array<string,mixed> $row      The first post with its thread and forum.
+     * @param object              $parser   MyBB's `postParser`.
+     * @param int                 $lastpost The forum's last post before this thread.
+     * @return int E-mails queued.
+     */
+    private function notifyForum(array $row, $parser, int $lastpost): int
+    {
+        $settings = $this->settings();
+        $excerpt = $parser->text_parse_message($parser->parse_badwords((string)$row['message']));
+        $limit = (int)($settings['subscribeexcerpt'] ?? 100);
+        if (strlen($excerpt) > $limit) {
+            $excerpt = my_substr($excerpt, 0, $limit) . (string)$this->lang->emailbit_viewthread;
+        }
+        $query = $this->db->query(
+            'SELECT u.username, u.email, u.uid, u.language'
+            . ' FROM ' . $this->prefix . 'forumsubscriptions fs'
+            . ' LEFT JOIN ' . $this->prefix . 'users u ON (u.uid=fs.uid)'
+            . ' LEFT JOIN ' . $this->prefix . 'usergroups g ON (g.gid=u.usergroup)'
+            . " WHERE fs.fid='" . (int)$row['fid'] . "'"
+            . " AND fs.uid != '" . (int)$row['uid'] . "'"
+            . " AND u.lastactive > '" . $lastpost . "'"
+            . ' AND g.isbannedgroup != 1'
+        );
+        $members = [];
+        while (($member = $this->db->fetch_array($query)) && is_array($member)) {
+            $members[] = $member;
+        }
+        $done = [];
+        $queued = 0;
+        foreach ($members as $member) {
+            $uid = (int)$member['uid'];
+            if (isset($done[$uid])) {
+                continue;
+            }
+            $done[$uid] = true;
+            if (!$this->mayReadThread((int)$row['fid'], $uid, true)) {
+                continue;
+            }
+            $lang = $this->languageFor((string)$member['language'], (string)($settings['bblanguage'] ?? ''));
+            $author = (int)$row['uid'] === 0 && (string)$row['username'] === '' ? (string)$lang->guest : (string)$row['username'];
+            $this->queueMail((string)$member['email'], $lang->sprintf((string)$lang->emailsubject_forumsubscription, (string)$row['forum_name']),
+                $lang->sprintf((string)$lang->email_forumsubscription, (string)$member['username'], $author,
+                    (string)$row['forum_name'], (string)($settings['bbname'] ?? ''), (string)$row['thread_subject'], $excerpt,
+                    (string)($settings['bburl'] ?? ''), get_thread_link((int)$row['tid']), (string)(int)$row['fid']));
+            $queued++;
+        }
+        if ($queued > 0) {
+            $this->cache->update_mailqueue();
+        }
+        return $queued;
+    }
+
+    /**
+     * MyBB's view checks in its subscription blocks: `canview` and `canviewthreads`, and in a
+     * forum where users see only their own threads, a moderator (or, for replies, the
+     * thread's starter: `$others` false).
+     *
+     * @param bool $others The thread is someone else's.
+     */
+    private function mayReadThread(int $fid, int $uid, bool $others): bool
+    {
+        $permissions = forum_permissions($fid, $uid);
+        if ((int)($permissions['canview'] ?? 0) === 0 || (int)($permissions['canviewthreads'] ?? 0) === 0) {
+            return false;
+        }
+        return !($others && (int)($permissions['canonlyviewownthreads'] ?? 0) === 1 && !is_moderator($fid, '', $uid));
+    }
+
+    /**
+     * The board's language on `$lang`, with `global` and `messages` loaded, as `task.php`
+     * loads them: the webhook starts MyBB with `inc/init.php` only, and MyBB's parser and
+     * its private-message handler read `$lang` (`quote`, `wrote`, `mybb_engine`…). A page
+     * request already has its user's language and is left as it is.
+     */
+    private function boardLanguage(): void
+    {
+        if ((string)($this->lang->language ?? '') === '') {
+            $this->lang->set_language((string)($this->settings()['bblanguage'] ?? ''));
+        }
+        if (!isset($this->lang->wrote)) {
+            $this->lang->load('global');
+        }
+        if (!isset($this->lang->emailbit_viewthread)) {
+            $this->lang->load('messages');
+        }
+    }
+
+    /**
+     * MyBB's strings in a recipient's language: their own when installed, else the board's,
+     * else `english`.
+     *
+     * @param string $own   The recipient's `language` ('' for the board's).
+     * @param string $board The board's.
+     * @return object A `MyLanguage` with `messages` and `global` loaded.
+     */
+    private function languageFor(string $own, string $board)
+    {
+        if ($own !== '' && $this->lang->language_exists($own)) {
+            $language = $own;
+        } elseif ($board !== '') {
+            $language = $board;
+        } else {
+            $language = 'english';
+        }
+        if (!isset($this->languages[$language])) {
+            $strings = new \MyLanguage();
+            $strings->set_path($this->root . 'inc/languages');
+            $strings->set_language($language);
+            $strings->load('messages');
+            $strings->load('global');
+            $this->languages[$language] = $strings;
+        }
+        return $this->languages[$language];
+    }
+
+    /**
+     * One e-mail into MyBB's `mailqueue`, as the subscription blocks queue it.
+     */
+    private function queueMail(string $to, string $subject, string $message): void
+    {
+        $this->db->insert_query('mailqueue', [
+            'mailto'   => $this->db->escape_string($to),
+            'mailfrom' => '',
+            'subject'  => $this->db->escape_string($subject),
+            'message'  => $this->db->escape_string($message),
+            'headers'  => '',
+        ]);
+    }
+
+    /**
+     * One private message from "MyBB Engine", as `send_pm($pm, -1, true)` sends it
+     * (`inc/functions.php`): nothing when the board has private messages off; the
+     * administrator's override (the recipient's own settings do not refuse it).
+     */
+    private function sendPm(int $uid, string $subject, string $message): void
+    {
+        if ((string)($this->settings()['enablepms'] ?? '1') === '0') {
+            return;
+        }
+        if (!class_exists('PMDataHandler', false)) {
+            require_once $this->root . 'inc/datahandlers/pm.php';
+        }
+        $handler = new \PMDataHandler();
+        $handler->admin_override = 1;
+        $handler->set_data([
+            'subject' => $subject, 'message' => $message, 'icon' => -1, 'fromid' => 0, 'toid' => [$uid],
+            'bccid' => [], 'do' => '', 'pmid' => '', 'sender' => ['uid' => 0, 'username' => ''], 'ipaddress' => '',
+            'options' => ['disablesmilies' => 0, 'savecopy' => 0, 'readreceipt' => 0], 'saveasdraft' => 0,
+        ]);
+        if ($handler->validate_pm()) {
+            $handler->insert_pm();
+        }
+    }
 
     /**
      * @return object MyBB's `Moderation`.

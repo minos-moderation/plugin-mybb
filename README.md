@@ -101,6 +101,7 @@ dezaktywacji, wtyczka wysyła ponownie przy pierwszym przebiegu zadania.
 | Post zablokowany | **Zostaw w kolejce moderacji** albo **usuń (miękko)** — moderator może go przywrócić. | zostaw w kolejce |
 | Fora | Fora, w których wtyczka moderuje nowe posty. | wszystkie |
 | Pomijaj moderatorów | Posty moderatorów, supermoderatorów i administratorów trafiają na forum bez oceny. | tak |
+| Powiadamiaj subskrybentów o postach opublikowanych przez wtyczkę | Subskrybenci wątku i działu dostają o poście opublikowanym przez wtyczkę to samo powiadomienie (e-mail albo prywatną wiadomość), które MyBB wysyła o poście widocznym od razu — opis niżej. Wyłącz, jeśli inna wtyczka już je wysyła. | tak |
 
 Gdy wtyczka jest włączona, ale czegoś brakuje (klucza, sekretu, poprawnego adresu bramy,
 znanego profilu), nie wysyła postów do oceny: każdy nowy post od razu dostaje tryb
@@ -210,6 +211,24 @@ zastosowania, więc:
 Własny post w kolejce moderacji autor może poprawić tylko wtedy, gdy forum na to pozwala
 (ustawienie MyBB `showownunapproved`, domyślnie wyłączone); poza tym poprawiają go
 moderatorzy.
+
+## Powiadomienia subskrybentów
+
+MyBB powiadamia subskrybentów wątku (e-mailem albo prywatną wiadomością, według
+subskrypcji) i subskrybentów działu (e-mailem, o nowym wątku) tylko w chwili dodania postu
+widocznego od razu; przy zatwierdzeniu postu z kolejki moderacji nie wysyła nic. Dlatego
+post, który publikuje wtyczka — po werdykcie `bezpieczne`, ocenzurowany z maską albo bez
+oceny w trybie fail-open — wysyła subskrybentom to samo, co MyBB wysłałby dla postu
+widocznego od razu, na tych samych zasadach: nie do autora postu, tylko do osób, które
+mogą czytać ten dział, tylko do tych, które odwiedziły forum od ostatniego postu w wątku
+(dziale) — MyBB nie powiadamia drugi raz przed kolejną wizytą — i w języku odbiorcy.
+Fragment w powiadomieniu to tekst opublikowany, czyli przy poście ocenzurowanym tekst
+z maską. Powiadomienie wychodzi **jeden raz**: werdykt, który przyjdzie po publikacji bez
+oceny (fail-open), nie wysyła go ponownie, a post zatrzymany w kolejce (zablokowany,
+ocenzurowany zostawiony w kolejce, bez oceny przy fail-closed) nie wysyła nic. Post
+zatwierdzony ręcznie przez moderatora wtyczka zostawia MyBB (bez powiadomień). Ustawienie
+„Powiadamiaj subskrybentów o postach opublikowanych przez wtyczkę” (domyślnie tak) wyłącza
+to zachowanie, np. gdy inna wtyczka już wysyła takie powiadomienia.
 
 ## Tryb awaryjny: fail-open czy fail-closed
 
@@ -337,11 +356,9 @@ numer postu — nigdy treść błędu.
   zmieniają w MyBB tylko moderatorzy: zmiana ankiety wątku czekającego na werdykt, jak
   poprawka moderatora, zostawia wątek ludziom.
 - Edycje opublikowanych postów nie są ponownie oceniane (poza zakresem tej wersji).
-- **Subskrybenci wątku i forum NIE dostają powiadomień** (e-mail ani prywatnej wiadomości)
-  o postach, które przeszły przez wtyczkę — także po ich publikacji. MyBB wysyła je tylko
-  w chwili dodania posta widocznego od razu; przy zatwierdzeniu z kolejki moderacji nie
-  wysyła ich wcale (tak samo jest przy ręcznej moderacji), a nie udostępnia funkcji, którą
-  wtyczka mogłaby je wysłać.
+- Powiadomienia subskrybentów o poście zatwierdzonym przez moderatora z kolejki MyBB
+  wysyła MyBB — czyli żadne (tak działa MyBB przy każdej ręcznej moderacji); wtyczka wysyła
+  je tylko dla postów, które sama publikuje (niżej, „Powiadomienia subskrybentów”).
 - Informacja „wsparcie” jest widoczna tylko w dzienniku wtyczki, nie w kolejce moderacji
   MyBB.
 - Klucz i sekret są przechowywane jak inne ustawienia MyBB: w bazie danych i w pliku

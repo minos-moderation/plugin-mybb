@@ -46,8 +46,8 @@ final class InstallerTest extends TestCase
         self::assertSame([
             'minos_enabled' => '0', 'minos_gateway_url' => 'https://gateway.wergiliusz.app', 'minos_api_key' => '',
             'minos_webhook_secret' => '', 'minos_profile' => 'forum_adult', 'minos_failure_mode' => 'fail-closed',
-            'minos_timeout' => '20', 'minos_censored' => 'publish', 'minos_blocked' => 'queue', 'minos_forums' => '-1',
-            'minos_skip_moderators' => '1',
+            'minos_timeout' => '20', 'minos_censored' => 'publish', 'minos_blocked' => 'queue',
+            'minos_notify_subscribers' => '1', 'minos_forums' => '-1', 'minos_skip_moderators' => '1',
         ], $this->settings('value'));
         foreach ($this->settings('title') as $name => $title) {
             self::assertNotSame('', $title, $name);

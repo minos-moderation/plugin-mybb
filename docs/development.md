@@ -60,14 +60,34 @@ whose validation already failed (`get_errors()`) raises no flag, and `newreply_s
 `newthread_start` (the form shown again after a later validate hook refused the post) put
 it back.
 
-**Subscription notifications are not sent** for held posts. `insert_post` and
-`insert_thread` build them inline (`inc/datahandlers/post.php`, the thread-subscription
-block of `insert_post` and the forum-subscription block of `insert_thread`, only when
+**Subscription notifications** (shared rule D9.8, A4). `insert_post` and `insert_thread`
+build them inline (`inc/datahandlers/post.php`, the thread-subscription block of
+`insert_post` and the forum-subscription block of `insert_thread`, only when
 `visible == 1`); MyBB 1.8.41 has no function that sends them, and neither
-`Moderation::approve_*` nor `modcp.php`/`moderation.php` send any on approval — the same
-as for manually moderated posts. Sending them would mean copying that block (per-subscriber
-permissions, languages, `send_pm`, the mail queue); that is a separate decision. Verified
-on a live forum: question 2 below.
+`Moderation::approve_*` nor `modcp.php`/`moderation.php` send any on approval — verified on
+a live forum (question 2 below). So a post the plugin publishes from the queue — a
+`bezpieczne` verdict, a censored post published with its mask, the failure mode in
+`fail-open`, on time or after the timeout (D9.10) — notifies its subscribers itself, with
+the setting "Powiadamiaj subskrybentów o postach opublikowanych przez wtyczkę"
+(`minos_notify_subscribers`, on by default; off when another plugin sends them):
+`Applier::publish` reads the thread's and the forum's last post before the approval
+(`Platform::lastPosts`), approves, then `Platform::notifySubscribers` runs MyBB's two blocks,
+copied: the recipients (instant thread subscriptions, e-mail or PM; forum subscriptions,
+e-mail, no banned group; never the author), "not again before the visit" (`lastactive`
+after that last post), `canview`/`canviewthreads`/`canonlyviewownthreads` with
+`is_moderator`, the recipient's language, MyBB's own texts and excerpt
+(`postParser::text_parse_message`, `subscribeexcerpt`), the mail queue
+(`$cache->update_mailqueue`) and the PM as `send_pm($pm, -1, true)` sends it (through
+`PMDataHandler`, from "MyBB Engine", nothing when `enablepms` is off). The webhook and the
+task start MyBB without a session: the board's language is loaded on `$lang` (`global`,
+`messages`, as `task.php` does) and `$mybb->user['uid']` is a guest's 0 for the call, so
+MyBB's permission functions raise no warning (the live run checks MyBB's error log and
+task log). Once only: a late verdict on a post the failure mode published never notifies
+again, and a moderator's approval in the ModCP is MyBB's own (nothing sent). Not run: the
+`datahandler_post_insert_subscribed` hook, which passes a post datahandler the plugin does
+not have. A notification that throws is logged as `error`/`notify` with the post id; the
+post stays published. The copied block needs upkeep with every 1.8.x; the live run
+compares the counts with a post visible at once (`k31_notifications`).
 
 ## What `tekst` is
 
@@ -308,7 +328,8 @@ stand-ins and includes the REAL `inc/plugins/minos.php` and `inc/tasks/minos.php
 hook functions MyBB would call are the ones tested:
 
 - `tests/Stubs/mybb.php`: `is_moderator`, `forum_permissions`, `rebuild_settings`,
-  `fetch_next_run`, `add_task_log`, `get_post_link`, `Moderation`;
+  `fetch_next_run`, `add_task_log`, `get_post_link`, `get_thread_link`, `my_substr`,
+  `Moderation` (with MyBB's last-post update), `postParser`, `MyLanguage`, `PMDataHandler`;
 - `tests/Support/`: `$db` over SQLite (`FakeDb`), `$mybb`, `$cache`, `$lang`, `$plugins`
   (with MyBB's "a truthy return replaces the arguments" rule), `$page`, and `Forum`, which
   posts through the hooks with MyBB 1.8.41's visibility rule;
@@ -441,7 +462,10 @@ reading the code; what the live run below goes through is verified on a real for
 | a thread's poll: `threads.poll` → `polls` (`question`, `options` joined by `\|\|~\|~\|\|`, `numoptions` of them shown); the question through `htmlspecialchars_uni`, each option through `parse_message` with the forum's options | `showthread.php`, `install/resources/mysql_db_tables.php` | `Platform::post`, `Text` |
 | a reply's default subject: "RE: " and the thread's title (cut to 82 characters and "..." past 85; for a reply to a post, `replyto`, "RE: " and that post's subject without its `#^RE:\s?#i`); `posts.replyto` | `newreply.php`, `inc/datahandlers/post.php` (`verify_subject`, `insert_post`) | `Text::ownSubject`, `Platform::post` |
 | `Moderation::unapprove_posts`, `unapprove_threads` | `inc/class_moderation.php` | `Platform::unapprove` (a late `zablokowane`) |
-| subscription notifications: inline in `insert_post`/`insert_thread`, only for `visible == 1`; none on approval | `inc/datahandlers/post.php`, `inc/class_moderation.php`, `modcp.php` | not sent (see above) |
+| subscription notifications: inline in `insert_post`/`insert_thread`, only for `visible == 1`; none on approval — the two blocks copied (`threadsubscriptions`, `forumsubscriptions`, `users.lastactive`/`language`, `usergroups.isbannedgroup`, `mailqueue`, `threads.lastpost`, `forums.lastpost`) | `inc/datahandlers/post.php`, `inc/class_moderation.php`, `modcp.php` | `Platform::lastPosts`, `notifySubscribers` |
+| `postParser::text_parse_message`, `parse_badwords`; `my_substr`; `get_thread_link($tid, 0, 'newpost')`; `$mybb->settings['subscribeexcerpt'/'orig_bblanguage'/'bblanguage'/'enablepms']` | `inc/class_parser.php`, `inc/functions.php` | `Platform::notifySubscribers` |
+| `MyLanguage` (`set_path`, `set_language`, `load`, `language_exists`, `sprintf`; `messages`: `emailsubject_subscription`, `email_subscription`, `pmsubject_subscription`, `pm_subscription`, `emailsubject_forumsubscription`, `email_forumsubscription`, `emailbit_viewthread`; `global`: `guest`) | `inc/class_language.php`, `task.php` | `Platform::boardLanguage`, `languageFor` |
+| `send_pm($pm, -1, true)` → `PMDataHandler` (`admin_override`, `set_data`, `validate_pm`, `insert_pm`); `$cache->update_mailqueue()` | `inc/functions.php`, `inc/datahandlers/pm.php`, `inc/class_datacache.php` | `Platform::sendPm`, `queueMail` |
 | `admin_config_settings_change` before `upsetting` is saved | `admin/modules/config/settings.php` | `Admin::onSettingsChange` |
 | `admin_formcontainer_output_row` (references; a setting row's `row_options['id']` is `row_setting_<name>`) | `admin/inc/class_form.php` | `Admin::onFormRow` |
 | `admin_tools_action_handler`, `admin_tools_menu_logs`, `admin_tools_permissions`, `admin_load` before the module file is required | `admin/modules/tools/module_meta.php`, `admin/index.php` | `Admin` |
@@ -501,7 +525,7 @@ The questions of the live check (minos-moderation/minos#47), answered:
 | # | Question | Answer (fixture key) |
 |---|---|---|
 | 1 | `Widoczne SLOWO` and n unclosed `[url=http://a.pl]x` (n = 340: 6 135 B; 1000: 18 015 B), reply and thread, default `pcre.backtrack_limit` (1 000 000, JIT on) | MyBB stores all four. Its own `[url=…]` patterns stop with `PREG_BACKTRACK_LIMIT_ERROR` (2), and `showthread.php` shows an EMPTY body — not even `SLOWO` — with or without the parser's output check. The plugin holds each as `text_error`, nothing sent. A reader sees nothing, so sending the raw message instead (audit R1, step 2) is not needed (`q1_pcre`). |
-| 2 | Subscribers (thread by e-mail, thread by PM, forum by e-mail) when a held post is approved | A post visible at once queues one e-mail, one PM, one forum e-mail (the control). A reply and a thread the plugin publishes through the webhook queue none; a reply a moderator approves in the ModCP queue, none either: MyBB 1.8.41 notifies only at insert time (`q2_notifications`). |
+| 2 | Subscribers (thread by e-mail, thread by PM, forum by e-mail) when a held post is approved | A post visible at once queues one e-mail, one PM, one forum e-mail (the control). A reply and a thread the plugin publishes through the webhook with its own notifications off queue none; a reply a moderator approves in the ModCP queue, none either: MyBB 1.8.41 notifies only at insert time (`q2_notifications`). With the plugin's notifications on (K-31), the same publication queues exactly what the control did, the failure mode's publication (fail-open, `task.php`) one e-mail and one PM, the late verdict after it and a blocked reply nothing; no warning in MyBB's task log or error log (`k31_notifications`). |
 | 3 | A poll on a thread that waits for its verdict | `newthread.php` with "post a poll" answers with its redirect page; the poll form (`polls.php?action=newpoll`) refuses the author: "The specified thread does not exist". A direct `do_newpoll` POST by the author still creates the poll (hooks `polls_newpoll_start`, `polls_do_newpoll_start`, `_process`, `_end`), and the plugin sends the thread again as revision `.1` with the poll (`q3_polls`). |
 | 4 | May a "Registered" author edit their own unapproved post | Not with MyBB's default `showownunapproved` = off (no permission); with it on, `editpost.php` shows the form and saves, and the plugin sends the edit as revision `.1` (`q4_edit_own_unapproved`). |
 | 5 | Is a reply's own subject shown | Yes: in the linear view, the threaded view, the printable version and post search results; the plugin sends it in front of the reply (`q5_reply_subject`). |

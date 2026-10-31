@@ -28,6 +28,10 @@ use Minos\Client\WebhookPayload;
  *   still holds it;
  * - `wsparcie` → the row is flagged and listed on the ACP page, whatever the verdict.
  *
+ * A post the plugin publishes from the queue (a verdict, the failure mode in `fail-open`)
+ * notifies its subscribers as MyBB notifies them of a post visible at once, by setting and
+ * once ({@see publish}, shared rule D9.8).
+ *
  * A verdict that arrives AFTER the failure mode published a post ({@see late}) is still
  * applied while the post is public and untouched: `zablokowane` sends it back to the
  * queue, `ocenzurowane` follows the setting. One that arrives after the failure mode held
@@ -100,13 +104,16 @@ final class Applier
             } else {
                 switch ($payload['kwalifikacja']) {
                     case 'bezpieczne':
-                        $this->platform->approve($post);
+                        $this->publish($post, $settings, $now);
                         $status = Status::PUBLISHED;
                         break;
                     case 'ocenzurowane':
-                        $status = $this->censor($row, $post, $payload['ocenzurowany'], $sent, $settings)
-                            ? $this->approved($post, Status::CENSORED)
-                            : Status::HELD;
+                        if ($this->censor($row, $post, $payload['ocenzurowany'], $sent, $settings)) {
+                            $this->publish($post, $settings, $now);
+                            $status = Status::CENSORED;
+                        } else {
+                            $status = Status::HELD;
+                        }
                         break;
                     default: // 'zablokowane' — parse() admits nothing else
                         if ($settings->softDeleteBlocked()) {
@@ -141,7 +148,7 @@ final class Applier
         $auto = 0;
         if ($status === null) {
             if ($settings->failOpen()) {
-                $this->platform->approve($post);
+                $this->publish($post, $settings, $now);
                 $status = Status::PUBLISHED;
                 $auto = 1;
             } else {
@@ -319,14 +326,38 @@ final class Applier
     }
 
     /**
-     * Approves a post and returns the status to record.
+     * Publishes a held post: approves it the way a moderator does, then — by setting — sends
+     * its thread's or forum's subscribers what MyBB sends for a post visible at once (shared
+     * rule D9.8: MyBB sends nothing on an approval). Once: only the plugin's own publication
+     * of a post from the queue gets here — a late verdict on a post the failure mode
+     * published ({@see late}) never does, and a moderator's approval is MyBB's own.
      *
-     * @param array<string,mixed> $post
+     * A notification that fails is that step's failure alone: logged by step (`notify`) and
+     * post id, never its message; the post stays published.
+     *
+     * @param array<string,mixed> $post     The post ({@see Platform::post}).
+     * @param Settings            $settings The settings.
+     * @param int                 $now      Unix seconds.
      */
-    private function approved(array $post, string $status): string
+    private function publish(array $post, Settings $settings, int $now): void
     {
+        $before = null;
+        if ($settings->notifySubscribers()) {
+            try {
+                $before = $this->platform->lastPosts($post);
+            } catch (\Throwable $e) {
+                $this->platform->log('error', 'notify', (int)$post['pid'], $now);
+            }
+        }
         $this->platform->approve($post);
-        return $status;
+        if ($before === null) {
+            return;
+        }
+        try {
+            $this->platform->notifySubscribers($post, $before);
+        } catch (\Throwable $e) {
+            $this->platform->log('error', 'notify', (int)$post['pid'], $now);
+        }
     }
 
     /**

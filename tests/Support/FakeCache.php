@@ -7,7 +7,8 @@ namespace Minos\MyBB\Tests\Support;
 use ArrayObject;
 
 /**
- * MyBB's `$cache` (datacache): `read`, `update`, `delete` and `update_tasks`, with MyBB
+ * MyBB's `$cache` (datacache): `read`, `update`, `delete`, `update_tasks` and
+ * `update_mailqueue`, with MyBB
  * 1.8.41's semantics (`inc/class_datacache.php`, database mode): every entry is loaded
  * into the request's own copy when the request begins; `read($name)` answers from that
  * copy, `read($name, true)` from the database (and refreshes the copy); `update` changes
@@ -64,6 +65,14 @@ final class FakeCache
     public function update_tasks()
     {
         $this->tasksUpdated++;
+    }
+
+    /** MyBB: the `mailqueue` entry's `queue_size` from the table. */
+    public function update_mailqueue($lastRun = 0, $lockTime = 0)
+    {
+        global $db;
+        $query = $db->simple_select('mailqueue', 'COUNT(*) AS queue_size');
+        $this->update('mailqueue', ['queue_size' => (int)$db->fetch_field($query, 'queue_size'), 'locked' => (int)$lockTime]);
     }
 
     /**

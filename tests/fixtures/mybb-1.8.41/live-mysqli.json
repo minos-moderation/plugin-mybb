@@ -9,7 +9,7 @@
         "engine": "mysqli",
         "version": "8.0.46"
     },
-    "recorded": "2026-10-28",
+    "recorded": "2026-10-31",
     "source": "tests/Live/LiveForumTest.php through bin/verify-mybb-1841.sh",
     "answers": {
         "q7_schema": {
@@ -287,6 +287,40 @@
                     1
                 ]
             }
+        },
+        "k31_notifications": {
+            "published_by_the_plugin": {
+                "thread_mail": 1,
+                "forum_mail": 1,
+                "thread_pm": 1
+            },
+            "webhook_answers": [
+                {
+                    "status": 200,
+                    "body": ""
+                },
+                {
+                    "status": 200,
+                    "body": ""
+                }
+            ],
+            "published_by_the_failure_mode": {
+                "thread_mail": 1,
+                "forum_mail": 0,
+                "thread_pm": 1
+            },
+            "late_verdict_after_it": {
+                "thread_mail": 0,
+                "forum_mail": 0,
+                "thread_pm": 0
+            },
+            "blocked": {
+                "thread_mail": 0,
+                "forum_mail": 0,
+                "thread_pm": 0
+            },
+            "task_log_warnings": 0,
+            "plugin_errors_logged": 0
         }
     }
 }

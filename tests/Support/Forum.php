@@ -30,6 +30,9 @@ final class Forum
     /** The forum posts go to unless a test says otherwise. */
     public const FID = 2;
 
+    /** When the forum's thread to reply to was written ({@see thread}). */
+    public const HOUR_AGO = TIME_NOW - 3600;
+
     /** @var PDO */
     public $pdo;
 
@@ -80,8 +83,8 @@ final class Forum
         $GLOBALS['cache'] = $forum->cache;
         $GLOBALS['lang'] = $forum->lang;
         $GLOBALS['page'] = $forum->page;
-        $GLOBALS['minos_test'] = ['moderators' => [], 'forum_permissions' => [], 'moderation' => [], 'task_log' => [],
-            'throw_on' => [], 'throw_after' => []];
+        $GLOBALS['minos_test'] = ['moderators' => [], 'forum_permissions' => [], 'user_permissions' => [], 'moderation' => [],
+            'task_log' => [], 'throw_on' => [], 'throw_after' => [], 'pms' => [], 'badwords' => []];
         if (!$fresh) {
             rebuild_settings();
         }
@@ -149,8 +152,8 @@ final class Forum
      *
      * @param bool                $thread  A new thread (else a reply to {@see thread}).
      * @param string              $message The message (MyCode source).
-     * @param array<string,mixed> $options `subject`, `fid`, `tid`, `uid`, `savedraft`, `replyto`
-     *     (the post whose reply or quote button was used).
+     * @param array<string,mixed> $options `subject`, `fid`, `tid`, `uid`, `username`, `savedraft`,
+     *     `replyto` (the post whose reply or quote button was used).
      * @return FakePostHandler The handler, with `return_values`.
      */
     public function write(bool $thread, string $message, array $options = []): FakePostHandler
@@ -181,13 +184,16 @@ final class Forum
                 $visible = 0;
             }
         }
+        $username = (string)($options['username'] ?? 'Autor Testowy');
         if ($thread) {
             $tid = $this->db->insert_query('threads', ['fid' => $fid, 'subject' => $this->db->escape_string($subject),
-                'uid' => $uid, 'firstpost' => 0, 'visible' => $visible]);
+                'uid' => $uid, 'username' => $this->db->escape_string($username), 'firstpost' => 0, 'visible' => $visible,
+                'dateline' => TIME_NOW]);
         }
         $pid = $this->db->insert_query('posts', ['tid' => $tid, 'replyto' => (int)$handler->data['replyto'], 'fid' => $fid, 'uid' => $uid,
-            'subject' => $this->db->escape_string($subject), 'message' => $this->db->escape_string($message),
-            'ipaddress' => '203.0.113.77', 'visible' => $visible]);
+            'username' => $this->db->escape_string($username), 'subject' => $this->db->escape_string($subject),
+            'message' => $this->db->escape_string($message), 'ipaddress' => '203.0.113.77', 'visible' => $visible,
+            'dateline' => TIME_NOW]);
         if ($thread) {
             $this->db->update_query('threads', ['firstpost' => $pid], "tid='" . $tid . "'");
             $handler->return_values = ['pid' => $pid, 'tid' => $tid, 'visible' => $visible];
@@ -287,12 +293,85 @@ final class Forum
      */
     public function thread(): int
     {
+        // An hour old: its last post is what a subscriber's last visit is compared with.
         $tid = $this->db->insert_query('threads', ['fid' => self::FID, 'subject' => 'Wątek', 'uid' => 1,
-            'firstpost' => 0, 'visible' => 1]);
-        $pid = $this->db->insert_query('posts', ['tid' => $tid, 'fid' => self::FID, 'uid' => 1,
-            'subject' => 'Wątek', 'message' => 'Pierwszy post.', 'ipaddress' => '', 'visible' => 1]);
+            'username' => 'Założyciel', 'firstpost' => 0, 'visible' => 1, 'dateline' => self::HOUR_AGO,
+            'lastpost' => self::HOUR_AGO]);
+        $pid = $this->db->insert_query('posts', ['tid' => $tid, 'fid' => self::FID, 'uid' => 1, 'username' => 'Założyciel',
+            'subject' => 'Wątek', 'message' => 'Pierwszy post.', 'ipaddress' => '', 'visible' => 1, 'dateline' => self::HOUR_AGO]);
         $this->db->update_query('threads', ['firstpost' => $pid], "tid='" . $tid . "'");
+        $this->db->update_query('forums', ['lastpost' => self::HOUR_AGO], "fid='" . self::FID . "'");
         return $tid;
+    }
+
+    /**
+     * A registered user (group 2, "Registered").
+     *
+     * @param array<string,mixed> $fields Columns over the defaults: `language` '' (the
+     *     board's), `lastactive` now (visited after the last post), `usergroup` 2.
+     */
+    public function user(int $uid, string $name, array $fields = []): void
+    {
+        $this->db->insert_query('users', $this->escapedRow($fields + ['uid' => $uid, 'username' => $name,
+            'email' => strtolower($name) . '@example.com', 'language' => '', 'lastactive' => TIME_NOW, 'usergroup' => 2,
+            'receivepms' => 1, 'pmnotify' => 0]));
+    }
+
+    /**
+     * A user subscribes to a thread: `notification` 1 by e-mail, 2 by private message, 0 none.
+     */
+    public function subscribe(int $uid, int $tid, int $notification): void
+    {
+        $this->db->insert_query('threadsubscriptions', ['uid' => $uid, 'tid' => $tid, 'notification' => $notification]);
+    }
+
+    /**
+     * A user subscribes to a forum.
+     */
+    public function subscribeForum(int $uid, int $fid = self::FID): void
+    {
+        $this->db->insert_query('forumsubscriptions', ['uid' => $uid, 'fid' => $fid]);
+    }
+
+    /**
+     * @return array<int,array<string,mixed>> The e-mails MyBB's mail queue holds, oldest first.
+     */
+    public function mails(): array
+    {
+        return $this->all('SELECT * FROM ' . TABLE_PREFIX . 'mailqueue ORDER BY mid');
+    }
+
+    /**
+     * @return array<int,array<string,mixed>> The private messages in users' inboxes, oldest first.
+     */
+    public function pms(): array
+    {
+        return $this->all('SELECT * FROM ' . TABLE_PREFIX . 'privatemessages ORDER BY pmid');
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private function all(string $sql): array
+    {
+        $rows = [];
+        $query = $this->db->query($sql);
+        while ($row = $this->db->fetch_array($query)) {
+            $rows[] = $row;
+        }
+        return $rows;
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     * @return array<string,mixed>
+     */
+    private function escapedRow(array $row): array
+    {
+        foreach ($row as $column => $value) {
+            $row[$column] = is_int($value) ? $value : $this->db->escape_string((string)$value);
+        }
+        return $row;
     }
 
     /**
@@ -347,14 +426,31 @@ final class Forum
                 . " nextrun INTEGER NOT NULL DEFAULT 0, lastrun INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1,"
                 . " logging INTEGER NOT NULL DEFAULT 0, locked INTEGER NOT NULL DEFAULT 0)",
             "CREATE TABLE {$p}threads (tid INTEGER PRIMARY KEY, fid INTEGER NOT NULL DEFAULT 0, subject TEXT NOT NULL DEFAULT '',"
-                . " uid INTEGER NOT NULL DEFAULT 0, firstpost INTEGER NOT NULL DEFAULT 0, visible INTEGER NOT NULL DEFAULT 1,"
-                . " poll INTEGER NOT NULL DEFAULT 0)",
+                . " uid INTEGER NOT NULL DEFAULT 0, username TEXT NOT NULL DEFAULT '', firstpost INTEGER NOT NULL DEFAULT 0,"
+                . " visible INTEGER NOT NULL DEFAULT 1, poll INTEGER NOT NULL DEFAULT 0, dateline INTEGER NOT NULL DEFAULT 0,"
+                . " lastpost INTEGER NOT NULL DEFAULT 0)",
+            "CREATE TABLE {$p}forums (fid INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT '', lastpost INTEGER NOT NULL DEFAULT 0)",
+            "INSERT INTO {$p}forums (fid, name) VALUES (" . self::FID . ", 'Forum testowe')",
+            "CREATE TABLE {$p}users (uid INTEGER PRIMARY KEY, username TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '',"
+                . " language TEXT NOT NULL DEFAULT '', lastactive INTEGER NOT NULL DEFAULT 0, usergroup INTEGER NOT NULL DEFAULT 2,"
+                . " receivepms INTEGER NOT NULL DEFAULT 1, pmnotify INTEGER NOT NULL DEFAULT 0)",
+            "CREATE TABLE {$p}usergroups (gid INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT '', isbannedgroup INTEGER NOT NULL DEFAULT 0)",
+            "INSERT INTO {$p}usergroups (gid, title, isbannedgroup) VALUES (2, 'Registered', 0), (7, 'Banned', 1)",
+            "CREATE TABLE {$p}threadsubscriptions (sid INTEGER PRIMARY KEY, uid INTEGER NOT NULL DEFAULT 0, tid INTEGER NOT NULL DEFAULT 0,"
+                . " notification INTEGER NOT NULL DEFAULT 0)",
+            "CREATE TABLE {$p}forumsubscriptions (fsid INTEGER PRIMARY KEY, fid INTEGER NOT NULL DEFAULT 0, uid INTEGER NOT NULL DEFAULT 0)",
+            "CREATE TABLE {$p}mailqueue (mid INTEGER PRIMARY KEY, mailto TEXT NOT NULL DEFAULT '', mailfrom TEXT NOT NULL DEFAULT '',"
+                . " subject TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '', headers TEXT NOT NULL DEFAULT '')",
+            "CREATE TABLE {$p}privatemessages (pmid INTEGER PRIMARY KEY, uid INTEGER NOT NULL DEFAULT 0, toid INTEGER NOT NULL DEFAULT 0,"
+                . " fromid INTEGER NOT NULL DEFAULT 0, folder INTEGER NOT NULL DEFAULT 1, subject TEXT NOT NULL DEFAULT '',"
+                . " message TEXT NOT NULL DEFAULT '')",
             "CREATE TABLE {$p}polls (pid INTEGER PRIMARY KEY, tid INTEGER NOT NULL DEFAULT 0, question TEXT NOT NULL DEFAULT '',"
                 . " options TEXT NOT NULL DEFAULT '', votes TEXT NOT NULL DEFAULT '', numoptions INTEGER NOT NULL DEFAULT 0)",
             "CREATE TABLE {$p}posts (pid INTEGER PRIMARY KEY, tid INTEGER NOT NULL DEFAULT 0, replyto INTEGER NOT NULL DEFAULT 0,"
                 . " fid INTEGER NOT NULL DEFAULT 0,"
-                . " uid INTEGER NOT NULL DEFAULT 0, subject TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '',"
-                . " ipaddress TEXT NOT NULL DEFAULT '', visible INTEGER NOT NULL DEFAULT 1)",
+                . " uid INTEGER NOT NULL DEFAULT 0, username TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '',"
+                . " message TEXT NOT NULL DEFAULT '', ipaddress TEXT NOT NULL DEFAULT '', visible INTEGER NOT NULL DEFAULT 1,"
+                . " dateline INTEGER NOT NULL DEFAULT 0)",
         ];
     }
 }
