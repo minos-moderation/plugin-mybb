@@ -454,6 +454,57 @@ final class LiveForumTest extends TestCase
     }
 
     /**
+     * K-41 (shared rule D9.9): a reply the gateway flags with `wsparcie` is published and
+     * reported to the moderators in MyBB's report centre — the ModCP's report list shows it
+     * with the plugin's comment, and MyBB's header announces the unread report; nothing goes
+     * to its author. With the setting "usuń (miękko)", a blocked reply with `wsparcie` stays
+     * held, not deleted.
+     */
+    public function testSupportIsReportedToTheModeratorsAndNeverDeleted(): void
+    {
+        $board = self::$board;
+        $author = $board->login(self::AUTHOR, self::$passwords[self::AUTHOR]);
+        $tid = $board->thread($board->admin(), 'Wątek sygnałów wsparcia', 'Pierwszy post administratora.')['tid'];
+        $pms = (int)$board->value('SELECT COUNT(*) FROM {p}privatemessages WHERE toid=?', [self::$uids[self::AUTHOR]]);
+        $before = html_entity_decode($board->admin()->get('index.php'), ENT_QUOTES, 'UTF-8');
+        self::assertStringNotContainsString('unread report', $before, 'the guard: no report announced before');
+
+        $safe = $board->reply($author, $tid, 'Ostatnio wszystko mnie przerasta [minos:wsparcie].');
+        $board->settings(['minos_blocked' => 'soft-delete']);
+        $blocked = $board->reply($author, $tid, 'Zablokowana odpowiedź z prośbą o pomoc [minos:blokuj] [minos:wsparcie].');
+        $board->deliver();
+        $board->settings(['minos_blocked' => 'queue']);
+
+        $reports = [];
+        foreach (['safe' => $safe, 'blocked' => $blocked] as $name => $pid) {
+            $report = $board->row("SELECT id, id2, id3, uid, reportstatus, type FROM {p}reportedcontent WHERE id=? AND type='post'", [$pid]);
+            $reports[$name] = [
+                'visible' => (int)$board->post($pid)['visible'],
+                'status' => $board->pending($pid)['status'],
+                'reports' => (int)$board->value("SELECT COUNT(*) FROM {p}reportedcontent WHERE id=? AND type='post'", [$pid]),
+                'report_names_thread_and_forum' => $report !== null && (int)$report['id2'] === $tid && (int)$report['id3'] === Board::FID,
+            ];
+        }
+        $modcp = html_entity_decode($board->admin()->get('modcp.php?action=reports'), ENT_QUOTES, 'UTF-8');
+        $index = html_entity_decode($board->admin()->get('index.php'), ENT_QUOTES, 'UTF-8');
+        $answers = [
+            'posts' => $reports,
+            'modcp_lists_the_report' => strpos($modcp, 'Minos — wsparcie') !== false && strpos($modcp, '#pid' . $safe) !== false,
+            'header_announces_it' => preg_match('#modcp\.php\?action=reports">[^<]*unread report#', $index) === 1,
+            'messages_to_the_author' => (int)$board->value('SELECT COUNT(*) FROM {p}privatemessages WHERE toid=?',
+                [self::$uids[self::AUTHOR]]) - $pms,
+        ];
+        self::$answers['k41_support'] = $answers;
+        self::assertSame(['visible' => 1, 'status' => 'published', 'reports' => 1, 'report_names_thread_and_forum' => true],
+            $reports['safe']);
+        self::assertSame(['visible' => 0, 'status' => 'held', 'reports' => 1, 'report_names_thread_and_forum' => true],
+            $reports['blocked'], 'held, not deleted');
+        self::assertTrue($answers['modcp_lists_the_report']);
+        self::assertTrue($answers['header_announces_it']);
+        self::assertSame(0, $answers['messages_to_the_author']);
+    }
+
+    /**
      * Question 3: a poll on a thread that waits for its verdict — the form, a direct post of
      * it, the hooks that ran, and what the plugin sends.
      */

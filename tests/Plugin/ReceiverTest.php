@@ -360,8 +360,9 @@ final class ReceiverTest extends PluginTestCase
         $this->forum->deliver(self::payload($pid, ['kategorie' => ['samookaleczenie'], 'wsparcie' => true]));
         $row = $this->forum->row($pid);
         self::assertSame([Status::PUBLISHED, '1', 'samookaleczenie'], [$row['status'], (string)$row['support'], $row['categories']]);
-        self::assertContains($pid, array_map('intval', array_column($this->forum->platform()->attentionRows(50), 'pid')),
+        self::assertContains($pid, array_map('intval', array_column($this->forum->platform()->supportRows(50), 'pid')),
             'the ACP page lists it');
+        self::assertCount(1, $this->forum->reports(), 'the moderators are told in the ModCP');
     }
 
     public function testAPostAModeratorAlreadyDecidedIsLeftAlone(): void

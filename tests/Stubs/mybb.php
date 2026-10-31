@@ -39,6 +39,16 @@ if (!function_exists('is_moderator')) {
     }
 
     /**
+     * MyBB: `serialize` for the arrays it stores (`my_serialize`, a safe subset).
+     *
+     * @return string
+     */
+    function my_serialize($value)
+    {
+        return serialize($value);
+    }
+
+    /**
      * MyBB: a substring that counts characters (`mb_substr` when it has it).
      *
      * @return string

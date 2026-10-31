@@ -131,8 +131,8 @@ final class AdminTest extends PluginTestCase
         } catch (PageEnded $ended) {
             $html = (string)ob_get_clean();
         }
-        self::assertStringContainsString('#' . $supported, $html);
-        self::assertStringContainsString('okaż autorowi wsparcie', $html);
+        self::assertMatchesRegularExpression('#Posty z sygnałem wsparcia</div>.*>\#' . $supported . '</a>#s', $html,
+            'on the list of its own');
         self::assertStringContainsString('abc &lt;███&gt;', $html, 'the mask of a post kept in the queue, escaped');
         self::assertStringContainsString('#' . $refused, $html);
         self::assertStringContainsString('profil_niedozwolony', $html);

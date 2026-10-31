@@ -25,9 +25,10 @@ namespace Minos\MyBB;
  * - A page under Tools & Maintenance → Logs → "Minos — dziennik": the configuration's
  *   state, the verdicts of the last 7 days ({@see verdictFigures}: the median and the 95th
  *   percentile of the time from the gateway's `202` to the verdict, and how many of each
- *   verdict), the posts that need a look (held, waiting, and those the gateway flagged with
- *   `wsparcie` — the author may need support) with the gateway's masked text of a censored
- *   post the plugin kept in the queue, and the log of codes.
+ *   verdict), the posts that need a look (held, waiting, published unassessed, decided by a
+ *   human) with the gateway's masked text of a censored post the plugin kept in the queue,
+ *   the posts the gateway flagged with `wsparcie` (the author may need support) on their
+ *   own list, and the log of codes. Each list shows its 50 newest rows.
  *
  * Everything shown is escaped here; the texts are the Polish language file's.
  * No PHP 8 syntax.
@@ -289,6 +290,23 @@ final class Admin
             'minos_acp_col_post', 'minos_acp_col_status', 'minos_acp_col_verdict',
             'minos_acp_col_categories', 'minos_acp_col_masked', 'minos_acp_col_support', 'minos_acp_col_time',
         ], $rows, $this->platform->lang('minos_acp_attention_desc'), $this->platform);
+
+        // `wsparcie` on its own list, which the rows above never push out (D9.9).
+        $rows = [];
+        foreach ($this->platform->supportRows(self::ROWS) as $row) {
+            $rows[] = [
+                ['url' => $this->platform->postUrl((int)$row['pid'], (int)$row['tid']), 'text' => '#' . (int)$row['pid']],
+                $this->platform->lang((int)$row['auto_published'] === 1 && $row['status'] === Status::PUBLISHED
+                    ? 'minos_status_auto_published' : 'minos_status_' . $row['status']),
+                $this->verdictLabel((string)$row['verdict']),
+                (string)$row['categories'],
+                date('Y-m-d H:i', (int)$row['submitted_at']),
+            ];
+        }
+        $html .= self::table($this->platform->lang('minos_acp_support'), [
+            'minos_acp_col_post', 'minos_acp_col_status', 'minos_acp_col_verdict', 'minos_acp_col_categories',
+            'minos_acp_col_time',
+        ], $rows, $this->platform->lang('minos_acp_support_desc'), $this->platform);
 
         $rows = [];
         foreach ($this->platform->recentLog(self::ROWS) as $entry) {

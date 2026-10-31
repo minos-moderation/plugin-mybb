@@ -342,6 +342,14 @@ final class Forum
     }
 
     /**
+     * @return array<int,array<string,mixed>> The reports in the ModCP's report centre, oldest first.
+     */
+    public function reports(): array
+    {
+        return $this->all('SELECT * FROM ' . TABLE_PREFIX . 'reportedcontent ORDER BY rid');
+    }
+
+    /**
      * @return array<int,array<string,mixed>> The private messages in users' inboxes, oldest first.
      */
     public function pms(): array
@@ -441,6 +449,17 @@ final class Forum
             "CREATE TABLE {$p}forumsubscriptions (fsid INTEGER PRIMARY KEY, fid INTEGER NOT NULL DEFAULT 0, uid INTEGER NOT NULL DEFAULT 0)",
             "CREATE TABLE {$p}mailqueue (mid INTEGER PRIMARY KEY, mailto TEXT NOT NULL DEFAULT '', mailfrom TEXT NOT NULL DEFAULT '',"
                 . " subject TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '', headers TEXT NOT NULL DEFAULT '')",
+            "CREATE TABLE {$p}reportreasons (rid INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT '', appliesto TEXT NOT NULL DEFAULT '',"
+                . " extra INTEGER NOT NULL DEFAULT 0, disporder INTEGER NOT NULL DEFAULT 0)",
+            // MyBB 1.8.41's install data (`install/resources/mysql_db_inserts.php`).
+            "INSERT INTO {$p}reportreasons (rid, title, appliesto, extra, disporder) VALUES (1, '<lang:report_reason_other>', 'all', 1, 99),"
+                . " (2, '<lang:report_reason_rules>', 'all', 0, 1), (3, '<lang:report_reason_bad>', 'all', 0, 2),"
+                . " (4, '<lang:report_reason_spam>', 'all', 0, 3), (5, '<lang:report_reason_wrong>', 'post', 0, 4)",
+            "CREATE TABLE {$p}reportedcontent (rid INTEGER PRIMARY KEY, id INTEGER NOT NULL DEFAULT 0, id2 INTEGER NOT NULL DEFAULT 0,"
+                . " id3 INTEGER NOT NULL DEFAULT 0, uid INTEGER NOT NULL DEFAULT 0, reportstatus INTEGER NOT NULL DEFAULT 0,"
+                . " reasonid INTEGER NOT NULL DEFAULT 0, reason TEXT NOT NULL DEFAULT '', type TEXT NOT NULL DEFAULT '',"
+                . " reports INTEGER NOT NULL DEFAULT 0, reporters TEXT NOT NULL DEFAULT '', dateline INTEGER NOT NULL DEFAULT 0,"
+                . " lastreport INTEGER NOT NULL DEFAULT 0)",
             "CREATE TABLE {$p}privatemessages (pmid INTEGER PRIMARY KEY, uid INTEGER NOT NULL DEFAULT 0, toid INTEGER NOT NULL DEFAULT 0,"
                 . " fromid INTEGER NOT NULL DEFAULT 0, folder INTEGER NOT NULL DEFAULT 1, subject TEXT NOT NULL DEFAULT '',"
                 . " message TEXT NOT NULL DEFAULT '')",

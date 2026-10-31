@@ -521,6 +521,25 @@
             },
             "task_log_warnings": 0,
             "plugin_errors_logged": 0
+        },
+        "k41_support": {
+            "posts": {
+                "safe": {
+                    "visible": 1,
+                    "status": "published",
+                    "reports": 1,
+                    "report_names_thread_and_forum": true
+                },
+                "blocked": {
+                    "visible": 0,
+                    "status": "held",
+                    "reports": 1,
+                    "report_names_thread_and_forum": true
+                }
+            },
+            "modcp_lists_the_report": true,
+            "header_announces_it": true,
+            "messages_to_the_author": 0
         }
     }
 }

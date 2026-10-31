@@ -22,6 +22,7 @@ final class LiveFixturesTest extends TestCase
         'q1_pcre', 'q2_notifications', 'q3_polls', 'q4_edit_own_unapproved', 'q5_reply_subject',
         'q6_counters', 'q7_schema', 'q7_claim', 'c39_webhook_request_ms', 'html_forum_page',
         'activation_adds_a_missing_column', 'k43_late_after_timeout', 'k31_notifications',
+        'k41_support',
     ];
 
     /**

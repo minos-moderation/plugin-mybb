@@ -8,7 +8,7 @@ namespace Minos\MyBB;
  * The ONE place the plugin touches MyBB: its globals (`$mybb`, `$db`, `$cache`, `$lang`,
  * `$page`), its functions (`is_moderator`, `forum_permissions`, `get_forum`,
  * `rebuild_settings`, `fetch_next_run`, `add_task_log`, `get_post_link`,
- * `get_thread_link`, `my_substr`), its classes (`Moderation`, `postParser`, `MyLanguage`,
+ * `get_thread_link`, `my_substr`, `my_serialize`), its classes (`Moderation`, `postParser`, `MyLanguage`,
  * `PMDataHandler`) and its tables.
  * Every other class works through this one, so a MyBB change lands here, and the tests run
  * the real class against hand-written stand-ins for those globals (`tests/Stubs/`).
@@ -570,6 +570,54 @@ final class Platform
     }
 
     /**
+     * Reports a post to the forum's moderators in MyBB's report centre (ModCP → reported
+     * content), as `add_report($report, 'post')` (`inc/functions_modcp.php`) stores one: a
+     * `reportedcontent` row — `id` the post, `id2` its thread, `id3` its forum (what the
+     * ModCP filters by moderated forum), reporter uid 0 (the plugin, no user), the board's
+     * "Other" reason (`<lang:report_reason_other>`, the reason that carries a comment) with
+     * the text as its comment, unread — then `$cache->update_reportedcontent()`, which is
+     * what MyBB's header reads for its "unread reports" notice to moderators. `add_report`
+     * itself is not called: with the board's `reportmethod` set to e-mail or PMs it calls
+     * `send_report`, which reads the reporting user's session and page globals the webhook
+     * and the task do not have; the report centre and the header notice are MyBB's own.
+     * A report of the plugin's still unread for the post is not doubled.
+     *
+     * @param int    $pid    The post.
+     * @param string $reason The comment (cut to MyBB's 250 characters): never content, a key
+     *     or a secret.
+     * @param int    $now    Unix seconds.
+     * @return bool True when a report was added.
+     */
+    public function reportForSupport(int $pid, string $reason, int $now): bool
+    {
+        $query = $this->db->simple_select('posts', 'pid, tid, fid', "pid='" . $pid . "'");
+        $post = $this->db->fetch_array($query);
+        if (!is_array($post)) {
+            return false;
+        }
+        $query = $this->db->simple_select('reportedcontent', 'rid',
+            "id='" . $pid . "' AND type='post' AND uid='0' AND reportstatus='0'");
+        if ((int)$this->db->fetch_field($query, 'rid') > 0) {
+            return false;
+        }
+        $query = $this->db->simple_select('reportreasons', 'rid', "title='<lang:report_reason_other>'");
+        $reasonId = (int)$this->db->fetch_field($query, 'rid');
+        if ($reasonId === 0) {
+            $query = $this->db->simple_select('reportreasons', 'rid', "extra='1'", ['order_by' => 'disporder', 'limit' => 1]);
+            $reasonId = (int)$this->db->fetch_field($query, 'rid');
+        }
+        $this->db->insert_query('reportedcontent', [
+            'id' => (int)$post['pid'], 'id2' => (int)$post['tid'], 'id3' => (int)$post['fid'], 'uid' => 0,
+            'reportstatus' => 0, 'reasonid' => $reasonId,
+            'reason' => $this->db->escape_string(mb_substr($reason, 0, 250, 'UTF-8')), 'type' => 'post',
+            'reports' => 1, 'dateline' => $now, 'lastreport' => $now,
+            'reporters' => $this->db->escape_string(my_serialize([0])),
+        ]);
+        $this->cache->update_reportedcontent();
+        return true;
+    }
+
+    /**
      * A post's address, for the ACP page.
      *
      * @param int $pid The post.
@@ -789,9 +837,10 @@ final class Platform
     }
 
     /**
-     * The newest rows a moderator should look at: held, flagged for support, waiting, decided
-     * by a human before the verdict came (a moderator's edit, say), or left to a human after a
-     * step kept failing.
+     * The newest rows a moderator should look at: held, waiting, published unassessed by the
+     * failure mode, decided by a human before the verdict came (a moderator's edit, say), or
+     * left to a human after a step kept failing. Rows flagged with `wsparcie` have their own
+     * list ({@see supportRows}).
      *
      * @param int $limit At most this many.
      * @return array<int,array<string,mixed>> Rows, newest first.
@@ -799,8 +848,21 @@ final class Platform
     public function attentionRows(int $limit): array
     {
         return $this->rows(self::PENDING_TABLE,
-            "support='1' OR auto_published='1' OR verdict='" . Status::REASON_APPLY_ERROR . "' OR status IN ('"
+            "auto_published='1' OR verdict='" . Status::REASON_APPLY_ERROR . "' OR status IN ('"
                 . implode("','", [Status::HELD, Status::PENDING, Status::RETRY, Status::APPLYING, Status::SUPERSEDED]) . "')",
+            ['order_by' => 'submitted_at', 'order_dir' => 'DESC', 'limit' => $limit]);
+    }
+
+    /**
+     * The newest rows the gateway flagged with `wsparcie` (the author may need support),
+     * whatever became of the post: their own list, which no other row pushes out.
+     *
+     * @param int $limit At most this many.
+     * @return array<int,array<string,mixed>> Rows, newest first.
+     */
+    public function supportRows(int $limit): array
+    {
+        return $this->rows(self::PENDING_TABLE, "support='1'",
             ['order_by' => 'submitted_at', 'order_dir' => 'DESC', 'limit' => $limit]);
     }
 

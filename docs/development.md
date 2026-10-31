@@ -36,7 +36,7 @@ The classes:
 | `Applier` | A verdict or the failure mode → approve, hold, soft-delete, or publish the masked text. |
 | `Task` | Timeouts, due retries, pruning. |
 | `Installer` | Settings group, tables, task; the lifecycle functions. |
-| `Admin` | Masked secrets on the settings page, the ACP notice (problems, a configuration error, a 2xx other than 202 at the gateway's address, a daily limit or overload until a given time, refused signatures), the Tools → Logs page with the last 7 days' verdict figures. |
+| `Admin` | Masked secrets on the settings page, the ACP notice (problems, a configuration error, a 2xx other than 202 at the gateway's address, a daily limit or overload until a given time, refused signatures), the Tools → Logs page with the last 7 days' verdict figures, the posts that need a look and the `wsparcie` posts on a list of their own. |
 | `Plugin` | Builds the objects once per request. |
 
 ## How the plugin holds a post
@@ -88,6 +88,24 @@ again, and a moderator's approval in the ModCP is MyBB's own (nothing sent). Not
 not have. A notification that throws is logged as `error`/`notify` with the post id; the
 post stays published. The copied block needs upkeep with every 1.8.x; the live run
 compares the counts with a post visible at once (`k31_notifications`).
+
+**`wsparcie`** (shared rule D9.9, A7). Whatever the verdict, an applied delivery with
+`wsparcie` adds a report to MyBB's report centre (`Platform::reportForSupport`): the
+`reportedcontent` row `add_report($report, 'post')` stores (`id`/`id2`/`id3` the post, its
+thread and forum, reporter uid 0, the board's "Other" reason with the plugin's comment —
+the verdict, never content, a key or a secret — unread), then
+`$cache->update_reportedcontent()`, which MyBB's header reads for its "unread reports"
+notice to moderators. `add_report` itself is not called: with the board's `reportmethod`
+set to e-mail or PMs it calls `send_report`, which reads the reporting user's session and
+the page's `$post`/`$thread`/`$forum` globals, none of which the webhook or the task has.
+A report of the plugin's still unread for the post is not doubled; one that fails is
+logged as `error`/`support` and the verdict stands. Such a post is never deleted,
+rejected or hidden automatically: `zablokowane` keeps it held even with "usuń (miękko)",
+and a late `zablokowane` (or a late `ocenzurowane` whose mask cannot be published) leaves
+a fail-open publication published. Nothing is sent to the author. The ACP page lists
+`wsparcie` rows on their own list (`Platform::supportRows`), which the other rows never
+push out. (`nieocenione` carries no `wsparcie`: `WebhookPayload::parse` reads none from a
+payload without a verdict.) Verified on a live forum: `k41_support`.
 
 ## What `tekst` is
 
@@ -329,7 +347,8 @@ hook functions MyBB would call are the ones tested:
 
 - `tests/Stubs/mybb.php`: `is_moderator`, `forum_permissions`, `rebuild_settings`,
   `fetch_next_run`, `add_task_log`, `get_post_link`, `get_thread_link`, `my_substr`,
-  `Moderation` (with MyBB's last-post update), `postParser`, `MyLanguage`, `PMDataHandler`;
+  `my_serialize`, `Moderation` (with MyBB's last-post update), `postParser`, `MyLanguage`,
+  `PMDataHandler`;
 - `tests/Support/`: `$db` over SQLite (`FakeDb`), `$mybb`, `$cache`, `$lang`, `$plugins`
   (with MyBB's "a truthy return replaces the arguments" rule), `$page`, and `Forum`, which
   posts through the hooks with MyBB 1.8.41's visibility rule;
@@ -465,6 +484,7 @@ reading the code; what the live run below goes through is verified on a real for
 | subscription notifications: inline in `insert_post`/`insert_thread`, only for `visible == 1`; none on approval — the two blocks copied (`threadsubscriptions`, `forumsubscriptions`, `users.lastactive`/`language`, `usergroups.isbannedgroup`, `mailqueue`, `threads.lastpost`, `forums.lastpost`) | `inc/datahandlers/post.php`, `inc/class_moderation.php`, `modcp.php` | `Platform::lastPosts`, `notifySubscribers` |
 | `postParser::text_parse_message`, `parse_badwords`; `my_substr`; `get_thread_link($tid, 0, 'newpost')`; `$mybb->settings['subscribeexcerpt'/'orig_bblanguage'/'bblanguage'/'enablepms']` | `inc/class_parser.php`, `inc/functions.php` | `Platform::notifySubscribers` |
 | `MyLanguage` (`set_path`, `set_language`, `load`, `language_exists`, `sprintf`; `messages`: `emailsubject_subscription`, `email_subscription`, `pmsubject_subscription`, `pm_subscription`, `emailsubject_forumsubscription`, `email_forumsubscription`, `emailbit_viewthread`; `global`: `guest`) | `inc/class_language.php`, `task.php` | `Platform::boardLanguage`, `languageFor` |
+| `add_report($report, 'post')`'s row: `reportedcontent` (`id`, `id2`, `id3`, `uid`, `reportstatus`, `reasonid`, `reason` ≤ 250, `type`, `reports`, `dateline`, `lastreport`, `reporters` by `my_serialize`), `reportreasons` (`<lang:report_reason_other>`, `extra`), `$cache->update_reportedcontent()`; the ModCP's report list (`modcp.php?action=reports`) and the header's `global_unreadreports` | `inc/functions_modcp.php`, `modcp.php`, `global.php`, `inc/class_datacache.php`, `install/resources/mysql_db_inserts.php` | `Platform::reportForSupport` |
 | `send_pm($pm, -1, true)` → `PMDataHandler` (`admin_override`, `set_data`, `validate_pm`, `insert_pm`); `$cache->update_mailqueue()` | `inc/functions.php`, `inc/datahandlers/pm.php`, `inc/class_datacache.php` | `Platform::sendPm`, `queueMail` |
 | `admin_config_settings_change` before `upsetting` is saved | `admin/modules/config/settings.php` | `Admin::onSettingsChange` |
 | `admin_formcontainer_output_row` (references; a setting row's `row_options['id']` is `row_setting_<name>`) | `admin/inc/class_form.php` | `Admin::onFormRow` |
@@ -515,7 +535,9 @@ saved through the plugin's fields (the page shows prefixes only); an author's re
 and sent once to the gateway; the signed verdict publishes it (`visible = 1`); a censored
 reply published with its mask; a late verdict for a reply MyBB's `task.php` held after the
 fail-closed timeout applied as on time, and one for a reply a moderator approved in the
-ModCP meanwhile changing nothing (`k43_late_after_timeout`); a forged signature `401` and named in the ACP; switched
+ModCP meanwhile changing nothing (`k43_late_after_timeout`); a reply with `wsparcie`
+published and reported in the ModCP's report list and the header, and a blocked one held,
+not deleted, with "usuń (miękko)", nothing to the author (`k41_support`); a forged signature `401` and named in the ACP; switched
 off or deactivated `404`, and a deactivated plugin holds and sends nothing; uninstall
 "No" keeps the rows, "Yes" drops the tables. The approval inside the webhook's request
 took 36–75 ms end to end (audit measurement C-39).
@@ -537,13 +559,14 @@ those tags, `inc/class_parser.php` `parse_message`) and hides HTML comments
 (`html_forum_page`, `reader-view.json`); an image (`[img]`, `[img=WxH]`, `[img align=…]`),
 a video of a known site and a link whose label shows nothing (`[url=X] [/url]`, an image
 inside the link) show no text, while a bare URL and `[url]X[/url]` show the address. For a
-moderator signal (K-41, K-42) MyBB 1.8.41 offers, read in the source and not exercised by
-the run: `add_report($report, $type = 'post')` (`inc/functions_modcp.php`: a
+moderator signal (K-41, K-42) MyBB 1.8.41 offers, read in the source: `add_report($report, $type = 'post')` (`inc/functions_modcp.php`: a
 `reportedcontent` row — `id` the post, `id2` its thread, `id3` its forum, `uid` the
 reporter, `reasonid`/`reason` — shown in the ModCP's report list, and with the board's
 `reportmethod` set to `email` or `pms` also sent to the moderators by `send_report`), and
 `send_pm($pm, -1, true)` (`inc/functions.php`: `subject`, `message`, `touid`,
 `receivepms`; `-1` sends as "MyBB Engine"), as `insert_post` uses it for subscriptions.
+The plugin chose the report for `wsparcie` (above), and the live run shows it in the
+ModCP's report list and the header (`k41_support`).
 
 Still not verified, and why:
 
