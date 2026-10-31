@@ -222,8 +222,9 @@ werdykt, w kolejce moderacji), werdyktem bramy albo powodem, dla którego post c
 ocenzurowanym, którego maski nie dało się opublikować — tekstem zamaskowanym przez bramę.
 Posty, które MyBB zatrzymał sam (np. forum moderuje wszystkie posty), nie mają tego
 wiersza. Wtyczka dopisuje go do listy, którą buduje MyBB (do wiersza z przyciskami
-„zatwierdź / usuń / ignoruj” danego postu); w motywie, który zmienił ten szablon tak, że
-wiersza nie da się znaleźć, uwagi trafiają na koniec listy, każda z numerem postu.
+„zatwierdź / usuń / ignoruj” danego postu); w motywie, który zachował te przyciski, ale
+nie wiersz tabeli, uwagi trafiają na koniec listy, każda z numerem postu, a w motywie bez
+tych przycisków uwag nie ma.
 
 ## Sygnał wsparcia
 

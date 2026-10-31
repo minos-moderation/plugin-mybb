@@ -122,8 +122,9 @@ queued posts (threads) from MyBB's templates into its global `$posts` (`$threads
 failure mode's reason (`minos_reason_*`), the 3000-character note when the text was cut,
 the categories, `wsparcie`, and the gateway's masked text of a censored post it kept
 (`masked_text`, shared rule A2d) — all escaped, nothing but the plugin's own row. A post
-without a row (MyBB held it itself) gets nothing; a theme whose template has no such field
-or row gets the notes at the end of the list, each naming its post. Posts published with
+without a row (MyBB held it itself) gets nothing; a theme whose template keeps the field
+but has no `</tr>` after it gets the notes at the end of the list, each naming its post, and
+one whose template has no such field gets no note at all. Posts published with
 the mask (`censored`) are on the ACP page's list of posts that need a look. Verified on a
 live forum: `k42_modqueue`.
 

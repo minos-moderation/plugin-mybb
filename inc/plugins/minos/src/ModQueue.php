@@ -19,8 +19,9 @@ namespace Minos\MyBB;
  * of a censored post it kept in the queue (shared rule A2d: the mask is shown in the
  * moderation panel). Everything is escaped here; nothing but the plugin's own row (never a
  * key, a secret or a delivery) is shown. A post the plugin did not hold (MyBB holds it for
- * its own reasons) gets nothing. A theme whose template lacks MyBB's field or row gets the
- * notes at the end of the list, each naming its post.
+ * its own reasons) gets nothing. A theme whose template keeps MyBB's form field but no
+ * table row after it gets the notes at the end of the list, each naming its post; one whose
+ * template has no such field gets no note (the post cannot be found in the list).
  * No PHP 8 syntax.
  */
 final class ModQueue
