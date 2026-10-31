@@ -6,9 +6,10 @@ namespace Minos\MyBB;
 
 /**
  * The ONE place the plugin touches MyBB: its globals (`$mybb`, `$db`, `$cache`, `$lang`,
- * `$page`), its functions (`is_moderator`, `forum_permissions`, `get_forum`,
- * `rebuild_settings`, `fetch_next_run`, `add_task_log`, `get_post_link`), its `Moderation`
- * class and its tables.
+ * `$page`, the ModCP queue's `$posts`/`$threads`), its functions (`is_moderator`, `forum_permissions`, `get_forum`,
+ * `rebuild_settings`, `fetch_next_run`, `add_task_log`, `get_post_link`,
+ * `get_thread_link`, `my_substr`, `my_serialize`), its classes (`Moderation`, `postParser`, `MyLanguage`,
+ * `PMDataHandler`) and its tables.
  * Every other class works through this one, so a MyBB change lands here, and the tests run
  * the real class against hand-written stand-ins for those globals (`tests/Stubs/`).
  *
@@ -99,6 +100,9 @@ final class Platform
 
     /** @var bool */
     private $langLoaded = false;
+
+    /** @var array<string,object> MyBB's `MyLanguage` per language, with `messages` and `global` loaded. */
+    private $languages = [];
 
     /**
      * @param object $mybb   `$mybb`.
@@ -469,6 +473,151 @@ final class Platform
     }
 
     /**
+     * What MyBB reads before it inserts a post visible at once, and its subscription
+     * notifications then compare with: the thread's last post and visibility
+     * (`insert_post`: `get_thread`) and the forum's last post (`insert_thread`: the forum's
+     * row). Read before the plugin publishes a post ({@see notifySubscribers}): the approval
+     * moves both last posts on.
+     *
+     * @param array{tid:int,fid:int} $post The post ({@see post}).
+     * @return array{thread_lastpost:int,thread_visible:int,forum_lastpost:int}
+     */
+    public function lastPosts(array $post): array
+    {
+        $query = $this->db->simple_select('threads', 'lastpost, visible', "tid='" . (int)$post['tid'] . "'");
+        $thread = $this->db->fetch_array($query);
+        $query = $this->db->simple_select('forums', 'lastpost', "fid='" . (int)$post['fid'] . "'");
+        $forum = $this->db->fetch_array($query);
+        return [
+            'thread_lastpost' => is_array($thread) ? (int)$thread['lastpost'] : 0,
+            'thread_visible'  => is_array($thread) ? (int)$thread['visible'] : 0,
+            'forum_lastpost'  => is_array($forum) ? (int)$forum['lastpost'] : 0,
+        ];
+    }
+
+    /**
+     * Queues the subscription notifications MyBB queues for a post visible at once, for a
+     * post the plugin has just published: MyBB 1.8.41 sends them only from `insert_post` and
+     * `insert_thread` (`inc/datahandlers/post.php`, the blocks after "Fetch any users
+     * subscribed to this thread" and "Queue up any forum subscription notices", only when
+     * `$visible == 1`), never from `Moderation::approve_*` (shared rule D9.8, A4 of
+     * client-php's `docs/plugin-behaviour.md`). The conditions are MyBB's, copied:
+     *
+     * - a reply, in a thread that is visible: the thread's subscribers with instant
+     *   notification (`threadsubscriptions.notification` 1 = e-mail into `mailqueue`, 2 = a
+     *   private message), but its author; a new thread: the forum's subscribers (e-mail),
+     *   but its author and members of a banned group;
+     * - "do not notify again before the visit": only a subscriber active after the thread's
+     *   (the forum's) last post before this one (`u.lastactive > lastpost`, read before the
+     *   approval: {@see lastPosts});
+     * - the right to view: `forum_permissions()` `canview` and `canviewthreads`, and in a
+     *   forum where users see only their own threads (`canonlyviewownthreads`) a subscriber
+     *   who is neither the thread's starter (replies) nor a moderator;
+     * - the recipient's language: their own when installed, else the board's
+     *   (`orig_bblanguage` for replies, `bblanguage` for threads), else `english`;
+     * - the text: MyBB's `emailsubject_subscription`/`email_subscription`,
+     *   `pmsubject_subscription`/`pm_subscription` and `emailsubject_forumsubscription`/
+     *   `email_forumsubscription` with the excerpt `text_parse_message` makes of the post as
+     *   it is now (the masked text of a censored post), cut to `subscribeexcerpt`; a guest
+     *   without a name is "Guest" in the recipient's language;
+     * - a private message as `send_pm($pm, -1, true)` sends it: from "MyBB Engine" (uid 0),
+     *   the administrator's override, nothing when the board has private messages off —
+     *   through MyBB's `PMDataHandler`, with the strings already in the recipient's language
+     *   and no IP address (the webhook and the task have no session);
+     * - `$cache->update_mailqueue()` when an e-mail was queued.
+     *
+     * Not run: the `datahandler_post_insert_subscribed` hook (it passes the post datahandler,
+     * which a publication by the plugin does not have). The block is MyBB 1.8.41's: its
+     * upkeep follows MyBB's releases, and the live run compares the counts on a real forum.
+     *
+     * @param array{pid:int,tid:int,fid:int,first:bool} $post   The post ({@see post}), now visible.
+     * @param array{thread_lastpost:int,thread_visible:int,forum_lastpost:int} $before {@see lastPosts}, read before the approval.
+     * @return int How many notifications were queued.
+     */
+    public function notifySubscribers(array $post, array $before): int
+    {
+        $query = $this->db->query(
+            'SELECT p.pid, p.uid, p.username, p.message, p.visible, t.tid, t.fid, t.uid AS thread_uid,'
+            . ' t.subject AS thread_subject, f.name AS forum_name'
+            . ' FROM ' . $this->prefix . 'posts p'
+            . ' LEFT JOIN ' . $this->prefix . 'threads t ON (t.tid=p.tid)'
+            . ' LEFT JOIN ' . $this->prefix . 'forums f ON (f.fid=t.fid)'
+            . " WHERE p.pid='" . (int)$post['pid'] . "'"
+        );
+        $row = $this->db->fetch_array($query);
+        if (!is_array($row) || (int)$row['visible'] !== 1 || (!$post['first'] && (int)$before['thread_visible'] !== 1)) {
+            return 0; // not published, or a reply in a thread still in the queue: MyBB notifies nobody
+        }
+        $this->boardLanguage();
+        if (!class_exists('postParser', false)) {
+            require_once $this->root . 'inc/class_parser.php';
+        }
+        // The webhook and the task have no session user: MyBB's permission functions compare
+        // with `$mybb->user['uid']`, which is then a guest's 0, for this call only.
+        $sessionless = !isset($this->mybb->user['uid']);
+        if ($sessionless) {
+            $this->mybb->user['uid'] = 0;
+        }
+        try {
+            return $post['first']
+                ? $this->notifyForum($row, new \postParser(), (int)$before['forum_lastpost'])
+                : $this->notifyThread($row, new \postParser(), (int)$before['thread_lastpost']);
+        } finally {
+            if ($sessionless) {
+                unset($this->mybb->user['uid']);
+            }
+        }
+    }
+
+    /**
+     * Reports a post to the forum's moderators in MyBB's report centre (ModCP → reported
+     * content), as `add_report($report, 'post')` (`inc/functions_modcp.php`) stores one: a
+     * `reportedcontent` row — `id` the post, `id2` its thread, `id3` its forum (what the
+     * ModCP filters by moderated forum), reporter uid 0 (the plugin, no user), the board's
+     * "Other" reason (`<lang:report_reason_other>`, the reason that carries a comment) with
+     * the text as its comment, unread — then `$cache->update_reportedcontent()`, which is
+     * what MyBB's header reads for its "unread reports" notice to moderators. `add_report`
+     * itself is not called: with the board's `reportmethod` set to e-mail or PMs it calls
+     * `send_report`, which reads the reporting user's session and page globals the webhook
+     * and the task do not have; the report centre and the header notice are MyBB's own.
+     * A report of the plugin's still unread for the post is not doubled.
+     *
+     * @param int    $pid    The post.
+     * @param string $reason The comment (cut to MyBB's 250 characters): never content, a key
+     *     or a secret.
+     * @param int    $now    Unix seconds.
+     * @return bool True when a report was added.
+     */
+    public function reportForSupport(int $pid, string $reason, int $now): bool
+    {
+        $query = $this->db->simple_select('posts', 'pid, tid, fid', "pid='" . $pid . "'");
+        $post = $this->db->fetch_array($query);
+        if (!is_array($post)) {
+            return false;
+        }
+        $query = $this->db->simple_select('reportedcontent', 'rid',
+            "id='" . $pid . "' AND type='post' AND uid='0' AND reportstatus='0'");
+        if ((int)$this->db->fetch_field($query, 'rid') > 0) {
+            return false;
+        }
+        $query = $this->db->simple_select('reportreasons', 'rid', "title='<lang:report_reason_other>'");
+        $reasonId = (int)$this->db->fetch_field($query, 'rid');
+        if ($reasonId === 0) {
+            $query = $this->db->simple_select('reportreasons', 'rid', "extra='1'", ['order_by' => 'disporder', 'limit' => 1]);
+            $reasonId = (int)$this->db->fetch_field($query, 'rid');
+        }
+        $this->db->insert_query('reportedcontent', [
+            'id' => (int)$post['pid'], 'id2' => (int)$post['tid'], 'id3' => (int)$post['fid'], 'uid' => 0,
+            'reportstatus' => 0, 'reasonid' => $reasonId,
+            'reason' => $this->db->escape_string(mb_substr($reason, 0, 250, 'UTF-8')), 'type' => 'post',
+            'reports' => 1, 'dateline' => $now, 'lastreport' => $now,
+            'reporters' => $this->db->escape_string(my_serialize([0])),
+        ]);
+        $this->cache->update_reportedcontent();
+        return true;
+    }
+
+    /**
      * A post's address, for the ACP page.
      *
      * @param int $pid The post.
@@ -541,6 +690,26 @@ final class Platform
             }
         }
         return false;
+    }
+
+    /**
+     * Takes a row the failure mode held because its verdict did not come in time (`held`
+     * with `timeout`), for a verdict that comes late after all (shared rule D9.10, A6 of
+     * client-php's `docs/plugin-behaviour.md`): one conditional `UPDATE`, as
+     * {@see claimPending}, recording `held` as the status it was claimed from.
+     *
+     * @param int      $pid The post.
+     * @param int      $now Unix seconds.
+     * @param int|null $rev Only while the row is at this revision.
+     * @return bool True for the one caller that changed it.
+     */
+    public function claimTimedOut(int $pid, int $now, ?int $rev = null): bool
+    {
+        $this->db->update_query(self::PENDING_TABLE, [
+            'status' => Status::APPLYING, 'claimed_from' => Status::HELD, 'claimed_at' => $now,
+        ], "pid='" . $pid . "' AND status='" . Status::HELD . "' AND verdict='" . Status::REASON_TIMEOUT . "'"
+            . ($rev !== null ? " AND rev='" . $rev . "'" : ''));
+        return (int)$this->db->affected_rows() === 1;
     }
 
     /**
@@ -668,9 +837,11 @@ final class Platform
     }
 
     /**
-     * The newest rows a moderator should look at: held, flagged for support, waiting, decided
-     * by a human before the verdict came (a moderator's edit, say), or left to a human after a
-     * step kept failing.
+     * The newest rows a moderator should look at: held, waiting, published unassessed by the
+     * failure mode, published with the gateway's mask (`censored`), decided by a human before
+     * the verdict came (a moderator's edit, say), or left to a human after a step kept
+     * failing. Rows flagged with `wsparcie` have their own
+     * list ({@see supportRows}).
      *
      * @param int $limit At most this many.
      * @return array<int,array<string,mixed>> Rows, newest first.
@@ -678,8 +849,22 @@ final class Platform
     public function attentionRows(int $limit): array
     {
         return $this->rows(self::PENDING_TABLE,
-            "support='1' OR auto_published='1' OR verdict='" . Status::REASON_APPLY_ERROR . "' OR status IN ('"
-                . implode("','", [Status::HELD, Status::PENDING, Status::RETRY, Status::APPLYING, Status::SUPERSEDED]) . "')",
+            "auto_published='1' OR verdict='" . Status::REASON_APPLY_ERROR . "' OR status IN ('"
+                . implode("','", [Status::HELD, Status::PENDING, Status::RETRY, Status::APPLYING, Status::SUPERSEDED,
+                    Status::CENSORED]) . "')",
+            ['order_by' => 'submitted_at', 'order_dir' => 'DESC', 'limit' => $limit]);
+    }
+
+    /**
+     * The newest rows the gateway flagged with `wsparcie` (the author may need support),
+     * whatever became of the post: their own list, which no other row pushes out.
+     *
+     * @param int $limit At most this many.
+     * @return array<int,array<string,mixed>> Rows, newest first.
+     */
+    public function supportRows(int $limit): array
+    {
+        return $this->rows(self::PENDING_TABLE, "support='1'",
             ['order_by' => 'submitted_at', 'order_dir' => 'DESC', 'limit' => $limit]);
     }
 
@@ -984,6 +1169,106 @@ final class Platform
         add_task_log($task, $message);
     }
 
+    // ---------------------------------------------------------------- the ModCP
+
+    /**
+     * The list of queued posts or threads `modcp.php` has built (`action=modqueue`) and puts
+     * into its page after the `modcp_modqueue_posts_end` / `_threads_end` hooks: the page's
+     * global `$posts` or `$threads`.
+     *
+     * @param string $list `posts` or `threads`.
+     * @return string The HTML; '' when there is none.
+     */
+    public function modQueueList(string $list): string
+    {
+        $html = $GLOBALS[$list === 'threads' ? 'threads' : 'posts'] ?? '';
+        return is_string($html) ? $html : '';
+    }
+
+    /**
+     * Gives `modcp.php` the list back with the plugin's notes in it.
+     *
+     * @param string $list `posts` or `threads`.
+     * @param string $html The HTML.
+     */
+    public function setModQueueList(string $list, string $html): void
+    {
+        $GLOBALS[$list === 'threads' ? 'threads' : 'posts'] = $html;
+    }
+
+    /**
+     * The plugin's rows of some posts.
+     *
+     * @param array<int,int> $pids The posts.
+     * @return array<int,array<string,mixed>> Rows by post id.
+     */
+    public function pendingRows(array $pids): array
+    {
+        return $this->rowsBy('pid', $pids, '');
+    }
+
+    /**
+     * The plugin's rows of some threads' first posts.
+     *
+     * @param array<int,int> $tids The threads.
+     * @return array<int,array<string,mixed>> Rows by thread id.
+     */
+    public function threadRows(array $tids): array
+    {
+        return $this->rowsBy('tid', $tids, " AND is_thread='1'");
+    }
+
+    /**
+     * @param array<int,int> $ids
+     * @return array<int,array<string,mixed>>
+     */
+    private function rowsBy(string $column, array $ids, string $more): array
+    {
+        $ids = array_values(array_filter(array_map('intval', $ids)));
+        if ($ids === []) {
+            return [];
+        }
+        $rows = [];
+        foreach ($this->rows(self::PENDING_TABLE, $column . " IN ('" . implode("','", $ids) . "')" . $more, []) as $row) {
+            $rows[(int)$row[$column]] = $row;
+        }
+        return $rows;
+    }
+
+    /**
+     * The report `modcp.php` (`action=reports`) is about to render, in its global `$report`
+     * at the `modcp_reports_report` hook (run before the `modcp_reports_report` template).
+     *
+     * @return array<string,mixed>|null The report's row, with `lastreporter`; null outside.
+     */
+    public function modcpReport(): ?array
+    {
+        $report = $GLOBALS['report'] ?? null;
+        return is_array($report) ? $report : null;
+    }
+
+    /**
+     * Whether the report being rendered has its "last report" cell
+     * (`$report_data['lastreporter']`, which `modcp.php` sets only for a reporter with an
+     * id: the plugin reports as uid 0).
+     */
+    public function modcpReportHasLastReporter(): bool
+    {
+        $data = $GLOBALS['report_data'] ?? null;
+        return is_array($data) && isset($data['lastreporter']);
+    }
+
+    /**
+     * Fills the report's "last report" cell (already escaped HTML), which the template reads.
+     */
+    public function setModcpReportLastReporter(string $html): void
+    {
+        if (!isset($GLOBALS['report_data']) || !is_array($GLOBALS['report_data'])) {
+            $GLOBALS['report_data'] = [];
+        }
+        $GLOBALS['report_data']['lastreporter'] = $html;
+    }
+
     // ---------------------------------------------------------------- the ACP
 
     /**
@@ -1076,6 +1361,224 @@ final class Platform
     }
 
     // ---------------------------------------------------------------- internals
+
+    /**
+     * `insert_post`'s thread subscription block, for a published reply.
+     *
+     * @param array<string,mixed> $row      The post with its thread and forum.
+     * @param object              $parser   MyBB's `postParser`.
+     * @param int                 $lastpost The thread's last post before this one.
+     * @return int Notifications queued.
+     */
+    private function notifyThread(array $row, $parser, int $lastpost): int
+    {
+        $settings = $this->settings();
+        $subject = $parser->parse_badwords((string)$row['thread_subject']);
+        $excerpt = $parser->text_parse_message((string)$row['message'],
+            ['me_username' => (string)$row['username'], 'filter_badwords' => 1]);
+        $excerpt = my_substr($excerpt, 0, (int)($settings['subscribeexcerpt'] ?? 100)) . (string)$this->lang->emailbit_viewthread;
+        $link = str_replace('&amp;', '&', get_thread_link((int)$row['tid'], 0, 'newpost'));
+        $query = $this->db->query(
+            'SELECT u.username, u.email, u.uid, u.language, s.notification'
+            . ' FROM ' . $this->prefix . 'threadsubscriptions s'
+            . ' LEFT JOIN ' . $this->prefix . 'users u ON (u.uid=s.uid)'
+            . " WHERE (s.notification='1' OR s.notification='2') AND s.tid='" . (int)$row['tid'] . "'"
+            . " AND s.uid != '" . (int)$row['uid'] . "'"
+            . " AND u.lastactive>'" . $lastpost . "'"
+        );
+        $members = [];
+        while (($member = $this->db->fetch_array($query)) && is_array($member)) {
+            $members[] = $member;
+        }
+        $done = [];
+        $queued = 0;
+        $mailed = false;
+        foreach ($members as $member) {
+            $uid = (int)$member['uid'];
+            if (isset($done[$uid])) {
+                continue;
+            }
+            $done[$uid] = true;
+            if (!$this->mayReadThread((int)$row['fid'], $uid, (int)$row['thread_uid'] !== $uid)) {
+                continue;
+            }
+            $lang = $this->languageFor((string)$member['language'], (string)($settings['orig_bblanguage'] ?? ''));
+            $author = (int)$row['uid'] === 0 && (string)$row['username'] === '' ? (string)$lang->guest : (string)$row['username'];
+            if ((int)$member['notification'] === 1) {
+                $this->queueMail((string)$member['email'], $lang->sprintf((string)$lang->emailsubject_subscription, $subject),
+                    $lang->sprintf((string)$lang->email_subscription, (string)$member['username'], $author,
+                        (string)($settings['bbname'] ?? ''), $subject, $excerpt, (string)($settings['bburl'] ?? ''), $link,
+                        (string)(int)$row['tid']));
+                $mailed = true;
+            } else {
+                $this->sendPm($uid, $lang->sprintf((string)$lang->pmsubject_subscription, $subject),
+                    $lang->sprintf((string)$lang->pm_subscription, (string)$member['username'], $author, $subject, $excerpt,
+                        (string)($settings['bburl'] ?? ''), $link, (string)(int)$row['tid']));
+            }
+            $queued++;
+        }
+        if ($mailed) {
+            $this->cache->update_mailqueue();
+        }
+        return $queued;
+    }
+
+    /**
+     * `insert_thread`'s forum subscription block, for a published thread.
+     *
+     * @param array<string,mixed> $row      The first post with its thread and forum.
+     * @param object              $parser   MyBB's `postParser`.
+     * @param int                 $lastpost The forum's last post before this thread.
+     * @return int E-mails queued.
+     */
+    private function notifyForum(array $row, $parser, int $lastpost): int
+    {
+        $settings = $this->settings();
+        $excerpt = $parser->text_parse_message($parser->parse_badwords((string)$row['message']));
+        $limit = (int)($settings['subscribeexcerpt'] ?? 100);
+        if (strlen($excerpt) > $limit) {
+            $excerpt = my_substr($excerpt, 0, $limit) . (string)$this->lang->emailbit_viewthread;
+        }
+        $query = $this->db->query(
+            'SELECT u.username, u.email, u.uid, u.language'
+            . ' FROM ' . $this->prefix . 'forumsubscriptions fs'
+            . ' LEFT JOIN ' . $this->prefix . 'users u ON (u.uid=fs.uid)'
+            . ' LEFT JOIN ' . $this->prefix . 'usergroups g ON (g.gid=u.usergroup)'
+            . " WHERE fs.fid='" . (int)$row['fid'] . "'"
+            . " AND fs.uid != '" . (int)$row['uid'] . "'"
+            . " AND u.lastactive > '" . $lastpost . "'"
+            . ' AND g.isbannedgroup != 1'
+        );
+        $members = [];
+        while (($member = $this->db->fetch_array($query)) && is_array($member)) {
+            $members[] = $member;
+        }
+        $done = [];
+        $queued = 0;
+        foreach ($members as $member) {
+            $uid = (int)$member['uid'];
+            if (isset($done[$uid])) {
+                continue;
+            }
+            $done[$uid] = true;
+            if (!$this->mayReadThread((int)$row['fid'], $uid, true)) {
+                continue;
+            }
+            $lang = $this->languageFor((string)$member['language'], (string)($settings['bblanguage'] ?? ''));
+            $author = (int)$row['uid'] === 0 && (string)$row['username'] === '' ? (string)$lang->guest : (string)$row['username'];
+            $this->queueMail((string)$member['email'], $lang->sprintf((string)$lang->emailsubject_forumsubscription, (string)$row['forum_name']),
+                $lang->sprintf((string)$lang->email_forumsubscription, (string)$member['username'], $author,
+                    (string)$row['forum_name'], (string)($settings['bbname'] ?? ''), (string)$row['thread_subject'], $excerpt,
+                    (string)($settings['bburl'] ?? ''), get_thread_link((int)$row['tid']), (string)(int)$row['fid']));
+            $queued++;
+        }
+        if ($queued > 0) {
+            $this->cache->update_mailqueue();
+        }
+        return $queued;
+    }
+
+    /**
+     * MyBB's view checks in its subscription blocks: `canview` and `canviewthreads`, and in a
+     * forum where users see only their own threads, a moderator (or, for replies, the
+     * thread's starter: `$others` false).
+     *
+     * @param bool $others The thread is someone else's.
+     */
+    private function mayReadThread(int $fid, int $uid, bool $others): bool
+    {
+        $permissions = forum_permissions($fid, $uid);
+        if ((int)($permissions['canview'] ?? 0) === 0 || (int)($permissions['canviewthreads'] ?? 0) === 0) {
+            return false;
+        }
+        return !($others && (int)($permissions['canonlyviewownthreads'] ?? 0) === 1 && !is_moderator($fid, '', $uid));
+    }
+
+    /**
+     * The board's language on `$lang`, with `global` and `messages` loaded, as `task.php`
+     * loads them: the webhook starts MyBB with `inc/init.php` only, and MyBB's parser and
+     * its private-message handler read `$lang` (`quote`, `wrote`, `mybb_engine`…). A page
+     * request already has its user's language and is left as it is.
+     */
+    private function boardLanguage(): void
+    {
+        if ((string)($this->lang->language ?? '') === '') {
+            $this->lang->set_language((string)($this->settings()['bblanguage'] ?? ''));
+        }
+        if (!isset($this->lang->wrote)) {
+            $this->lang->load('global');
+        }
+        if (!isset($this->lang->emailbit_viewthread)) {
+            $this->lang->load('messages');
+        }
+    }
+
+    /**
+     * MyBB's strings in a recipient's language: their own when installed, else the board's,
+     * else `english`.
+     *
+     * @param string $own   The recipient's `language` ('' for the board's).
+     * @param string $board The board's.
+     * @return object A `MyLanguage` with `messages` and `global` loaded.
+     */
+    private function languageFor(string $own, string $board)
+    {
+        if ($own !== '' && $this->lang->language_exists($own)) {
+            $language = $own;
+        } elseif ($board !== '') {
+            $language = $board;
+        } else {
+            $language = 'english';
+        }
+        if (!isset($this->languages[$language])) {
+            $strings = new \MyLanguage();
+            $strings->set_path($this->root . 'inc/languages');
+            $strings->set_language($language);
+            $strings->load('messages');
+            $strings->load('global');
+            $this->languages[$language] = $strings;
+        }
+        return $this->languages[$language];
+    }
+
+    /**
+     * One e-mail into MyBB's `mailqueue`, as the subscription blocks queue it.
+     */
+    private function queueMail(string $to, string $subject, string $message): void
+    {
+        $this->db->insert_query('mailqueue', [
+            'mailto'   => $this->db->escape_string($to),
+            'mailfrom' => '',
+            'subject'  => $this->db->escape_string($subject),
+            'message'  => $this->db->escape_string($message),
+            'headers'  => '',
+        ]);
+    }
+
+    /**
+     * One private message from "MyBB Engine", as `send_pm($pm, -1, true)` sends it
+     * (`inc/functions.php`): nothing when the board has private messages off; the
+     * administrator's override (the recipient's own settings do not refuse it).
+     */
+    private function sendPm(int $uid, string $subject, string $message): void
+    {
+        if ((string)($this->settings()['enablepms'] ?? '1') === '0') {
+            return;
+        }
+        if (!class_exists('PMDataHandler', false)) {
+            require_once $this->root . 'inc/datahandlers/pm.php';
+        }
+        $handler = new \PMDataHandler();
+        $handler->admin_override = 1;
+        $handler->set_data([
+            'subject' => $subject, 'message' => $message, 'icon' => -1, 'fromid' => 0, 'toid' => [$uid],
+            'bccid' => [], 'do' => '', 'pmid' => '', 'sender' => ['uid' => 0, 'username' => ''], 'ipaddress' => '',
+            'options' => ['disablesmilies' => 0, 'savecopy' => 0, 'readreceipt' => 0], 'saveasdraft' => 0,
+        ]);
+        if ($handler->validate_pm()) {
+            $handler->insert_pm();
+        }
+    }
 
     /**
      * @return object MyBB's `Moderation`.

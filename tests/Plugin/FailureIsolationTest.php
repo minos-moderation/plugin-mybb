@@ -108,6 +108,30 @@ final class FailureIsolationTest extends PluginTestCase
         self::assertSame([0, Status::HELD], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
     }
 
+    /**
+     * A late verdict for a post held after its timeout (D9.10) whose approval keeps throwing:
+     * `500` and the hold given back each time, then — after three tries — left to a human
+     * (`apply_error`), so a further delivery applies nothing.
+     */
+    public function testALateVerdictAfterATimeoutThatKeepsThrowingIsLeftToAHuman(): void
+    {
+        $pid = $this->heldReply('Wstrzymana po czasie oczekiwania.');
+        $this->forum->platform()->updatePending($pid, ['accepted_at' => TIME_NOW - 21 * 60]);
+        task_minos(['tid' => 1]);
+        $GLOBALS['minos_test']['throw_on'] = [$pid];
+
+        self::assertSame(500, $this->forum->deliver(self::payload($pid)));
+        self::assertSame([Status::HELD, Status::REASON_TIMEOUT], [$this->forum->row($pid)['status'], $this->forum->row($pid)['verdict']],
+            'the hold is given back for the redelivery');
+        self::assertSame(500, $this->forum->deliver(self::payload($pid)));
+        self::assertSame(500, $this->forum->deliver(self::payload($pid)));
+        self::assertSame([Status::HELD, Status::REASON_APPLY_ERROR], [$this->forum->row($pid)['status'], $this->forum->row($pid)['verdict']]);
+
+        $GLOBALS['minos_test']['throw_on'] = [];
+        self::assertSame(200, $this->forum->deliver(self::payload($pid)));
+        self::assertSame([0, Status::HELD], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
+    }
+
     public function testAResubmissionThatThrowsForOneRowLeavesTheRestOfTheBatch(): void
     {
         $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(503, 'kolejka_niedostepna')]));
@@ -165,11 +189,11 @@ final class FailureIsolationTest extends PluginTestCase
         }
         $this->forum->endPause();
         $calls = 0;
-        $this->forum->plugin(function () use (&$calls): array {
+        $this->forum->plugin(function (string $url, array $headers, string $body) use (&$calls): array {
             if (++$calls === 1) {
                 throw new \RuntimeException(\Moderation::SECRET_TEXT);
             }
-            return RecordingTransport::accepted();
+            return RecordingTransport::answerTo($body);
         });
 
         task_minos(['tid' => 1]);

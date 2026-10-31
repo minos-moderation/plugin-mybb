@@ -324,6 +324,16 @@ final class Text
      */
     public static function shows(string $message, array $forum = []): bool
     {
+        // A shortcut with the same answer: what comes before the first character that could
+        // open any markup — `[` (MyCode), `<` (HTML), `&` (an entity), a NUL (the plugin's own
+        // placeholder) — is on the page as written, whatever the forum's options; when it
+        // already shows something, so does the post, and the reading below (each pass over
+        // every image, video and link pattern) is not needed. A post of text with long
+        // markup after it costs one reading ({@see visible}), not two.
+        $lead = strcspn($message, "[<&\0");
+        if ($lead > 0 && !self::blank(self::valid(substr($message, 0, $lead)))) {
+            return true;
+        }
         try {
             return !self::blank(self::render($message, $forum, true));
         } catch (TextError $e) {

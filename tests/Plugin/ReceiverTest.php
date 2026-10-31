@@ -9,6 +9,7 @@ use Minos\MyBB\Status;
 use Minos\MyBB\Tests\Support\FakePostHandler;
 use Minos\MyBB\Tests\Support\Forum;
 use Minos\MyBB\Tests\Support\PluginTestCase;
+use Minos\MyBB\Tests\Support\RecordingTransport;
 
 /**
  * The webhook, with deliveries signed the way the gateway signs (`Signature::sign`).
@@ -359,8 +360,9 @@ final class ReceiverTest extends PluginTestCase
         $this->forum->deliver(self::payload($pid, ['kategorie' => ['samookaleczenie'], 'wsparcie' => true]));
         $row = $this->forum->row($pid);
         self::assertSame([Status::PUBLISHED, '1', 'samookaleczenie'], [$row['status'], (string)$row['support'], $row['categories']]);
-        self::assertContains($pid, array_map('intval', array_column($this->forum->platform()->attentionRows(50), 'pid')),
+        self::assertContains($pid, array_map('intval', array_column($this->forum->platform()->supportRows(50), 'pid')),
             'the ACP page lists it');
+        self::assertCount(1, $this->forum->reports(), 'the moderators are told in the ModCP');
     }
 
     public function testAPostAModeratorAlreadyDecidedIsLeftAlone(): void
@@ -497,6 +499,138 @@ final class ReceiverTest extends PluginTestCase
         self::assertSame([1, Status::PUBLISHED], [(int)$this->forum->post($edited)['visible'], $this->forum->row($edited)['status']],
             'an edit ended the late window');
         self::assertSame([], self::moderation());
+    }
+
+    /**
+     * The audit's probe M11 the other way round (shared rule D9.10): fail-closed, the post's
+     * verdict did not come in time and the failure mode held it (`timeout`); the verdict
+     * that then comes is applied as if it had come in time — `bezpieczne` publishes it.
+     */
+    public function testALateVerdictIsAppliedToAPostTheFailureModeHeldForItsTimeout(): void
+    {
+        $pid = $this->timedOut('Zwykły post w kolejce bramy.');
+
+        self::assertSame(200, $this->forum->deliver(self::payload($pid)));
+
+        self::assertSame([1, Status::PUBLISHED, 'bezpieczne', 'bezpieczne'], [(int)$this->forum->post($pid)['visible'],
+            $this->forum->row($pid)['status'], $this->forum->row($pid)['verdict'], $this->forum->row($pid)['answer']]);
+        self::assertSame([['approve_posts', [$pid]]], self::moderation());
+        self::assertSame(200, $this->forum->deliver(self::payload($pid)), 'a repeated delivery');
+        self::assertSame([['approve_posts', [$pid]]], self::moderation(), 'applies nothing twice');
+    }
+
+    /**
+     * The other verdicts follow the same rules as on time: `zablokowane` by setting,
+     * `ocenzurowane` with its mask, `nieocenione` the failure mode again.
+     */
+    public function testEveryLateVerdictAfterATimeoutIsAppliedAsOnTime(): void
+    {
+        $this->forum->set(['minos_blocked' => 'soft-delete']);
+        $blocked = $this->timedOut('Spadaj stąd.');
+        $censored = $this->timedOut('abc zły');
+        $none = $this->timedOut('Bez oceny.');
+
+        $this->forum->deliver(self::payload($blocked, ['kwalifikacja' => 'zablokowane', 'kategorie' => ['nekanie']]));
+        $this->forum->deliver(self::payload($censored, ['kwalifikacja' => 'ocenzurowane', 'ocenzurowany' => 'abc ███']));
+        $this->forum->deliver(self::payload($none, ['status' => 'nieocenione', 'kwalifikacja' => null]));
+
+        self::assertSame([-1, Status::DELETED, 'zablokowane', 'nekanie'], [(int)$this->forum->post($blocked)['visible'],
+            $this->forum->row($blocked)['status'], $this->forum->row($blocked)['verdict'], $this->forum->row($blocked)['categories']]);
+        self::assertSame([1, 'abc ███', Status::CENSORED], [(int)$this->forum->post($censored)['visible'],
+            $this->forum->post($censored)['message'], $this->forum->row($censored)['status']]);
+        self::assertSame([0, Status::HELD, 'nieocenione'], [(int)$this->forum->post($none)['visible'],
+            $this->forum->row($none)['status'], $this->forum->row($none)['verdict']]);
+    }
+
+    /**
+     * A moderator who approved, deleted or edited the held post decided: the late verdict
+     * changes nothing — neither the post nor its row.
+     */
+    public function testALateVerdictAfterATimeoutLeavesAPostAModeratorActedOn(): void
+    {
+        $approved = $this->timedOut('Zatwierdzony przez moderatora.');
+        $this->forum->db->update_query('posts', ['visible' => 1], "pid='" . $approved . "'");
+        $deleted = $this->timedOut('Usunięty przez moderatora.');
+        $this->forum->db->update_query('posts', ['visible' => -1], "pid='" . $deleted . "'");
+        $gone = $this->timedOut('Usunięty na stałe.');
+        $this->forum->db->delete_query('posts', "pid='" . $gone . "'");
+        $edited = $this->timedOut('Poprawiony przez moderatora.');
+        $GLOBALS['minos_test']['moderators'] = [self::UID];
+        $this->forum->edit($edited, 'Poprawiony przez moderatora.');
+        $GLOBALS['minos_test']['moderators'] = [];
+        $GLOBALS['minos_test']['moderation'] = [];
+
+        foreach ([$approved, $deleted, $gone] as $pid) {
+            self::assertSame(200, $this->forum->deliver(self::payload($pid, ['kwalifikacja' => 'zablokowane'])));
+            self::assertSame([Status::HELD, Status::REASON_TIMEOUT, ''],
+                [$this->forum->row($pid)['status'], $this->forum->row($pid)['verdict'], $this->forum->row($pid)['answer']],
+                "post {$pid}: its row stays as the failure mode left it");
+        }
+        self::assertSame([Status::SUPERSEDED, Status::REASON_EDITED], [$this->forum->row($edited)['status'],
+            $this->forum->row($edited)['verdict']], 'a moderator\'s edit decided the post');
+        self::assertSame(200, $this->forum->deliver(self::payload($edited)));
+        self::assertSame([0, Status::SUPERSEDED], [(int)$this->forum->post($edited)['visible'], $this->forum->row($edited)['status']]);
+        self::assertSame([1, -1], [(int)$this->forum->post($approved)['visible'], (int)$this->forum->post($deleted)['visible']]);
+        self::assertSame([], self::moderation());
+    }
+
+    /**
+     * An author's edit of the held post starts a new revision: the late verdict about the
+     * text before it is acknowledged and not applied. A text changed past the edit hook keeps
+     * the post held for a human.
+     */
+    public function testALateVerdictAfterATimeoutIsAboutTheTextThatWasSent(): void
+    {
+        $revised = $this->timedOut('Pierwsza wersja.');
+        $changed = $this->timedOut('Wysłana treść.');
+        $this->forum->edit($revised, 'Druga wersja.');
+        $this->forum->db->update_query('posts', ['message' => 'Treść zmieniona poza wtyczką.'], "pid='" . $changed . "'");
+        $GLOBALS['minos_test']['moderation'] = [];
+
+        self::assertSame(200, $this->forum->deliver(self::payload($revised)));
+        self::assertSame(200, $this->forum->deliver(self::payload($changed)));
+
+        self::assertSame([0, Status::RETRY, '1'], [(int)$this->forum->post($revised)['visible'],
+            $this->forum->row($revised)['status'], (string)$this->forum->row($revised)['rev']], 'the new revision waits to be sent');
+        self::assertSame([0, Status::HELD, Status::REASON_TEXT_CHANGED], [(int)$this->forum->post($changed)['visible'],
+            $this->forum->row($changed)['status'], $this->forum->row($changed)['verdict']]);
+        self::assertSame([], self::moderation());
+    }
+
+    /**
+     * Only a hold for the timeout waits for a late verdict: a post held because the gateway
+     * refused it (a configuration error), or because a verdict came and held it, gets
+     * nothing from another delivery.
+     */
+    public function testOnlyAHoldForTheTimeoutTakesALateVerdict(): void
+    {
+        $blocked = $this->heldReply('Zablokowany na czas.');
+        $this->forum->deliver(self::payload($blocked, ['kwalifikacja' => 'zablokowane']));
+        $this->forum->plugin(new RecordingTransport([RecordingTransport::refused(403, 'brak_webhooka')]));
+        $refused = $this->heldReply('Odrzucony przez bramę.');
+        $GLOBALS['minos_test']['moderation'] = [];
+
+        $this->forum->deliver(self::payload($blocked));
+        $this->forum->deliver(self::payload($refused));
+
+        self::assertSame([Status::HELD, 'zablokowane'], [$this->forum->row($blocked)['status'], $this->forum->row($blocked)['verdict']]);
+        self::assertSame([Status::HELD, Status::REASON_CONFIG_ERROR],
+            [$this->forum->row($refused)['status'], $this->forum->row($refused)['verdict']]);
+        self::assertSame([], self::moderation());
+    }
+
+    /**
+     * A held reply the failure mode (fail-closed, the default) held after its timeout: the
+     * audit's probe M11 up to the delivery.
+     */
+    private function timedOut(string $message): int
+    {
+        $pid = $this->heldReply($message);
+        $this->forum->platform()->updatePending($pid, ['accepted_at' => TIME_NOW - 21 * 60]);
+        task_minos(['tid' => 1]);
+        self::assertSame([0, Status::HELD, Status::REASON_TIMEOUT],
+            [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status'], $this->forum->row($pid)['verdict']]);
+        return $pid;
     }
 
     /**

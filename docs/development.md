@@ -30,13 +30,14 @@ The classes:
 | `Settings` | Reads and checks the settings; everything that decides publish or hold is read fail-closed. |
 | `Text` | Post → `tekst`: what readers see (MyBB's rendering rules, per forum), the first 3000 characters; the link signals. |
 | `TextError` | A PCRE failure inside `Text`: the text could not be read (`error: true`, never `''`). |
-| `Gateway` | `POST /api/v1/b2b/oceny` over cURL; reads answers into accepted (`202` only) / retry (429, 408, 5xx, no answer) / config error. |
+| `Gateway` | `POST /api/v1/b2b/oceny` over cURL; reads answers into accepted (`202` only, for the items its `przyjete` names) / retry (429, 408, 5xx, no answer, a 2xx other than 202) / config error. |
 | `Submitter` | The hold (validate hooks), the submission (insert-end hooks), resubmission, edits. |
 | `Receiver` | The webhook's checklist: method, signature (`Signature::check`; a refusal counted with its reason only), payload, id, claim, apply. |
 | `Applier` | A verdict or the failure mode → approve, hold, soft-delete, or publish the masked text. |
 | `Task` | Timeouts, due retries, pruning. |
 | `Installer` | Settings group, tables, task; the lifecycle functions. |
-| `Admin` | Masked secrets on the settings page, the ACP notice (problems, a configuration error, a daily limit or overload until a given time, refused signatures), the Tools → Logs page with the last 7 days' verdict figures. |
+| `ModQueue` | The ModCP's moderation queue: after each post the plugin holds, a note with its state, the verdict or reason, the categories, the 3000-character note, `wsparcie` and the kept mask. |
+| `Admin` | Masked secrets on the settings page, the ACP notice (problems, a configuration error, a 2xx other than 202 at the gateway's address, a daily limit or overload until a given time, refused signatures), the Tools → Logs page with the last 7 days' verdict figures, the posts that need a look and the `wsparcie` posts on a list of their own. |
 | `Plugin` | Builds the objects once per request. |
 
 ## How the plugin holds a post
@@ -60,14 +61,75 @@ whose validation already failed (`get_errors()`) raises no flag, and `newreply_s
 `newthread_start` (the form shown again after a later validate hook refused the post) put
 it back.
 
-**Subscription notifications are not sent** for held posts. `insert_post` and
-`insert_thread` build them inline (`inc/datahandlers/post.php`, the thread-subscription
-block of `insert_post` and the forum-subscription block of `insert_thread`, only when
+**Subscription notifications** (shared rule D9.8, A4). `insert_post` and `insert_thread`
+build them inline (`inc/datahandlers/post.php`, the thread-subscription block of
+`insert_post` and the forum-subscription block of `insert_thread`, only when
 `visible == 1`); MyBB 1.8.41 has no function that sends them, and neither
-`Moderation::approve_*` nor `modcp.php`/`moderation.php` send any on approval — the same
-as for manually moderated posts. Sending them would mean copying that block (per-subscriber
-permissions, languages, `send_pm`, the mail queue); that is a separate decision. Verified
-on a live forum: question 2 below.
+`Moderation::approve_*` nor `modcp.php`/`moderation.php` send any on approval — verified on
+a live forum (question 2 below). So a post the plugin publishes from the queue — a
+`bezpieczne` verdict, a censored post published with its mask, the failure mode in
+`fail-open`, on time or after the timeout (D9.10) — notifies its subscribers itself, with
+the setting "Powiadamiaj subskrybentów o postach opublikowanych przez wtyczkę"
+(`minos_notify_subscribers`, on by default; off when another plugin sends them):
+`Applier::publish` reads the thread's and the forum's last post before the approval
+(`Platform::lastPosts`), approves, then `Platform::notifySubscribers` runs MyBB's two blocks,
+copied: the recipients (instant thread subscriptions, e-mail or PM; forum subscriptions,
+e-mail, no banned group; never the author), "not again before the visit" (`lastactive`
+after that last post), `canview`/`canviewthreads`/`canonlyviewownthreads` with
+`is_moderator`, the recipient's language, MyBB's own texts and excerpt
+(`postParser::text_parse_message`, `subscribeexcerpt`), the mail queue
+(`$cache->update_mailqueue`) and the PM as `send_pm($pm, -1, true)` sends it (through
+`PMDataHandler`, from "MyBB Engine", nothing when `enablepms` is off). The webhook and the
+task start MyBB without a session: the board's language is loaded on `$lang` (`global`,
+`messages`, as `task.php` does) and `$mybb->user['uid']` is a guest's 0 for the call, so
+MyBB's permission functions raise no warning (the live run checks MyBB's error log and
+task log). Once only: a late verdict on a post the failure mode published never notifies
+again, and a moderator's approval in the ModCP is MyBB's own (nothing sent). Not run: the
+`datahandler_post_insert_subscribed` hook, which passes a post datahandler the plugin does
+not have. A notification that throws is logged as `error`/`notify` with the post id; the
+post stays published. The copied block needs upkeep with every 1.8.x; the live run
+compares the counts with a post visible at once (`k31_notifications`).
+
+**`wsparcie`** (shared rule D9.9, A7). Whatever the verdict, an applied delivery with
+`wsparcie` adds a report to MyBB's report centre (`Platform::reportForSupport`): the
+`reportedcontent` row `add_report($report, 'post')` stores (`id`/`id2`/`id3` the post, its
+thread and forum, reporter uid 0, the board's "Other" reason with the plugin's comment —
+the verdict, never content, a key or a secret — unread), then
+`$cache->update_reportedcontent()`, which MyBB's header reads for its "unread reports"
+notice to moderators. `add_report` itself is not called: with the board's `reportmethod`
+set to e-mail or PMs it calls `send_report`, which reads the reporting user's session and
+the page's `$post`/`$thread`/`$forum` globals, none of which the webhook or the task has.
+MyBB 1.8.41's report list (`modcp.php?action=reports`) fills the "last report" cell only
+for a reporter with an id, and its template `modcp_reports_report` reads it anyway (on PHP 8
+`Undefined array key "lastreporter"` per report): the `modcp_reports_report` hook fills it
+for the plugin's own reports (uid 0 on a post flagged `wsparcie`) with the moment and
+"Minos", escaped (`ModQueue::onReportRendered`); the live run checks MyBB's error log stays
+empty while the list renders. A report of the plugin's still unread for the post is not doubled; a user's own open
+report of the same post is not looked at, so the post then has two open reports (known
+behaviour: MyBB's `report.php` would add the plugin to the user's report as a second
+reporter, which a uid-0 reporter cannot be). One that fails is
+logged as `error`/`support` and the verdict stands. Such a post is never deleted,
+rejected or hidden automatically: `zablokowane` keeps it held even with "usuń (miękko)",
+and a late `zablokowane` (or a late `ocenzurowane` whose mask cannot be published) leaves
+a fail-open publication published. Nothing is sent to the author. The ACP page lists
+`wsparcie` rows on their own list (`Platform::supportRows`), which the other rows never
+push out. (`nieocenione` carries no `wsparcie`: `WebhookPayload::parse` reads none from a
+payload without a verdict.) Verified on a live forum: `k41_support`.
+
+**The ModCP's moderation queue** (K-42). `modcp.php?action=modqueue` builds the list of
+queued posts (threads) from MyBB's templates into its global `$posts` (`$threads`), runs
+`modcp_modqueue_posts_end` (`_threads_end`, no arguments) and only then outputs it; MyBB
+1.8.41 has no hook per post. `ModQueue` finds each post by MyBB's own form field
+(`posts[<pid>]`, `threads[<tid>]`) and inserts, after the `</tr>` that follows it, a row
+`<tr class="minos_modqueue">` with the plugin's note: its state, the verdict or the
+failure mode's reason (`minos_reason_*`), the 3000-character note when the text was cut,
+the categories, `wsparcie`, and the gateway's masked text of a censored post it kept
+(`masked_text`, shared rule A2d) — all escaped, nothing but the plugin's own row. A post
+without a row (MyBB held it itself) gets nothing; a theme whose template keeps the field
+but has no `</tr>` after it gets the notes at the end of the list, each naming its post, and
+one whose template has no such field gets no note at all. Posts published with
+the mask (`censored`) are on the ACP page's list of posts that need a look. Verified on a
+live forum: `k42_modqueue`.
 
 ## What `tekst` is
 
@@ -122,7 +184,10 @@ The text readers SEE, following MyBB's own text renderer
   and a hint are sent as before. The cases are MyBB 1.8.41's reader view as the live run
   recorded it (`reader-view.json`, checked by `ReaderViewTest`). The reading is linear (a
   link is replaced by its label, no recursion), and when PCRE gives up on it the body
-  counts as text: in doubt, the post is sent.
+  counts as text: in doubt, the post is sent. When what comes before the first `[`, `<`,
+  `&` or NUL already shows something, it is on the page as written whatever the forum's
+  options, and the answer is yes without that second reading (the same answer; a word
+  followed by 2 000 unclosed `[img]` tags no longer costs every image pattern twice).
 - The link signals count the links of what is sent, head included (`Text::sourceOf`).
 - Every regular expression runs through one checked helper in `Text`: a PCRE failure (a
   post crafted to exhaust the backtrack limit, e.g. a few hundred unclosed `[url=` tags)
@@ -131,8 +196,11 @@ The text readers SEE, following MyBB's own text renderer
   alone (`no_text` is for a post whose body shows no text and that has no poll). Only a
   failure of the match itself counts: a call that exhausts PCRE's JIT stack (a long
   attribute, a 60 000-character quote — markup MyBB renders) runs again with `pcre.jit`
-  off, under another key of PHP's pattern cache, and the text is sent; the patterns over
-  long runs are possessive, so they need no JIT stack per character. What stays
+  off, under another key of PHP's pattern cache, and the text is sent; `pcre.jit` is put
+  back at once (in a `finally`), as the request had it. The patterns over
+  long runs are possessive, so they need no JIT stack per character. On a host whose
+  `disable_functions` holds `ini_set` the retry cannot run: such a post (a 60 000-character
+  quote or list) stays `text_error`, held or published by the failure mode. What stays
   `text_error` is a post on which PCRE gives up without JIT too, as on the unclosed
   `[url=` tags MyBB itself shows as an empty body (question 1 below; shared rule F7).
 - `meta`: `links` (distinct links), `link_domains` (up to 10 registrable domains — the last
@@ -146,11 +214,14 @@ The text readers SEE, following MyBB's own text renderer
 ```
 insert ─► retry ──202──► pending ──webhook──► applying ─► published | censored | held | deleted
             │ ▲                                              superseded | gone
-            │ └─ 429/408/5xx/no answer: retry_at = ponow_za_s, or 60 s doubling to 1 h
+            │ └─ 429/408/5xx/no answer/a 2xx but 202: retry_at = ponow_za_s, or 60 s doubling to 1 h
+            │ └─ a 202 whose przyjete leaves the item out: the backoff (nieprzyjete)
             ├─ ponow_za_s ending after submitted_at + timeout: failure mode now (gateway_limit)
-            └─ other 4xx, a 2xx but 202: failure mode (config_error, http_<n>); ACP notice
+            └─ other 4xx, a redirect: failure mode (config_error, the code or http_<n>); ACP notice
 pending/retry older than the timeout (≥ 20 min) ─► failure mode (timeout)
 fail-open ─► published + auto_published ──late webhook──► applying ─► held | censored | published
+fail-closed timeout ─► held (timeout) ──late webhook, post still in the queue──► applying ─► as on time
+  (a moderator approved, deleted or edited it, or an author's edit started a new revision ─► nothing)
 a "retry" answer ─► the shared pause: nothing sent before its end (below)
 an author's edit while retry/pending, or of a post held as timeout/config_error/text_error/no_text,
   that changes the text to send ─► rev + 1, retry due now, a fresh timeout
@@ -191,6 +262,18 @@ applying for more than 5 min ─► back to claimed_from (the task)
   (`zablokowane` → `unapprove`, `ocenzurowane` → by setting). A moderator's action (the
   post's visibility changed) or an edit (the update hook clears the mark) makes the human
   decision final.
+- Shared rule D9.10 (A6): a post the failure mode held for its timeout (`fail-closed`:
+  `held` with `timeout`) still takes a verdict that comes late, applied by
+  `Applier::verdict` as if it had come in time (`bezpieczne` publishes, `zablokowane` and
+  `ocenzurowane` by setting, `nieocenione` the failure mode again, a post cut at 3000
+  characters as on time). The receiver claims such a row only while its post is still in
+  the queue (`visible = 0`; `Platform::claimTimedOut`, one conditional `UPDATE` on
+  `status = 'held' AND verdict = 'timeout'` and the revision). A moderator who approved or
+  deleted the post decided: the row stays as the failure mode left it. A moderator's edit
+  marks it `superseded` (`edited`), an author's edit starts a new revision (the late
+  verdict is about the old one), and a text changed past the edit hook fails the digest
+  (`text_changed`, the post stays held). A row held for any other reason (a verdict, a
+  configuration error, a limit) takes no later verdict; no verdict can come for those.
 - A publishing verdict (`bezpieczne`) for a post cut at 3000 characters goes to the failure
   mode (`truncated`): the verdict judged the beginning only.
 - Rule D9.3(a): a refusal whose `ponow_za_s` (as the gateway gave it) ends after the row's
@@ -198,8 +281,16 @@ applying for more than 5 min ─► back to claimed_from (the task)
   `limit_dobowy_klucza`, `limit_globalny_b2b` or `kolejka_pelna` refusal is kept in the
   datacache entry `minos_refusal` (code, until) for the ACP notice "the gateway does not accept
   until …"; the next `202` clears it, and it is not shown past its end.
+- Shared rule F5a: only a `202` accepts, and only the items its `przyjete` names; an item
+  it leaves out is sent again after the backoff (`error_code` `nieprzyjete`, no pause). A
+  `2xx` other than `202` — also one whose body names every item — is no acceptance:
+  something else answers at the gateway's address (a hosting page, a proxy, a wrong
+  address). It is retried with the backoff and the shared pause, like a `503`, never a
+  configuration error, and kept in the datacache entry `minos_foreign_answer` (code,
+  moment) for the ACP notice "something else answers at the gateway's address" until the
+  next `202`. A `408` is a network failure: retried, and a pause.
 - The shared pause (`Submitter::PAUSE`, datacache entry `minos_pause`: until, code): every
-  "retry" answer (any 429, 408, 5xx, no answer) holds every sending back until
+  "retry" answer (any 429, 408, 5xx, a 2xx but 202, no answer) holds every sending back until
   now + `ponow_za_s` as given (60 s without one); a longer pause already kept stays. While
   it lasts a new post is not sent in its author's request and the task sends nothing: a
   due row waits with `retry_at` = the pause's end, or gets the failure mode at once
@@ -222,8 +313,9 @@ applying for more than 5 min ─► back to claimed_from (the task)
   receiver accepts `mybb:<pid>` and `mybb:<pid>.<n>` (n ≥ 1, no leading zero) and applies a
   verdict only to the row's current revision: its claim names the revision, so an edit
   between the receiver's read and its claim wins. A verdict for another revision gets `200`
-  and nothing else. A moderator's edit of a waiting post leaves it to humans: `superseded`
-  with `edited`, nothing sent, listed on the ACP page. Edits of published posts are not
+  and nothing else. A moderator's edit of a waiting post, or of one held for its timeout,
+  leaves it to humans: `superseded` with `edited`, nothing sent, no late verdict applied,
+  listed on the ACP page. Edits of published posts are not
   assessed again (shared rule D9.2, not adopted yet).
 - Who can edit a post in the moderation queue, in MyBB 1.8.41: its forum's moderators, and
   its author only while the board setting `showownunapproved` ("Access Own Unapproved
@@ -284,7 +376,9 @@ stand-ins and includes the REAL `inc/plugins/minos.php` and `inc/tasks/minos.php
 hook functions MyBB would call are the ones tested:
 
 - `tests/Stubs/mybb.php`: `is_moderator`, `forum_permissions`, `rebuild_settings`,
-  `fetch_next_run`, `add_task_log`, `get_post_link`, `Moderation`;
+  `fetch_next_run`, `add_task_log`, `get_post_link`, `get_thread_link`, `my_substr`,
+  `my_serialize`, `Moderation` (with MyBB's last-post update), `postParser`, `MyLanguage`,
+  `PMDataHandler`;
 - `tests/Support/`: `$db` over SQLite (`FakeDb`), `$mybb`, `$cache`, `$lang`, `$plugins`
   (with MyBB's "a truthy return replaces the arguments" rule), `$page`, and `Forum`, which
   posts through the hooks with MyBB 1.8.41's visibility rule;
@@ -298,7 +392,10 @@ through the plugin's own autoloader) and the mock gateway from
 `vendor/minos-moderation/client-php/mock-gateway`. `fixtures/forum-cli.php`, run from the
 staged root too, installs the plugin and posts through its hooks with the real cURL
 transport, so both sides run the distributable; the mock's worker delivers, including a
-censored post published over HTTP. CI runs everything on PHP 7.4 and 8.3.
+censored post published over HTTP. `fixtures/foreign-router.php` stands in for what may
+answer at the gateway's address without being the gateway — a `200`, `201` or `204` whose
+body names the post, a `408` — which the mock never answers (shared rule F5a). CI runs
+everything on PHP 7.4 and 8.3.
 
 `tests/Live/` is not part of that run: it needs a real MyBB 1.8.41 forum and a database,
 and runs only through `bin/verify-mybb-1841.sh` (see "Verified on a live forum").
@@ -414,10 +511,16 @@ reading the code; what the live run below goes through is verified on a real for
 | a thread's poll: `threads.poll` → `polls` (`question`, `options` joined by `\|\|~\|~\|\|`, `numoptions` of them shown); the question through `htmlspecialchars_uni`, each option through `parse_message` with the forum's options | `showthread.php`, `install/resources/mysql_db_tables.php` | `Platform::post`, `Text` |
 | a reply's default subject: "RE: " and the thread's title (cut to 82 characters and "..." past 85; for a reply to a post, `replyto`, "RE: " and that post's subject without its `#^RE:\s?#i`); `posts.replyto` | `newreply.php`, `inc/datahandlers/post.php` (`verify_subject`, `insert_post`) | `Text::ownSubject`, `Platform::post` |
 | `Moderation::unapprove_posts`, `unapprove_threads` | `inc/class_moderation.php` | `Platform::unapprove` (a late `zablokowane`) |
-| subscription notifications: inline in `insert_post`/`insert_thread`, only for `visible == 1`; none on approval | `inc/datahandlers/post.php`, `inc/class_moderation.php`, `modcp.php` | not sent (see above) |
+| subscription notifications: inline in `insert_post`/`insert_thread`, only for `visible == 1`; none on approval — the two blocks copied (`threadsubscriptions`, `forumsubscriptions`, `users.lastactive`/`language`, `usergroups.isbannedgroup`, `mailqueue`, `threads.lastpost`, `forums.lastpost`) | `inc/datahandlers/post.php`, `inc/class_moderation.php`, `modcp.php` | `Platform::lastPosts`, `notifySubscribers` |
+| `postParser::text_parse_message`, `parse_badwords`; `my_substr`; `get_thread_link($tid, 0, 'newpost')`; `$mybb->settings['subscribeexcerpt'/'orig_bblanguage'/'bblanguage'/'enablepms']` | `inc/class_parser.php`, `inc/functions.php` | `Platform::notifySubscribers` |
+| `MyLanguage` (`set_path`, `set_language`, `load`, `language_exists`, `sprintf`; `messages`: `emailsubject_subscription`, `email_subscription`, `pmsubject_subscription`, `pm_subscription`, `emailsubject_forumsubscription`, `email_forumsubscription`, `emailbit_viewthread`; `global`: `guest`) | `inc/class_language.php`, `task.php` | `Platform::boardLanguage`, `languageFor` |
+| `modcp_reports_report` (no arguments; the report in `modcp.php`'s globals `$report` and `$report_data`, before the template reads `$report_data['lastreporter']`) | `modcp.php` | `ModQueue::onReportRendered`, `Platform::modcpReport`, `setModcpReportLastReporter` |
+| `add_report($report, 'post')`'s row: `reportedcontent` (`id`, `id2`, `id3`, `uid`, `reportstatus`, `reasonid`, `reason` ≤ 250, `type`, `reports`, `dateline`, `lastreport`, `reporters` by `my_serialize`), `reportreasons` (`<lang:report_reason_other>`, `extra`), `$cache->update_reportedcontent()`; the ModCP's report list (`modcp.php?action=reports`) and the header's `global_unreadreports` | `inc/functions_modcp.php`, `modcp.php`, `global.php`, `inc/class_datacache.php`, `install/resources/mysql_db_inserts.php` | `Platform::reportForSupport` |
+| `send_pm($pm, -1, true)` → `PMDataHandler` (`admin_override`, `set_data`, `validate_pm`, `insert_pm`); `$cache->update_mailqueue()` | `inc/functions.php`, `inc/datahandlers/pm.php`, `inc/class_datacache.php` | `Platform::sendPm`, `queueMail` |
 | `admin_config_settings_change` before `upsetting` is saved | `admin/modules/config/settings.php` | `Admin::onSettingsChange` |
 | `admin_formcontainer_output_row` (references; a setting row's `row_options['id']` is `row_setting_<name>`) | `admin/inc/class_form.php` | `Admin::onFormRow` |
 | `admin_tools_action_handler`, `admin_tools_menu_logs`, `admin_tools_permissions`, `admin_load` before the module file is required | `admin/modules/tools/module_meta.php`, `admin/index.php` | `Admin` |
+| `modcp_modqueue_posts_end` / `modcp_modqueue_threads_end` (no arguments) with the page's global `$posts` / `$threads` built from `modcp_modqueue_posts_post` / `modcp_modqueue_threads_thread` (the `posts[<pid>]` / `threads[<tid>]` radio fields) | `modcp.php`, `install/resources/mybb_theme.xml` | `ModQueue`, `Platform::modQueueList`, `setModQueueList` |
 | `$page->extra_messages`, `output_header`, `output_footer` (exits), `output_confirm_action` (exits), `add_breadcrumb_item` | `admin/inc/class_page.php` | `Platform` |
 | tasks: the `tasks` columns, `task_<file>($task)`, `fetch_next_run`, `add_task_log`, `$cache->update_tasks()`, a comma list of minutes | `inc/functions_task.php`, `admin/modules/tools/tasks.php`, `install/resources/mysql_db_tables.php` | `Platform`, `inc/tasks/minos.php` |
 | `$lang->load($section, true, true)` with the `english` fallback, `{1}` placeholders | `inc/class_language.php` | `Platform::lang` |
@@ -434,7 +537,7 @@ reading the code; what the live run below goes through is verified on a real for
 (`bin/build-zip.sh --stage-only`), serves it and the mock gateway with PHP's built-in
 server and runs `tests/Live/LiveForumTest.php` through the forum's own pages: the ACP's
 plugin and settings pages, `member.php`, `newreply.php`, `newthread.php`, `polls.php`,
-`editpost.php`, `modcp.php`, `showthread.php`, `printthread.php`, `search.php` and the
+`editpost.php`, `modcp.php` (its moderation queue and report list), `task.php`, `showthread.php`, `printthread.php`, `search.php` and the
 real `minos-webhook.php`, with deliveries signed by the mock's worker. The test reads the
 database to see what happened. It writes to it outside those pages only to set the stage:
 `tests/Live/fixtures/minos-live-cli.php` (copied into the forum, never shipped) changes
@@ -462,7 +565,13 @@ Recorded on PHP 8.3.6, MySQL 8.0.46 and PostgreSQL 16.15; both engines gave the 
 answers. The smoke run on both: install and activate through the ACP, the key and secret
 saved through the plugin's fields (the page shows prefixes only); an author's reply held
 and sent once to the gateway; the signed verdict publishes it (`visible = 1`); a censored
-reply published with its mask; a forged signature `401` and named in the ACP; switched
+reply published with its mask; a late verdict for a reply MyBB's `task.php` held after the
+fail-closed timeout applied as on time, and one for a reply a moderator approved in the
+ModCP meanwhile changing nothing (`k43_late_after_timeout`); a reply with `wsparcie`
+published and reported in the ModCP's report list and the header, and a blocked one held,
+not deleted, with "usuń (miękko)", nothing to the author (`k41_support`); the ModCP's
+moderation queue with the plugin's note after a held censored reply (verdict, categories,
+mask), a blocked reply cut at 3000 characters and a blocked thread (`k42_modqueue`); a forged signature `401` and named in the ACP; switched
 off or deactivated `404`, and a deactivated plugin holds and sends nothing; uninstall
 "No" keeps the rows, "Yes" drops the tables. The approval inside the webhook's request
 took 36–75 ms end to end (audit measurement C-39).
@@ -472,7 +581,7 @@ The questions of the live check (minos-moderation/minos#47), answered:
 | # | Question | Answer (fixture key) |
 |---|---|---|
 | 1 | `Widoczne SLOWO` and n unclosed `[url=http://a.pl]x` (n = 340: 6 135 B; 1000: 18 015 B), reply and thread, default `pcre.backtrack_limit` (1 000 000, JIT on) | MyBB stores all four. Its own `[url=…]` patterns stop with `PREG_BACKTRACK_LIMIT_ERROR` (2), and `showthread.php` shows an EMPTY body — not even `SLOWO` — with or without the parser's output check. The plugin holds each as `text_error`, nothing sent. A reader sees nothing, so sending the raw message instead (audit R1, step 2) is not needed (`q1_pcre`). |
-| 2 | Subscribers (thread by e-mail, thread by PM, forum by e-mail) when a held post is approved | A post visible at once queues one e-mail, one PM, one forum e-mail (the control). A reply and a thread the plugin publishes through the webhook queue none; a reply a moderator approves in the ModCP queue, none either: MyBB 1.8.41 notifies only at insert time (`q2_notifications`). |
+| 2 | Subscribers (thread by e-mail, thread by PM, forum by e-mail) when a held post is approved | A post visible at once queues one e-mail, one PM, one forum e-mail (the control). A reply and a thread the plugin publishes through the webhook with its own notifications off queue none; a reply a moderator approves in the ModCP queue, none either: MyBB 1.8.41 notifies only at insert time (`q2_notifications`). With the plugin's notifications on (K-31), the same publication queues exactly what the control did, the failure mode's publication (fail-open, `task.php`) one e-mail and one PM, the late verdict after it and a blocked reply nothing; no warning in MyBB's task log or error log (`k31_notifications`). |
 | 3 | A poll on a thread that waits for its verdict | `newthread.php` with "post a poll" answers with its redirect page; the poll form (`polls.php?action=newpoll`) refuses the author: "The specified thread does not exist". A direct `do_newpoll` POST by the author still creates the poll (hooks `polls_newpoll_start`, `polls_do_newpoll_start`, `_process`, `_end`), and the plugin sends the thread again as revision `.1` with the poll (`q3_polls`). |
 | 4 | May a "Registered" author edit their own unapproved post | Not with MyBB's default `showownunapproved` = off (no permission); with it on, `editpost.php` shows the form and saves, and the plugin sends the edit as revision `.1` (`q4_edit_own_unapproved`). |
 | 5 | Is a reply's own subject shown | Yes: in the linear view, the threaded view, the printable version and post search results; the plugin sends it in front of the reply (`q5_reply_subject`). |
@@ -484,13 +593,14 @@ those tags, `inc/class_parser.php` `parse_message`) and hides HTML comments
 (`html_forum_page`, `reader-view.json`); an image (`[img]`, `[img=WxH]`, `[img align=…]`),
 a video of a known site and a link whose label shows nothing (`[url=X] [/url]`, an image
 inside the link) show no text, while a bare URL and `[url]X[/url]` show the address. For a
-moderator signal (K-41, K-42) MyBB 1.8.41 offers, read in the source and not exercised by
-the run: `add_report($report, $type = 'post')` (`inc/functions_modcp.php`: a
+moderator signal (K-41, K-42) MyBB 1.8.41 offers, read in the source: `add_report($report, $type = 'post')` (`inc/functions_modcp.php`: a
 `reportedcontent` row — `id` the post, `id2` its thread, `id3` its forum, `uid` the
 reporter, `reasonid`/`reason` — shown in the ModCP's report list, and with the board's
 `reportmethod` set to `email` or `pms` also sent to the moderators by `send_report`), and
 `send_pm($pm, -1, true)` (`inc/functions.php`: `subject`, `message`, `touid`,
 `receivepms`; `-1` sends as "MyBB Engine"), as `insert_post` uses it for subscriptions.
+The plugin chose the report for `wsparcie` (above), and the live run shows it in the
+ModCP's report list and the header (`k41_support`).
 
 Still not verified, and why:
 

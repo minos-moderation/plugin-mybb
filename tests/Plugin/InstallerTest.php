@@ -46,8 +46,8 @@ final class InstallerTest extends TestCase
         self::assertSame([
             'minos_enabled' => '0', 'minos_gateway_url' => 'https://gateway.wergiliusz.app', 'minos_api_key' => '',
             'minos_webhook_secret' => '', 'minos_profile' => 'forum_adult', 'minos_failure_mode' => 'fail-closed',
-            'minos_timeout' => '20', 'minos_censored' => 'publish', 'minos_blocked' => 'queue', 'minos_forums' => '-1',
-            'minos_skip_moderators' => '1',
+            'minos_timeout' => '20', 'minos_censored' => 'publish', 'minos_blocked' => 'queue',
+            'minos_notify_subscribers' => '1', 'minos_forums' => '-1', 'minos_skip_moderators' => '1',
         ], $this->settings('value'));
         foreach ($this->settings('title') as $name => $title) {
             self::assertNotSame('', $title, $name);
@@ -184,16 +184,20 @@ final class InstallerTest extends TestCase
     }
 
     /**
-     * Uninstalling leaves none of the plugin's datacache entries behind — here the two a
-     * forum gathers in use: the mark of a deactivation and a refusal of the gateway.
+     * Uninstalling leaves none of the plugin's datacache entries behind — here those a forum
+     * gathers in use: the mark of a deactivation, a refusal of the gateway, the pause, and an
+     * answer at the gateway's address that was not the gateway's.
      */
     public function testUninstallRemovesEveryStateEntry(): void
     {
-        $this->forum->install([], new RecordingTransport([RecordingTransport::refused(429, 'limit_dobowy_klucza', 36000)]));
+        $this->forum->install([], new RecordingTransport([RecordingTransport::accepted(null, 200),
+            RecordingTransport::refused(429, 'limit_dobowy_klucza', 36000)]));
         $this->forum->mybb->user = ['uid' => 7, 'username' => 'Autor Testowy', 'postnum' => 3, 'moderateposts' => 0];
+        $this->forum->write(false, 'Post wysłany pod obcy adres.');
+        $this->forum->endPause();
         $this->forum->write(false, 'Post przy wyczerpanym limicie.');
         minos_deactivate();
-        foreach ([Task::SWITCHED_OFF, Submitter::REFUSAL] as $key) {
+        foreach ([Task::SWITCHED_OFF, Submitter::REFUSAL, Submitter::PAUSE, Submitter::FOREIGN] as $key) {
             self::assertArrayHasKey(Platform::STATE_PREFIX . $key, $this->forum->cache->stored(), "{$key} was kept before");
         }
 

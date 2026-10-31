@@ -31,6 +31,11 @@ $plugins->add_hook('polls_do_editpoll_end', 'minos_hook_poll_changed');
 // The form shown again after a failed validation: the post was not inserted.
 $plugins->add_hook('newreply_start', 'minos_hook_form_shown');
 $plugins->add_hook('newthread_start', 'minos_hook_form_shown');
+// The ModCP's moderation queue: the gateway's verdict at each post the plugin holds.
+$plugins->add_hook('modcp_modqueue_posts_end', 'minos_hook_modqueue_posts');
+$plugins->add_hook('modcp_modqueue_threads_end', 'minos_hook_modqueue_threads');
+// The ModCP's report list: the "last report" cell of the plugin's own reports (uid 0).
+$plugins->add_hook('modcp_reports_report', 'minos_hook_modcp_report');
 
 if (defined('IN_ADMINCP')) {
     $plugins->add_hook('admin_config_settings_change', 'minos_hook_settings_change');
@@ -159,6 +164,31 @@ function minos_hook_poll_changed()
 function minos_hook_form_shown()
 {
     \Minos\MyBB\Plugin::instance()->submitter->onFormShown();
+}
+
+/**
+ * `modcp_modqueue_posts_end` (no arguments: `modcp.php` keeps the list in its global `$posts`).
+ */
+function minos_hook_modqueue_posts()
+{
+    \Minos\MyBB\Plugin::instance()->modQueue->onRendered(false);
+}
+
+/**
+ * `modcp_modqueue_threads_end` (the list in the global `$threads`).
+ */
+function minos_hook_modqueue_threads()
+{
+    \Minos\MyBB\Plugin::instance()->modQueue->onRendered(true);
+}
+
+/**
+ * `modcp_reports_report` (no arguments: the report in `modcp.php`'s globals `$report`,
+ * `$report_data`).
+ */
+function minos_hook_modcp_report()
+{
+    \Minos\MyBB\Plugin::instance()->modQueue->onReportRendered();
 }
 
 /**

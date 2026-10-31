@@ -78,8 +78,8 @@ Minos.
 6. Napisz próbny post jako zwykły użytkownik. W **Narzędzia i konserwacja → Dzienniki →
    Minos — dziennik** widać posty, które wymagają uwagi (czekające na werdykt, zatrzymane
    w kolejce, opublikowane bez oceny — pełna lista niżej, w „Panel administratora”), oraz
-   dziennik zdarzeń; post opublikowany po werdykcie `bezpieczne` znika z tej listy, chyba
-   że brama oznaczyła go sygnałem „wsparcie”.
+   dziennik zdarzeń; post opublikowany po werdykcie `bezpieczne` znika z tej listy (post
+   z sygnałem „wsparcie” ma własną listę na tej stronie i zgłoszenie w panelu moderatora).
 
 **Aktualizacja do nowej wersji**: dezaktywuj wtyczkę, podmień pliki i aktywuj ją ponownie.
 Aktywacja dodaje do tabel wtyczki kolumny, których wymaga nowa wersja (dane zostają); bez
@@ -98,9 +98,10 @@ dezaktywacji, wtyczka wysyła ponownie przy pierwszym przebiegu zadania.
 | Tryb awaryjny | Co zrobić z postem bez werdyktu: **zostawić w kolejce moderacji** (fail-closed) albo **opublikować bez oceny** (fail-open). | fail-closed |
 | Czas oczekiwania na werdykt | Minuty, po których post bez werdyktu dostaje tryb awaryjny. **Najmniej 20** = 15 minut, przez które brama próbuje doręczyć werdykt, i 5 minut zapasu; mniejsza wartość jest traktowana jak 20. **Najwięcej 1440** (doba); większa jest traktowana jak 1440. | 20 |
 | Post ocenzurowany | **Opublikuj zamaskowany tekst** albo **zostaw w kolejce moderacji**. | opublikuj |
-| Post zablokowany | **Zostaw w kolejce moderacji** albo **usuń (miękko)** — moderator może go przywrócić. | zostaw w kolejce |
+| Post zablokowany | **Zostaw w kolejce moderacji** albo **usuń (miękko)** — moderator może go przywrócić. Post z sygnałem „wsparcie” nigdy nie jest usuwany — zostaje w kolejce albo opublikowany. | zostaw w kolejce |
 | Fora | Fora, w których wtyczka moderuje nowe posty. | wszystkie |
 | Pomijaj moderatorów | Posty moderatorów, supermoderatorów i administratorów trafiają na forum bez oceny. | tak |
+| Powiadamiaj subskrybentów o postach opublikowanych przez wtyczkę | Subskrybenci wątku i działu dostają o poście opublikowanym przez wtyczkę to samo powiadomienie (e-mail albo prywatną wiadomość), które MyBB wysyła o poście widocznym od razu — opis niżej. Wyłącz, jeśli inna wtyczka już je wysyła. | tak |
 
 Gdy wtyczka jest włączona, ale czegoś brakuje (klucza, sekretu, poprawnego adresu bramy,
 znanego profilu), nie wysyła postów do oceny: każdy nowy post od razu dostaje tryb
@@ -158,20 +159,20 @@ ani dalsza część postu ponad 3000 znaków.
 | `ocenzurowane` | publikuje tekst z zamaskowanymi fragmentami (`█`) albo zostawia post w kolejce — według ustawienia |
 | `zablokowane` | zostawia post w kolejce moderacji albo usuwa go miękko — według ustawienia |
 | `nieocenione` | tryb awaryjny |
-| `wsparcie` | niezależnie od werdyktu oznacza post w dzienniku wtyczki: autor może potrzebować wsparcia, nie kary |
+| `wsparcie` | niezależnie od werdyktu: autor może potrzebować wsparcia, nie kary — wtyczka zgłasza post moderatorom (niżej, „Sygnał wsparcia”) i nigdy sama go nie usuwa ani nie ukrywa |
 
 **Post dłuższy niż 3000 znaków**: brama oceniła tylko jego początek, więc werdykt
 `bezpieczne` nie wystarcza do publikacji — post dostaje tryb awaryjny (fail-closed: zostaje
 w kolejce; fail-open: zostaje opublikowany). Uwagę „wpis dłuższy niż 3000 znaków — oceniono
-początek” widać w dzienniku wtyczki (Minos — dziennik, lista postów wymagających uwagi,
-kolumna „Werdykt”), nie w kolejce moderacji MyBB. Werdykt `zablokowane` działa normalnie, a `ocenzurowane` zawsze zostawia
-taki post w kolejce.
+początek” widać przy poście w kolejce moderacji (niżej, „W kolejce moderatora”) i w dzienniku
+wtyczki (Minos — dziennik, lista postów wymagających uwagi, kolumna „Werdykt”). Werdykt
+`zablokowane` działa normalnie, a `ocenzurowane` zawsze zostawia taki post w kolejce.
 
 Brama maskuje tekst, który zobaczyli czytelnicy, więc wtyczka publikuje zamaskowany tekst
 tylko wtedy, gdy jest on **dokładnie** tym, co wysłała, z niektórymi znakami zastąpionymi
 przez `█`, a post jest zwykłym tekstem. **Post z formatowaniem (MyCode, cytat, link)
-zostaje w kolejce, a zamaskowany tekst widać w dzienniku** (Minos — dziennik, kolumna
-„Tekst zamaskowany przez bramę”). Tak samo zostaje w kolejce zwykły tekst z nadmiarowymi
+zostaje w kolejce, a zamaskowany tekst widać przy poście w kolejce moderacji i w dzienniku**
+(Minos — dziennik, kolumna „Tekst zamaskowany przez bramę”). Tak samo zostaje w kolejce zwykły tekst z nadmiarowymi
 białymi znakami — podwójnymi spacjami, tabulatorami, twardymi spacjami, spacjami na
 początku lub końcu wiersza albo więcej niż jednym pustym wierszem z rzędu: wtyczka wysyła
 go z takimi odstępami ściśniętymi, więc maska nie odpowiada zapisanej treści znak w znak
@@ -204,10 +205,58 @@ zastosowania, więc:
 - gdy post poprawia moderator, decyduje człowiek: wtyczka niczego nie wysyła, a post
   zostaje w kolejce moderacji i na liście „Posty, które wymagają uwagi” (stan
   „Rozstrzygnięty przez człowieka”, powód „edytowany przez moderatora przed werdyktem”).
+  Tak samo, gdy moderator poprawi post, który tryb awaryjny zostawił w kolejce, bo werdykt
+  nie nadszedł w czasie: spóźniony werdykt nie jest już stosowany.
 
 Własny post w kolejce moderacji autor może poprawić tylko wtedy, gdy forum na to pozwala
 (ustawienie MyBB `showownunapproved`, domyślnie wyłączone); poza tym poprawiają go
 moderatorzy.
+
+## W kolejce moderatora
+
+W panelu moderatora, w **kolejce moderacji** (posty i wątki czekające na moderację), pod
+każdym postem, który zatrzymała wtyczka, jest wiersz „Minos:” ze stanem postu (np. czeka na
+werdykt, w kolejce moderacji), werdyktem bramy albo powodem, dla którego post czeka
+(np. brak werdyktu w czasie, błąd konfiguracji, post bez tekstu), kategoriami, uwagą
+„wpis dłuższy niż 3000 znaków — oceniono początek”, sygnałem „wsparcie” i — przy poście
+ocenzurowanym, którego maski nie dało się opublikować — tekstem zamaskowanym przez bramę.
+Posty, które MyBB zatrzymał sam (np. forum moderuje wszystkie posty), nie mają tego
+wiersza. Wtyczka dopisuje go do listy, którą buduje MyBB (do wiersza z przyciskami
+„zatwierdź / usuń / ignoruj” danego postu); w motywie, który zachował te przyciski, ale
+nie wiersz tabeli, uwagi trafiają na koniec listy, każda z numerem postu, a w motywie bez
+tych przycisków uwag nie ma.
+
+## Sygnał wsparcia
+
+Gdy brama zasygnalizuje przy poście, że jego autor może potrzebować wsparcia (`wsparcie`,
+np. przy treści o samookaleczeniu), wtyczka — niezależnie od werdyktu — dodaje
+**zgłoszenie w panelu moderatora** (Panel moderatora → Zgłoszona zawartość, z powodem
+„Inny” i komentarzem „Minos — wsparcie: …”), widoczne dla moderatorów tego działu,
+supermoderatorów i administratorów; MyBB pokazuje im też u góry każdej strony informację
+o nieprzeczytanym zgłoszeniu. Zgłoszenie nie zawiera treści postu, klucza ani sekretu.
+Post z tym sygnałem **nigdy nie jest automatycznie usuwany, odrzucany ani ukrywany**:
+zostaje w kolejce albo zostaje opublikowany, aż zdecyduje człowiek — werdykt
+`zablokowane` zostawia go w kolejce także przy ustawieniu „usuń (miękko)”, a werdykt,
+który przyjdzie po publikacji bez oceny (fail-open), nie cofa go do kolejki. Wtyczka nigdy
+nie pisze do autora postu. Posty z sygnałem są też na osobnej liście w dzienniku wtyczki.
+
+## Powiadomienia subskrybentów
+
+MyBB powiadamia subskrybentów wątku (e-mailem albo prywatną wiadomością, według
+subskrypcji) i subskrybentów działu (e-mailem, o nowym wątku) tylko w chwili dodania postu
+widocznego od razu; przy zatwierdzeniu postu z kolejki moderacji nie wysyła nic. Dlatego
+post, który publikuje wtyczka — po werdykcie `bezpieczne`, ocenzurowany z maską albo bez
+oceny w trybie fail-open — wysyła subskrybentom to samo, co MyBB wysłałby dla postu
+widocznego od razu, na tych samych zasadach: nie do autora postu, tylko do osób, które
+mogą czytać ten dział, tylko do tych, które odwiedziły forum od ostatniego postu w wątku
+(dziale) — MyBB nie powiadamia drugi raz przed kolejną wizytą — i w języku odbiorcy.
+Fragment w powiadomieniu to tekst opublikowany, czyli przy poście ocenzurowanym tekst
+z maską. Powiadomienie wychodzi **jeden raz**: werdykt, który przyjdzie po publikacji bez
+oceny (fail-open), nie wysyła go ponownie, a post zatrzymany w kolejce (zablokowany,
+ocenzurowany zostawiony w kolejce, bez oceny przy fail-closed) nie wysyła nic. Post
+zatwierdzony ręcznie przez moderatora wtyczka zostawia MyBB (bez powiadomień). Ustawienie
+„Powiadamiaj subskrybentów o postach opublikowanych przez wtyczkę” (domyślnie tak) wyłącza
+to zachowanie, np. gdy inna wtyczka już wysyła takie powiadomienia.
 
 ## Tryb awaryjny: fail-open czy fail-closed
 
@@ -218,9 +267,7 @@ werdyktu nie ma:
 - brama odmówiła przyjęcia postu do chwili, która wypada po końcu jego czasu oczekiwania
   (np. wyczerpany dobowy limit klucza albo przeciążenie) — tryb awaryjny od razu;
 - brama odrzuciła wysyłkę z powodu błędu konfiguracji (np. zły klucz, profil spoza listy
-  klucza, brak zapisanego webhooka) albo odpowiedziała czymś innym niż przyjęciem `202`
-  (np. stroną dostawcy hostingu z kodem `200`) — kod błędu pojawia się w panelu
-  administratora;
+  klucza, brak zapisanego webhooka) — kod błędu pojawia się w panelu administratora;
 - wtyczka jest włączona, ale jej ustawienia są niekompletne (brak klucza albo sekretu,
   adres bramy bez `https://`, nieznany profil) — nic nie jest wysyłane;
 - post nie ma tekstu do oceny — także nowy wątek albo odpowiedź z własnym tematem, jeśli
@@ -236,10 +283,18 @@ werdyktu nie ma:
   i ankietą;
 - nie udało się odczytać tekstu postu (np. treść tak zbudowana, że przetwarzanie wyrażeń
   regularnych przerywa się z błędem) — wtyczka nie wysyła wtedy niczego, nawet samego
-  tytułu wątku, a w dzienniku zapisuje zdarzenie z numerem postu;
+  tytułu wątku, a w dzienniku zapisuje zdarzenie z numerem postu. Bardzo długi cytat albo
+  lista (np. 60 000 znaków) są odczytywane drugi raz bez kompilacji JIT wyrażeń
+  regularnych; na serwerze, który blokuje funkcję PHP `ini_set` (`disable_functions`),
+  ten drugi odczyt jest niemożliwy i taki post też trafia tutaj;
 - post był dłuższy niż 3000 znaków, a brama uznała jego początek za bezpieczny.
 
-**fail-closed** (domyślnie) zostawia taki post w kolejce moderacji dla człowieka.
+**fail-closed** (domyślnie) zostawia taki post w kolejce moderacji dla człowieka. Jeśli
+wtyczka wstrzymała go dlatego, że werdykt nie nadszedł w czasie oczekiwania, a werdykt
+przyjdzie później, wtyczka stosuje go tak, jakby przyszedł na czas (np. `bezpieczne`
+publikuje post) — o ile post wciąż czeka w kolejce: jeśli moderator w tym czasie go
+zatwierdził, usunął albo poprawił, decyzja człowieka jest ostateczna, a poprawka autora
+wysyła post do oceny jeszcze raz (werdykt o wcześniejszej wersji jest pomijany).
 **fail-open** publikuje go bez oceny — a jeśli werdykt przyjdzie później, wtyczka nadal go
 zastosuje, dopóki nikt nie ruszył postu: `zablokowane` odsyła post z powrotem do kolejki
 moderacji, `ocenzurowane` postępuje według ustawienia „Post ocenzurowany”. Jeśli w tym czasie
@@ -247,12 +302,18 @@ moderator zdecydował o poście albo post został edytowany, decyzja człowieka 
 
 Które odpowiedzi bramy są ponawiane: `429` (limity klucza, wspólny limit bramy, pełna
 kolejka), `503` i każde inne `5xx`, `408` oraz brak odpowiedzi (błąd połączenia, przekroczony
-czas). Przyjęciem jest wyłącznie `202`. Każda inna odpowiedź — pozostałe `4xx`,
-przekierowanie, `2xx` inne niż `202` — to błąd konfiguracji: tryb awaryjny od razu i
-komunikat z kodem w panelu administratora.
+czas), a także każde `2xx` inne niż `202` — nawet z treścią podobną do przyjęcia: pod adresem
+bramy odpowiada wtedy coś innego niż brama (np. strona dostawcy hostingu albo serwer
+pośredniczący), więc post nie został przyjęty; panel administratora pokazuje wtedy kod tej
+odpowiedzi i prosi o sprawdzenie adresu bramy, aż do pierwszej przyjętej wysyłki. Przyjęciem
+jest wyłącznie `202`, i to tylko dla postów, które brama wymieniła w odpowiedzi (`przyjete`);
+post, którego tam nie ma, wtyczka wysyła ponownie. Każda inna odpowiedź — pozostałe `4xx`
+i przekierowanie — to błąd konfiguracji: tryb awaryjny od razu i komunikat z kodem w panelu
+administratora.
 
-Gdy brama jest chwilowo przeciążona albo niedostępna (lub nie ma połączenia albo
-połączenie przekroczyło czas — `408`), post czeka: zadanie ponawia wysyłkę po czasie
+Gdy brama jest chwilowo przeciążona albo niedostępna (lub nie ma połączenia, połączenie
+przekroczyło czas — `408` — albo pod jej adresem odpowiada coś innego), post czeka: zadanie
+ponawia wysyłkę po czasie
 wskazanym przez bramę albo po coraz dłuższej przerwie (od 1 minuty do 1 godziny). Jeśli do końca czasu oczekiwania się nie uda — tryb awaryjny.
 Taka odmowa wstrzymuje wszystkie wysyłki forum do chwili wskazanej przez bramę (bez
 wskazania — na minutę): w tym czasie wtyczka nie wysyła nowych postów (autor nie czeka na
@@ -277,8 +338,10 @@ numer postu — nigdy treść błędu.
 
 - **Komunikat na każdej stronie panelu**, gdy wtyczka jest włączona, ale nie może działać
   (czego brakuje), gdy brama odrzuciła ostatnią wysyłkę z powodu błędu konfiguracji
-  (kod błędu i czas) albo gdy brama nie przyjmuje postów do określonej godziny (wyczerpany
-  dobowy limit klucza, przeciążenie — kod i godzina). Znika po pierwszej udanej wysyłce.
+  (kod błędu i czas), gdy pod adresem bramy odpowiedziało coś innego niż brama (`2xx` inne
+  niż `202` — kod i czas) albo gdy brama nie przyjmuje postów do określonej godziny
+  (wyczerpany dobowy limit klucza, przeciążenie — kod i godzina). Znika po pierwszej udanej
+  wysyłce.
   Także gdy webhook odrzuca doręczenia z nieprawidłowym podpisem: ile ich było od
   ostatniego przyjętego doręczenia, kiedy przyszło ostatnie i na co wskazuje powód — zły
   sekret webhooka, zegar serwera przesunięty o ponad 5 minut albo nagłówek podpisu, który
@@ -287,10 +350,12 @@ numer postu — nigdy treść błędu.
   pierwszym doręczeniu z poprawnym podpisem albo po zapisaniu nowego sekretu.
 - **Narzędzia i konserwacja → Dzienniki → Minos — dziennik**: stan konfiguracji, adres
   webhooka, posty wymagające uwagi (zatrzymane w kolejce, czekające na werdykt, opublikowane
-  bez oceny w trybie fail-open, rozstrzygnięte przez człowieka przed werdyktem i oznaczone
-  jako potrzebujące wsparcia; przy poście
-  ocenzurowanym zatrzymanym w kolejce — tekst zamaskowany przez bramę) oraz dziennik
-  zdarzeń. Obie tabele pokazują po 50 najnowszych wierszy. Dziennik zawiera wyłącznie kody
+  bez oceny w trybie fail-open, opublikowane z maską bramy i rozstrzygnięte przez człowieka
+  przed werdyktem; przy poście
+  ocenzurowanym zatrzymanym w kolejce — tekst zamaskowany przez bramę), osobna lista postów
+  z sygnałem „wsparcie” (niezależnie od tego, co stało się z postem) oraz dziennik
+  zdarzeń. Każda z tych tabel pokazuje 50 najnowszych wierszy, więc inne posty nie
+  wypierają z listy postów z sygnałem wsparcia. Dziennik zawiera wyłącznie kody
   i numery postów — nigdy treść, klucz ani sekret. Wpisy starsze niż 30 dni są usuwane.
 - **Werdykty z ostatnich 7 dni** (na tej samej stronie): mediana (P50) i 95. percentyl (P95)
   czasu od przyjęcia postu przez bramę (odpowiedź `202`) do doręczenia werdyktu oraz liczba
@@ -324,13 +389,13 @@ numer postu — nigdy treść błędu.
   zmieniają w MyBB tylko moderatorzy: zmiana ankiety wątku czekającego na werdykt, jak
   poprawka moderatora, zostawia wątek ludziom.
 - Edycje opublikowanych postów nie są ponownie oceniane (poza zakresem tej wersji).
-- **Subskrybenci wątku i forum NIE dostają powiadomień** (e-mail ani prywatnej wiadomości)
-  o postach, które przeszły przez wtyczkę — także po ich publikacji. MyBB wysyła je tylko
-  w chwili dodania posta widocznego od razu; przy zatwierdzeniu z kolejki moderacji nie
-  wysyła ich wcale (tak samo jest przy ręcznej moderacji), a nie udostępnia funkcji, którą
-  wtyczka mogłaby je wysłać.
-- Informacja „wsparcie” jest widoczna tylko w dzienniku wtyczki, nie w kolejce moderacji
-  MyBB.
+- Powiadomienia subskrybentów o poście zatwierdzonym przez moderatora z kolejki MyBB
+  wysyła MyBB — czyli żadne (tak działa MyBB przy każdej ręcznej moderacji); wtyczka wysyła
+  je tylko dla postów, które sama publikuje (niżej, „Powiadomienia subskrybentów”).
+- Zgłoszenie z sygnałem „wsparcie” widać w panelu moderatora (Zgłoszona zawartość) i w
+  powiadomieniu MyBB o nieprzeczytanych zgłoszeniach; wtyczka nie wysyła go moderatorom
+  e-mailem ani prywatną wiadomością, nawet gdy forum tak ustawiło powiadamianie
+  o zgłoszeniach (ustawienie MyBB `reportmethod`) — to robi tylko formularz zgłoszenia MyBB.
 - Klucz i sekret są przechowywane jak inne ustawienia MyBB: w bazie danych i w pliku
   `inc/settings.php`, jawnym tekstem. Panel administratora pokazuje tylko ich początek
   (a strony „Edytuj ustawienie” MyBB dla nich nie otwiera), ale zobaczy je każdy, kto ma

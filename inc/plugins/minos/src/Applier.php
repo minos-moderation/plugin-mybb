@@ -26,11 +26,20 @@ use Minos\Client\WebhookPayload;
  * - a post longer than the 3000 characters sent: the verdict judged its beginning only,
  *   so a publishing verdict (`bezpieczne`) goes to the failure mode too; `zablokowane`
  *   still holds it;
- * - `wsparcie` → the row is flagged and listed on the ACP page, whatever the verdict.
+ * - `wsparcie` → whatever the verdict, the moderators get a report in the ModCP's report
+ *   centre and the row is listed on the ACP page; such a post is never deleted, rejected or
+ *   hidden automatically — `zablokowane` keeps it held even with the soft-delete setting, a
+ *   late `zablokowane` leaves it published (shared rule D9.9). Nothing goes to its author.
+ *
+ * A post the plugin publishes from the queue (a verdict, the failure mode in `fail-open`)
+ * notifies its subscribers as MyBB notifies them of a post visible at once, by setting and
+ * once ({@see publish}, shared rule D9.8).
  *
  * A verdict that arrives AFTER the failure mode published a post ({@see late}) is still
  * applied while the post is public and untouched: `zablokowane` sends it back to the
- * queue, `ocenzurowane` follows the setting.
+ * queue, `ocenzurowane` follows the setting. One that arrives after the failure mode held
+ * the post for its timeout (`fail-closed`) is applied by {@see verdict} as if it had come in
+ * time, while the post is still in the queue and untouched (shared rule D9.10).
  *
  * A verdict applies only to the text that was sent. Before any verdict is applied, the
  * post is rendered again ({@see Text::forPost}, with its forum's current options) and its
@@ -67,7 +76,9 @@ final class Applier
     }
 
     /**
-     * Applies a delivered payload to a row that was waiting for it.
+     * Applies a delivered payload to a row that was waiting for it — or that the failure mode
+     * held for its timeout, the verdict coming late ({@see Receiver}): the same rules, as on
+     * time.
      *
      * @param array<string,mixed>                                                                $row      The claimed row.
      * @param array{status:string,kwalifikacja:?string,kategorie:array<int,string>,ocenzurowany:?string,wsparcie:bool} $payload  From `WebhookPayload::parse`.
@@ -76,6 +87,19 @@ final class Applier
      * @return string The row's new status.
      */
     public function verdict(array $row, array $payload, Settings $settings, int $now): string
+    {
+        $status = $this->onTime($row, $payload, $settings, $now);
+        $this->signalSupport($row, $payload, $status, $now);
+        return $status;
+    }
+
+    /**
+     * {@see verdict}, before the `wsparcie` signal.
+     *
+     * @param array<string,mixed> $row
+     * @param array{status:string,kwalifikacja:?string,kategorie:array<int,string>,ocenzurowany:?string,wsparcie:bool} $payload
+     */
+    private function onTime(array $row, array $payload, Settings $settings, int $now): string
     {
         $record = self::record($payload) + self::answered($payload, $now);
         if ($payload['status'] !== WebhookPayload::ASSESSED || $payload['kwalifikacja'] === null) {
@@ -96,16 +120,21 @@ final class Applier
             } else {
                 switch ($payload['kwalifikacja']) {
                     case 'bezpieczne':
-                        $this->platform->approve($post);
+                        $this->publish($post, $settings, $now);
                         $status = Status::PUBLISHED;
                         break;
                     case 'ocenzurowane':
-                        $status = $this->censor($row, $post, $payload['ocenzurowany'], $sent, $settings)
-                            ? $this->approved($post, Status::CENSORED)
-                            : Status::HELD;
+                        if ($this->censor($row, $post, $payload['ocenzurowany'], $sent, $settings)) {
+                            $this->publish($post, $settings, $now);
+                            $status = Status::CENSORED;
+                        } else {
+                            $status = Status::HELD;
+                        }
                         break;
                     default: // 'zablokowane' — parse() admits nothing else
-                        if ($settings->softDeleteBlocked()) {
+                        // A post with `wsparcie` is never deleted automatically (D9.9): it
+                        // stays held until a person decides.
+                        if ($settings->softDeleteBlocked() && !$payload['wsparcie']) {
                             $this->platform->softDelete($post);
                             $status = Status::DELETED;
                         } else {
@@ -137,7 +166,7 @@ final class Applier
         $auto = 0;
         if ($status === null) {
             if ($settings->failOpen()) {
-                $this->platform->approve($post);
+                $this->publish($post, $settings, $now);
                 $status = Status::PUBLISHED;
                 $auto = 1;
             } else {
@@ -154,9 +183,10 @@ final class Applier
      * `published` with `auto_published = 1`, claimed from there). While the post is still
      * public and nobody touched it — an edit clears `auto_published`, a moderator's action
      * changes its visibility — the verdict is applied:
-     * - `zablokowane` → back to the moderation queue;
+     * - `zablokowane` → back to the moderation queue — with `wsparcie`, it stays published
+     *   (never hidden automatically, D9.9);
      * - `ocenzurowane` → the masked text, by setting and when it stands for the whole post;
-     *   otherwise back to the queue;
+     *   otherwise back to the queue (with `wsparcie`, published as it is);
      * - `bezpieczne` → it stays published (a cut post stays marked as published unassessed);
      * - `nieocenione` → nothing new.
      *
@@ -167,6 +197,19 @@ final class Applier
      * @return string The row's new status.
      */
     public function late(array $row, array $payload, Settings $settings, int $now): string
+    {
+        $status = $this->afterPublication($row, $payload, $settings, $now);
+        $this->signalSupport($row, $payload, $status, $now);
+        return $status;
+    }
+
+    /**
+     * {@see late}, before the `wsparcie` signal.
+     *
+     * @param array<string,mixed> $row
+     * @param array{status:string,kwalifikacja:?string,kategorie:array<int,string>,ocenzurowany:?string,wsparcie:bool} $payload
+     */
+    private function afterPublication(array $row, array $payload, Settings $settings, int $now): string
     {
         $pid = (int)$row['pid'];
         $qualification = $payload['status'] === WebhookPayload::ASSESSED ? $payload['kwalifikacja'] : null;
@@ -193,12 +236,42 @@ final class Applier
             $status = Status::PUBLISHED;
         } elseif ($qualification === 'ocenzurowane' && $this->censor($row, $post, $payload['ocenzurowany'], $sent, $settings)) {
             $status = Status::CENSORED;
+        } elseif ($payload['wsparcie']) {
+            // Never hidden automatically (D9.9): it stays published until a person decides;
+            // the moderators get the signal.
+            $status = Status::PUBLISHED;
         } else {
             $this->platform->unapprove($post);
             $status = Status::HELD;
         }
         $this->platform->updatePending($pid, $record + self::maskKept($status, $payload) + ['status' => $status]);
         return $status;
+    }
+
+    /**
+     * `wsparcie` (shared rule D9.9, A7 of client-php's `docs/plugin-behaviour.md`): whatever
+     * the verdict, the forum's moderators get an active signal in their own queue — a report
+     * in the ModCP's report centre ({@see Platform::reportForSupport}), which MyBB also
+     * announces to them at the top of every page. Never a message to the author. Raised once
+     * per applied delivery while the post exists; a report still open for the post is not
+     * doubled. One that fails is logged (`error`/`support`, the post id) and changes
+     * nothing of the verdict.
+     *
+     * @param array<string,mixed>                       $row     The claimed row.
+     * @param array{kwalifikacja:?string,wsparcie:bool} $payload The payload.
+     * @param string                                    $status  The row's new status.
+     */
+    private function signalSupport(array $row, array $payload, string $status, int $now): void
+    {
+        if (!$payload['wsparcie'] || $status === Status::GONE) {
+            return;
+        }
+        try {
+            $this->platform->reportForSupport((int)$row['pid'], $this->platform->lang('minos_support_report',
+                $payload['kwalifikacja'] ?? 'nieocenione'), $now);
+        } catch (\Throwable $e) {
+            $this->platform->log('error', 'support', (int)$row['pid'], $now);
+        }
     }
 
     /**
@@ -227,7 +300,7 @@ final class Applier
             if ($this->platform->countFailure($pid) < self::MAX_FAILURES) {
                 return;
             }
-            if ($this->platform->claimPending($pid, $now)) {
+            if ($this->platform->claimPending($pid, $now) || $this->platform->claimTimedOut($pid, $now)) {
                 $this->platform->updatePending($pid,
                     ['status' => Status::HELD, 'verdict' => Status::REASON_APPLY_ERROR, 'decided_at' => $now]);
             } elseif ($this->platform->claimPending($pid, $now, [Status::PUBLISHED], true)) {
@@ -315,14 +388,38 @@ final class Applier
     }
 
     /**
-     * Approves a post and returns the status to record.
+     * Publishes a held post: approves it the way a moderator does, then — by setting — sends
+     * its thread's or forum's subscribers what MyBB sends for a post visible at once (shared
+     * rule D9.8: MyBB sends nothing on an approval). Once: only the plugin's own publication
+     * of a post from the queue gets here — a late verdict on a post the failure mode
+     * published ({@see late}) never does, and a moderator's approval is MyBB's own.
      *
-     * @param array<string,mixed> $post
+     * A notification that fails is that step's failure alone: logged by step (`notify`) and
+     * post id, never its message; the post stays published.
+     *
+     * @param array<string,mixed> $post     The post ({@see Platform::post}).
+     * @param Settings            $settings The settings.
+     * @param int                 $now      Unix seconds.
      */
-    private function approved(array $post, string $status): string
+    private function publish(array $post, Settings $settings, int $now): void
     {
+        $before = null;
+        if ($settings->notifySubscribers()) {
+            try {
+                $before = $this->platform->lastPosts($post);
+            } catch (\Throwable $e) {
+                $this->platform->log('error', 'notify', (int)$post['pid'], $now);
+            }
+        }
         $this->platform->approve($post);
-        return $status;
+        if ($before === null) {
+            return;
+        }
+        try {
+            $this->platform->notifySubscribers($post, $before);
+        } catch (\Throwable $e) {
+            $this->platform->log('error', 'notify', (int)$post['pid'], $now);
+        }
     }
 
     /**

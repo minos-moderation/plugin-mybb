@@ -9,7 +9,7 @@
         "engine": "pgsql",
         "version": "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)"
     },
-    "recorded": "2026-10-28",
+    "recorded": "2026-10-31",
     "source": "tests/Live/LiveForumTest.php through bin/verify-mybb-1841.sh",
     "answers": {
         "q7_schema": {
@@ -461,6 +461,102 @@
             "affected_first": 1,
             "affected_second": 0
         },
-        "activation_adds_a_missing_column": true
+        "activation_adds_a_missing_column": true,
+        "k43_late_after_timeout": {
+            "held_by_the_task": {
+                "late": [
+                    "held",
+                    "timeout",
+                    0
+                ],
+                "decided": [
+                    "held",
+                    "timeout",
+                    0
+                ]
+            },
+            "after_the_late_verdict": {
+                "late": [
+                    "published",
+                    "bezpieczne",
+                    1
+                ],
+                "decided": [
+                    "held",
+                    "timeout",
+                    1
+                ]
+            }
+        },
+        "k31_notifications": {
+            "published_by_the_plugin": {
+                "thread_mail": 1,
+                "forum_mail": 1,
+                "thread_pm": 1
+            },
+            "webhook_answers": [
+                {
+                    "status": 200,
+                    "body": ""
+                },
+                {
+                    "status": 200,
+                    "body": ""
+                }
+            ],
+            "published_by_the_failure_mode": {
+                "thread_mail": 1,
+                "forum_mail": 0,
+                "thread_pm": 1
+            },
+            "late_verdict_after_it": {
+                "thread_mail": 0,
+                "forum_mail": 0,
+                "thread_pm": 0
+            },
+            "blocked": {
+                "thread_mail": 0,
+                "forum_mail": 0,
+                "thread_pm": 0
+            },
+            "task_log_warnings": 0,
+            "plugin_errors_logged": 0
+        },
+        "k41_support": {
+            "posts": {
+                "safe": {
+                    "visible": 1,
+                    "status": "published",
+                    "reports": 1,
+                    "report_names_thread_and_forum": true
+                },
+                "blocked": {
+                    "visible": 0,
+                    "status": "held",
+                    "reports": 1,
+                    "report_names_thread_and_forum": true
+                }
+            },
+            "modcp_lists_the_report": true,
+            "modcp_names_the_reporter": true,
+            "errors_logged_by_the_report_list": 0,
+            "header_announces_it": true,
+            "messages_to_the_author": 0
+        },
+        "k42_modqueue": {
+            "censored": {
+                "verdict": true,
+                "categories": true,
+                "mask": true
+            },
+            "long": {
+                "verdict": true,
+                "only_its_beginning": true
+            },
+            "thread": {
+                "verdict": true
+            },
+            "no_secret": true
+        }
     }
 }

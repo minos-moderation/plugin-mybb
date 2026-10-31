@@ -8,14 +8,18 @@ namespace Minos\MyBB;
  * `POST {gateway}/api/v1/b2b/oceny`: sends a batch and reads the answer into one of three
  * outcomes the plugin acts on (`docs/contract.md` in `minos-moderation/client-php`):
  *
- * - {@see ACCEPTED}: `202` only, the contract's acceptance. An attempt is promised, not a
- *   verdict;
- * - {@see RETRY}: `429`, `503` (and any other 5xx), `408` and no answer at all — a
- *   timeout is a network failure. The items stay pending and go again after
- *   `blad.ponow_za_s`, or after a backoff;
- * - {@see CONFIG_ERROR}: any other answer — a `4xx` but `408` and `429`, a redirect, and
- *   any other `2xx` (a `200` from something in front of the gateway accepted nothing),
- *   with the code `http_<status>`. Retrying will not help; the administrator must see it.
+ * - {@see ACCEPTED}: `202` only, the contract's acceptance — of the items its `przyjete`
+ *   names, and of no other ({@see Submitter} sends an item it leaves out again). An attempt
+ *   is promised, not a verdict;
+ * - {@see RETRY}: `429`, `503` (and any other 5xx), `408`, no answer at all — a timeout is
+ *   a network failure — and any `2xx` other than `202`, whatever its body says: a `200`
+ *   from something in front of the gateway (a hosting page, a proxy, a wrong address)
+ *   accepted nothing, and may answer differently next time (shared rule F5a in
+ *   client-php's `docs/plugin-behaviour.md`). The items stay pending and go again after
+ *   `blad.ponow_za_s`, or after a backoff, and the whole forum pauses its sending;
+ * - {@see CONFIG_ERROR}: any other answer — a `4xx` but `408` and `429`, and a redirect,
+ *   with the gateway's code or `http_<status>`. Retrying will not help; the administrator
+ *   must see it.
  *
  * What goes on the wire is the batch the caller built and the key header — the item ids
  * are `mybb:<pid>`, and no e-mail, IP address or user id is ever in an item
@@ -59,16 +63,16 @@ final class Gateway
      * @param string                          $baseUrl The gateway's address (checked by {@see Settings}).
      * @param string                          $key     The B2B key.
      * @param array<int,array<string,mixed>>  $items   1–{@see MAX_ITEMS} items.
-     * @return array{outcome:string,status:int,kod:string,ponow_za_s:?int,element:?int}
+     * @return array{outcome:string,status:int,kod:string,ponow_za_s:?int,element:?int,przyjete:array<int,string>}
      *     `kod` is the gateway's error code, or `http_<status>`, or `siec` for no answer;
-     *     '' when accepted.
+     *     '' when accepted. `przyjete`: the item ids a `202` accepted (none otherwise).
      */
     public function submit(string $baseUrl, string $key, array $items): array
     {
         $body = json_encode(['elementy' => array_values($items)], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if ($body === false) {
             // Text is made valid UTF-8 before it gets here, so this is a bug, not the network.
-            return self::result(self::CONFIG_ERROR, 0, 'bledne_kodowanie', null, null);
+            return self::result(self::CONFIG_ERROR, 0, 'bledne_kodowanie', null, null, []);
         }
         $answer = call_user_func($this->transport, $baseUrl . self::PATH, [
             'Content-Type: application/json; charset=utf-8',
@@ -83,19 +87,22 @@ final class Gateway
      *
      * @param int    $status The HTTP status; 0 for no answer.
      * @param string $body   The answer's body.
-     * @return array{outcome:string,status:int,kod:string,ponow_za_s:?int,element:?int}
+     * @return array{outcome:string,status:int,kod:string,ponow_za_s:?int,element:?int,przyjete:array<int,string>}
      */
     public static function classify(int $status, string $body): array
     {
+        $decoded = json_decode($body, true);
         if ($status === 202) {
-            return self::result(self::ACCEPTED, $status, '', null, null);
+            $accepted = is_array($decoded) && is_array($decoded['przyjete'] ?? null)
+                ? array_values(array_filter($decoded['przyjete'], 'is_string')) : [];
+            return self::result(self::ACCEPTED, $status, '', null, null, $accepted);
         }
         if ($status >= 200 && $status < 300) {
-            // Not the gateway's acceptance; its body is no refusal either.
-            return self::result(self::CONFIG_ERROR, $status, 'http_' . $status, null, null);
+            // Not the gateway's acceptance, whatever the body says (even a `przyjete` naming
+            // every item): something else answered at its address. Retried, as no answer is.
+            return self::result(self::RETRY, $status, 'http_' . $status, null, null, []);
         }
-        $error = json_decode($body, true);
-        $error = is_array($error) && is_array($error['blad'] ?? null) ? $error['blad'] : [];
+        $error = is_array($decoded) && is_array($decoded['blad'] ?? null) ? $decoded['blad'] : [];
         $code = is_string($error['kod'] ?? null) && preg_match('/^[a-z0-9_]{1,40}\z/', $error['kod'])
             ? $error['kod']
             : ($status === 0 ? 'siec' : 'http_' . $status);
@@ -103,9 +110,9 @@ final class Gateway
         $element = is_int($error['element'] ?? null) && $error['element'] >= 0 ? $error['element'] : null;
 
         if ($status === 0 || $status === 408 || $status === 429 || $status >= 500) {
-            return self::result(self::RETRY, $status, $code, $retryS, null);
+            return self::result(self::RETRY, $status, $code, $retryS, null, []);
         }
-        return self::result(self::CONFIG_ERROR, $status, $code, null, $element);
+        return self::result(self::CONFIG_ERROR, $status, $code, null, $element, []);
     }
 
     /**
@@ -142,9 +149,11 @@ final class Gateway
     }
 
     /**
-     * @return array{outcome:string,status:int,kod:string,ponow_za_s:?int,element:?int}
+     * @param array<int,string> $accepted
+     * @return array{outcome:string,status:int,kod:string,ponow_za_s:?int,element:?int,przyjete:array<int,string>}
      */
-    private static function result(string $outcome, int $status, string $code, ?int $retryS, ?int $element): array
+    private static function result(string $outcome, int $status, string $code, ?int $retryS, ?int $element,
+        array $accepted): array
     {
         return [
             'outcome'    => $outcome,
@@ -152,6 +161,7 @@ final class Gateway
             'kod'        => $code,
             'ponow_za_s' => $retryS,
             'element'    => $element,
+            'przyjete'   => $accepted,
         ];
     }
 }

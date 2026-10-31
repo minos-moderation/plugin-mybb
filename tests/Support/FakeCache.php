@@ -7,7 +7,8 @@ namespace Minos\MyBB\Tests\Support;
 use ArrayObject;
 
 /**
- * MyBB's `$cache` (datacache): `read`, `update`, `delete` and `update_tasks`, with MyBB
+ * MyBB's `$cache` (datacache): `read`, `update`, `delete`, `update_tasks`,
+ * `update_mailqueue` and `update_reportedcontent`, with MyBB
  * 1.8.41's semantics (`inc/class_datacache.php`, database mode): every entry is loaded
  * into the request's own copy when the request begins; `read($name)` answers from that
  * copy, `read($name, true)` from the database (and refreshes the copy); `update` changes
@@ -64,6 +65,33 @@ final class FakeCache
     public function update_tasks()
     {
         $this->tasksUpdated++;
+    }
+
+    /**
+     * MyBB: the `reportedcontent` entry — unread and all reports, the newest unread moment —
+     * which MyBB's header reads for its notice to moderators.
+     */
+    public function update_reportedcontent()
+    {
+        global $db;
+        if (!empty($GLOBALS['minos_test']['report_throws'])) {
+            throw new \RuntimeException(\Moderation::SECRET_TEXT);
+        }
+        $count = static function (string $where) use ($db): int {
+            return (int)$db->fetch_field($db->simple_select('reportedcontent', 'COUNT(rid) AS n', $where), 'n');
+        };
+        $query = $db->simple_select('reportedcontent', 'dateline', "reportstatus='0'",
+            ['order_by' => 'dateline', 'order_dir' => 'DESC', 'limit' => 1]);
+        $this->update('reportedcontent', ['unread' => $count("reportstatus='0'"), 'total' => $count(''),
+            'lastdateline' => (int)$db->fetch_field($query, 'dateline')]);
+    }
+
+    /** MyBB: the `mailqueue` entry's `queue_size` from the table. */
+    public function update_mailqueue($lastRun = 0, $lockTime = 0)
+    {
+        global $db;
+        $query = $db->simple_select('mailqueue', 'COUNT(*) AS queue_size');
+        $this->update('mailqueue', ['queue_size' => (int)$db->fetch_field($query, 'queue_size'), 'locked' => (int)$lockTime]);
     }
 
     /**

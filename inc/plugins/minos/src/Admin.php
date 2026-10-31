@@ -12,7 +12,9 @@ namespace Minos\MyBB;
  *   replaces the stored one, an empty field keeps it, a checkbox clears it.
  * - A notice on every ACP page (the log page too) while the plugin is switched on but
  *   cannot work (what is missing), while the gateway's last answer to a submission was a
- *   configuration error (its code — never content), and while the gateway refuses posts
+ *   configuration error (its code — never content), while the last answer at the
+ *   gateway's address was a `2xx` other than `202` (something else answers there: the
+ *   posts are retried, the address should be checked), and while the gateway refuses posts
  *   until a known moment — the key's daily limit, or an overload — with that moment: new
  *   posts get the failure mode until then. The first accepted submission clears it. And
  *   while the webhook refuses deliveries for their signature ({@see Receiver::rejections}):
@@ -23,9 +25,10 @@ namespace Minos\MyBB;
  * - A page under Tools & Maintenance → Logs → "Minos — dziennik": the configuration's
  *   state, the verdicts of the last 7 days ({@see verdictFigures}: the median and the 95th
  *   percentile of the time from the gateway's `202` to the verdict, and how many of each
- *   verdict), the posts that need a look (held, waiting, and those the gateway flagged with
- *   `wsparcie` — the author may need support) with the gateway's masked text of a censored
- *   post the plugin kept in the queue, and the log of codes.
+ *   verdict), the posts that need a look (held, waiting, published unassessed, decided by a
+ *   human) with the gateway's masked text of a censored post the plugin kept in the queue,
+ *   the posts the gateway flagged with `wsparcie` (the author may need support) on their
+ *   own list, and the log of codes. Each list shows its 50 newest rows.
  *
  * Everything shown is escaped here; the texts are the Polish language file's.
  * No PHP 8 syntax.
@@ -189,6 +192,12 @@ final class Admin
             $key = (string)($refusal['kod'] ?? '') === Submitter::DAILY_LIMIT ? 'minos_notice_daily_limit' : 'minos_notice_overloaded';
             $notices[] = self::e($this->platform->lang($key, date('Y-m-d H:i', (int)$refusal['until']), (string)$refusal['kod']));
         }
+        // The last answer at the gateway's address was a 2xx but 202: not the gateway's.
+        $foreign = $this->platform->state(Submitter::FOREIGN);
+        if (is_array($foreign) && preg_match('/^http_2[0-9]{2}\z/', (string)($foreign['kod'] ?? ''))) {
+            $notices[] = self::e($this->platform->lang('minos_notice_foreign', (string)$foreign['kod'],
+                date('Y-m-d H:i', (int)($foreign['at'] ?? 0))));
+        }
         $rejections = Receiver::rejections($this->platform);
         if ($rejections !== null) {
             $notices[] = self::e($this->platform->lang('minos_notice_signature', (string)$rejections['count'],
@@ -281,6 +290,23 @@ final class Admin
             'minos_acp_col_post', 'minos_acp_col_status', 'minos_acp_col_verdict',
             'minos_acp_col_categories', 'minos_acp_col_masked', 'minos_acp_col_support', 'minos_acp_col_time',
         ], $rows, $this->platform->lang('minos_acp_attention_desc'), $this->platform);
+
+        // `wsparcie` on its own list, which the rows above never push out (D9.9).
+        $rows = [];
+        foreach ($this->platform->supportRows(self::ROWS) as $row) {
+            $rows[] = [
+                ['url' => $this->platform->postUrl((int)$row['pid'], (int)$row['tid']), 'text' => '#' . (int)$row['pid']],
+                $this->platform->lang((int)$row['auto_published'] === 1 && $row['status'] === Status::PUBLISHED
+                    ? 'minos_status_auto_published' : 'minos_status_' . $row['status']),
+                $this->verdictLabel((string)$row['verdict']),
+                (string)$row['categories'],
+                date('Y-m-d H:i', (int)$row['submitted_at']),
+            ];
+        }
+        $html .= self::table($this->platform->lang('minos_acp_support'), [
+            'minos_acp_col_post', 'minos_acp_col_status', 'minos_acp_col_verdict', 'minos_acp_col_categories',
+            'minos_acp_col_time',
+        ], $rows, $this->platform->lang('minos_acp_support_desc'), $this->platform);
 
         $rows = [];
         foreach ($this->platform->recentLog(self::ROWS) as $entry) {

@@ -103,9 +103,9 @@ final class RevisionTest extends PluginTestCase
             if (!$edited) {
                 $edited = true;
                 $forum->edit($pid, 'Wersja druga.');
-                return $answer;
+                return RecordingTransport::answerTo($body, $answer);
             }
-            return RecordingTransport::accepted();
+            return RecordingTransport::answerTo($body);
         });
 
         $this->forum->plugin->task->run(TIME_NOW);

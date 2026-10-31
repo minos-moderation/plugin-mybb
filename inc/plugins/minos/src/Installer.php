@@ -96,7 +96,8 @@ final class Installer
         }
         $this->platform->removeSettings();
         $this->platform->removeTask();
-        $this->platform->removeState([Task::SWITCHED_OFF, Submitter::REFUSAL, Submitter::PAUSE, Receiver::REJECTED]);
+        $this->platform->removeState([Task::SWITCHED_OFF, Submitter::REFUSAL, Submitter::PAUSE, Submitter::FOREIGN,
+            Receiver::REJECTED]);
         if ($this->platform->input('no') === null) {
             $this->platform->dropTables();
         }
@@ -173,6 +174,8 @@ final class Installer
                 (string)Settings::DEFAULT_TIMEOUT_MIN],
             Settings::CENSORED        => ['censored', $select('censored', [Settings::PUBLISH, Settings::QUEUE]), Settings::PUBLISH],
             Settings::BLOCKED         => ['blocked', $select('blocked', [Settings::QUEUE, Settings::SOFT_DELETE]), Settings::QUEUE],
+            // MyBB notifies subscribers only of a post visible at once (D9.8).
+            Settings::NOTIFY_SUBSCRIBERS => ['notify_subscribers', 'yesno', '1'],
             Settings::FORUMS          => ['forums', 'forumselect', '-1'],
             Settings::SKIP_MODERATORS => ['skip_moderators', 'yesno', '1'],
         ];

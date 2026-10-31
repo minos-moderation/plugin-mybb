@@ -14,17 +14,20 @@ use SplObjectStorage;
  * 2. `datahandler_post_insert_post_end` / `_thread_end` ({@see onInserted}): the post has
  *    its `pid`; the plugin records a row and sends ONE item. The row is written first, so a
  *    verdict that arrives before the gateway's `202` finds it.
- * 3. The gateway's answer ({@see send}): `202` → wait for the webhook; `429`/`503`/no
- *    answer → the task sends it again after `ponow_za_s`, or after a backoff doubling from
- *    60 s — unless `ponow_za_s` (as the gateway gave it) ends after the post's receive
- *    timeout: then the failure mode applies at once (shared rule D9.3a), since the post
- *    could not be assessed in time anyway; any other refusal → a configuration error: the
- *    failure mode is applied, the code (never the content) is logged, and the ACP shows a
- *    notice. A daily-limit or overload refusal is kept with the moment it ends, for the
- *    ACP notice ("the gateway does not accept until …"); the next `202` clears it.
+ * 3. The gateway's answer ({@see send}): `202` → wait for the webhook, for each item its
+ *    `przyjete` names (an item it leaves out is sent again after the backoff);
+ *    `429`/`503`/`408`/no answer/a `2xx` other than `202` → the task sends it again after
+ *    `ponow_za_s`, or after a backoff doubling from 60 s — unless `ponow_za_s` (as the
+ *    gateway gave it) ends after the post's receive timeout: then the failure mode applies
+ *    at once (shared rule D9.3a), since the post could not be assessed in time anyway; any
+ *    other refusal → a configuration error: the failure mode is applied, the code (never
+ *    the content) is logged, and the ACP shows a notice. A daily-limit or overload refusal
+ *    is kept with the moment it ends, for the ACP notice ("the gateway does not accept
+ *    until …"); the next `202` clears it.
  *
  * The shared pause: every "retry" answer (a `429` of any kind, a `503` or another `5xx`, a
- * `408`, no answer at all) also means "send nothing before T" for the whole forum — T is
+ * `408`, no answer at all, a `2xx` other than `202`) also means "send nothing before T" for
+ * the whole forum — T is
  * `ponow_za_s` as the gateway gave it, or {@see BACKOFF_S} without one ({@see PAUSE}).
  * Until T a new post is not sent in its author's request (the author does not wait for a
  * gateway that has just refused): it waits as `retry` until T, or gets the failure mode at
@@ -78,6 +81,19 @@ final class Submitter
      * before T (the class doc). The next `202` clears it; past T it is ignored.
      */
     public const PAUSE = 'pause';
+
+    /**
+     * Recorded in `error_code` (and the log) for an item a `202` did not name in `przyjete`:
+     * the gateway did not take it, so it is sent again (the plugin's own label).
+     */
+    public const NOT_ACCEPTED = 'nieprzyjete';
+
+    /**
+     * The state key of the last answer at the gateway's address that was a `2xx` other than
+     * `202` — not the gateway's (a hosting page, a proxy, a wrong address): `['kod' =>
+     * 'http_<n>', 'at' => moment]`, for the ACP notice. The next `202` clears it.
+     */
+    public const FOREIGN = 'foreign_answer';
 
     /** The refusal that means "the key's allowance for the day is spent". */
     public const DAILY_LIMIT = 'limit_dobowy_klucza';
@@ -239,8 +255,10 @@ final class Submitter
      *   waits for the verdict (`pending`, `retry`) or after the failure mode held the post
      *   because no verdict came ({@see Status::REVISED_REASONS}): a new revision
      *   ({@see Platform::revise}). The task sends it, not the editor's request.
-     * - By a moderator, while the plugin waits: a human is dealing with the post, so it is
-     *   left to them (`superseded`, listed on the ACP page) and nothing is sent.
+     * - By a moderator, while the plugin waits or after the failure mode held the post for its
+     *   timeout (a verdict may still come late, D9.10): a human is dealing with the post, so
+     *   it is left to them (`superseded`, listed on the ACP page), nothing is sent and no
+     *   verdict is applied any more.
      * - A post the failure mode published (`fail-open`): a late verdict would judge text that
      *   is gone, so it no longer applies ({@see Applier::late}). Edits of published posts
      *   are not assessed again.
@@ -302,7 +320,9 @@ final class Submitter
         $post = $this->platform->post($pid);
         $moderator = $post !== null && $this->platform->isModerator($post['fid'], $this->platform->currentUserId());
         if ($moderator) {
-            if ($this->platform->claimPending($pid, $now)) {
+            // Waiting, or held for its timeout with a verdict that may still come late: a
+            // human is dealing with it now, and that verdict is no longer applied.
+            if ($this->platform->claimPending($pid, $now) || $this->platform->claimTimedOut($pid, $now)) {
                 $this->platform->updatePending($pid, [
                     'status' => Status::SUPERSEDED, 'verdict' => Status::REASON_EDITED, 'decided_at' => $now,
                 ]);
@@ -555,7 +575,14 @@ final class Submitter
             array_column($batch, 'item'));
 
         if ($result['outcome'] === Gateway::ACCEPTED) {
+            // The gateway's acceptance: of each item its `przyjete` names, and of no other.
+            $accepted = array_flip($result['przyjete']);
+            $missing = [];
             foreach ($batch as $entry) {
+                if (!isset($accepted[(string)$entry['item']['id']])) {
+                    $missing[] = $entry;
+                    continue;
+                }
                 $this->platform->updatePending((int)$entry['row']['pid'], [
                     'status' => Status::PENDING, 'accepted_at' => $now, 'retry_at' => 0,
                     'attempts' => (int)$entry['row']['attempts'] + 1, 'error_code' => '',
@@ -567,6 +594,12 @@ final class Submitter
             }
             $this->platform->setState(self::REFUSAL, null);
             $this->platform->setState(self::PAUSE, null);
+            $this->platform->setState(self::FOREIGN, null);
+            if ($missing !== []) {
+                // Not accepted, though the gateway answered: sent again after the backoff.
+                $this->retryLater($missing, null, self::NOT_ACCEPTED, $settings, $now);
+                $this->platform->log('retry', self::NOT_ACCEPTED, (int)$missing[0]['row']['pid'], $now);
+            }
             return;
         }
 
@@ -575,31 +608,14 @@ final class Submitter
             if ($retryS !== null && ($result['kod'] === self::DAILY_LIMIT || in_array($result['kod'], self::OVERLOADED, true))) {
                 $this->platform->setState(self::REFUSAL, ['kod' => $result['kod'], 'since' => $now, 'until' => $now + $retryS]);
             }
+            if ($result['status'] >= 200 && $result['status'] < 300) {
+                // Something else answers at the gateway's address: the ACP says so.
+                $this->platform->setState(self::FOREIGN, ['kod' => $result['kod'], 'at' => $now]);
+            }
             // The whole forum waits, not only this batch; a longer pause already kept stays.
             $until = max($now + max(1, $retryS ?? self::BACKOFF_S), (int)$this->pausedUntil($now));
             $this->platform->setState(self::PAUSE, ['until' => $until, 'kod' => $result['kod']]);
-            foreach ($batch as $entry) {
-                $row = $entry['row'];
-                $attempts = (int)$row['attempts'] + 1;
-                $deadline = (int)$row['submitted_at'] + $settings->timeoutS();
-                // Rule D9.3(a) first: the gateway refuses beyond the post's timeout — its
-                // `ponow_za_s` as given, not a pause of the plugin's own — so no verdict can
-                // come in time: the failure mode now, not after the wait. Such a row gets no
-                // `retry_at`: a far `ponow_za_s` would not even fit the column (MySQL and
-                // PostgreSQL refuse the value, and MyBB stops the page on a database error).
-                if ($retryS !== null && $now + $retryS > $deadline) {
-                    $this->platform->updatePending((int)$row['pid'], ['attempts' => $attempts, 'error_code' => $result['kod']],
-                        Status::RETRY, self::rev($row));
-                    $this->decideWithout($row, Status::REASON_GATEWAY_LIMIT, $settings, $now);
-                    continue;
-                }
-                $pause = $retryS ?? min(self::MAX_BACKOFF_S, self::BACKOFF_S * (2 ** min(10, $attempts - 1)));
-                // Never later than the timeout, when the task gives the row the failure mode anyway.
-                $this->platform->updatePending((int)$row['pid'], [
-                    'retry_at' => min($now + max(1, $pause), max($now + 1, $deadline)), 'attempts' => $attempts,
-                    'error_code' => $result['kod'],
-                ], Status::RETRY, self::rev($row));
-            }
+            $this->retryLater($batch, $retryS, $result['kod'], $settings, $now);
             $this->platform->log('retry', $result['kod'], (int)$batch[0]['row']['pid'], $now);
             return;
         }
@@ -617,6 +633,44 @@ final class Submitter
             $this->platform->updatePending((int)$entry['row']['pid'], ['error_code' => $result['kod']], Status::RETRY,
                 self::rev($entry['row']));
             $this->decideWithout($entry['row'], Status::REASON_CONFIG_ERROR, $settings, $now);
+        }
+    }
+
+    /**
+     * Rows the gateway did not accept, sent again later: after `ponow_za_s` as the gateway
+     * gave it, or after a backoff doubling from {@see BACKOFF_S} per attempt — never later
+     * than the row's timeout. Rule D9.3(a) first: when `ponow_za_s` ends after the timeout,
+     * the failure mode now (`gateway_limit`).
+     *
+     * @param array<int,array{row:array<string,mixed>,item:array<string,mixed>}> $batch
+     * @param int|null $retryS   `ponow_za_s` as given; null for none.
+     * @param string   $code     What the row records in `error_code`.
+     * @param Settings $settings The settings.
+     * @param int      $now      Unix seconds.
+     */
+    private function retryLater(array $batch, ?int $retryS, string $code, Settings $settings, int $now): void
+    {
+        foreach ($batch as $entry) {
+            $row = $entry['row'];
+            $attempts = (int)$row['attempts'] + 1;
+            $deadline = (int)$row['submitted_at'] + $settings->timeoutS();
+            // The gateway refuses beyond the post's timeout — its `ponow_za_s` as given, not a
+            // pause of the plugin's own — so no verdict can come in time: the failure mode
+            // now, not after the wait. Such a row gets no `retry_at`: a far `ponow_za_s` would
+            // not even fit the column (MySQL and PostgreSQL refuse the value, and MyBB stops
+            // the page on a database error).
+            if ($retryS !== null && $now + $retryS > $deadline) {
+                $this->platform->updatePending((int)$row['pid'], ['attempts' => $attempts, 'error_code' => $code],
+                    Status::RETRY, self::rev($row));
+                $this->decideWithout($row, Status::REASON_GATEWAY_LIMIT, $settings, $now);
+                continue;
+            }
+            $pause = $retryS ?? min(self::MAX_BACKOFF_S, self::BACKOFF_S * (2 ** min(10, $attempts - 1)));
+            // Never later than the timeout, when the task gives the row the failure mode anyway.
+            $this->platform->updatePending((int)$row['pid'], [
+                'retry_at' => min($now + max(1, $pause), max($now + 1, $deadline)), 'attempts' => $attempts,
+                'error_code' => $code,
+            ], Status::RETRY, self::rev($row));
         }
     }
 

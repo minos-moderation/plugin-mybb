@@ -32,7 +32,11 @@ use Minos\Client\WebhookPayload;
  * 5. The verdict is applied ({@see Applier}) — the claim on the row makes sure a repeated or
  *    concurrent delivery applies nothing twice. A verdict for a post the failure mode
  *    already published (`fail-open`) is applied late while nobody touched the post
- *    ({@see Applier::late}); a moderator's decision stays final. When applying throws, the
+ *    ({@see Applier::late}); a moderator's decision stays final. A verdict for a post the
+ *    failure mode held after its timeout (`fail-closed`, `timeout`) is applied as if it
+ *    had come in time ({@see Applier::verdict}: shared rule D9.10), while the post is still
+ *    in the queue — a moderator who approved or deleted it, or edited it, decided; an
+ *    author's edit started a new revision, which this verdict is not about. When applying throws, the
  *    claim is given back and the answer is `500`, so the gateway delivers again and the
  *    redelivery applies the verdict ({@see Applier::failedStep}: after three failures the
  *    post is left to a human).
@@ -125,8 +129,34 @@ final class Receiver
                 $this->applier->failedStep($pid, 'late', $now);
                 return 500;
             }
+        } elseif ($this->heldOnlyForTime($row) && $this->platform->claimTimedOut($pid, $now, $rev)) {
+            // Held by the failure mode because this verdict was late: applied as on time.
+            try {
+                $this->applier->verdict($row, $payload, $settings, $now);
+            } catch (\Throwable $e) {
+                $this->applier->failedStep($pid, 'verdict', $now);
+                return 500;
+            }
         }
         return 200; // applied, or already handled
+    }
+
+    /**
+     * Whether a row is one the failure mode held because no verdict came in time
+     * (`fail-closed`), and its post is still in the queue: nobody approved or deleted it
+     * since. A moderator's edit marks the row decided ({@see Submitter::onUpdated}), an
+     * author's starts a new revision; a text changed past the edit hook is caught by the
+     * digest ({@see Applier::verdict}).
+     *
+     * @param array<string,mixed> $row The row.
+     */
+    private function heldOnlyForTime(array $row): bool
+    {
+        if ($row['status'] !== Status::HELD || $row['verdict'] !== Status::REASON_TIMEOUT) {
+            return false;
+        }
+        $post = $this->platform->post((int)$row['pid']);
+        return $post !== null && $post['visible'] === 0;
     }
 
     /**

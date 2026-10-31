@@ -280,6 +280,43 @@ final class LiveForumTest extends TestCase
     }
 
     /**
+     * A late verdict for a post the failure mode held after its timeout (K-43, shared rule
+     * D9.10): fail-closed, the gateway accepted the reply, its verdict did not come in time
+     * and MyBB's task (`task.php`) held it; the mock then delivers it through the real
+     * webhook and it is applied as on time. A reply a moderator approved in the ModCP queue
+     * meanwhile is left as the moderator decided.
+     */
+    public function testALateVerdictIsAppliedToAPostHeldForItsTimeout(): void
+    {
+        $board = self::$board;
+        $author = $board->login(self::AUTHOR, self::$passwords[self::AUTHOR]);
+        // A thread of its own, so the other scenarios' thread keeps its pages.
+        $tid = $board->thread($board->admin(), 'Wątek spóźnionych werdyktów', 'Pierwszy post administratora.')['tid'];
+        $late = $board->reply($author, $tid, 'Odpowiedź, której werdykt się spóźni.');
+        $decided = $board->reply($author, $tid, 'Odpowiedź, o której zdecyduje moderator.');
+        // The verdicts are late: the gateway accepted both 21 minutes ago (the timeout is 20).
+        $board->exec('UPDATE {p}minos_pending SET accepted_at=? WHERE pid IN (?, ?)', [time() - 21 * 60, $late, $decided]);
+        $board->task('minos');
+        $held = [];
+        foreach (['late' => $late, 'decided' => $decided] as $name => $pid) {
+            $held[$name] = [$board->pending($pid)['status'], $board->pending($pid)['verdict'], (int)$board->post($pid)['visible']];
+        }
+        $this->approveInModcp($decided);
+
+        $lines = $board->deliver();
+        self::assertMatchesRegularExpression('/mybb:' . $late . ' dostarczony 200/', $lines);
+        self::assertMatchesRegularExpression('/mybb:' . $decided . ' dostarczony 200/', $lines);
+        $after = [];
+        foreach (['late' => $late, 'decided' => $decided] as $name => $pid) {
+            $after[$name] = [$board->pending($pid)['status'], $board->pending($pid)['verdict'], (int)$board->post($pid)['visible']];
+        }
+        self::$answers['k43_late_after_timeout'] = ['held_by_the_task' => $held, 'after_the_late_verdict' => $after];
+        self::assertSame(['held', 'timeout', 0], $held['late'], 'held by the failure mode');
+        self::assertSame(['published', 'bezpieczne', 1], $after['late'], 'applied as on time');
+        self::assertSame(['held', 'timeout', 1], $after['decided'], 'the moderator\'s decision stays');
+    }
+
+    /**
      * Question 2: subscribers of the thread (e-mail, private message) and of the forum, and
      * what each kind of publication queues for them — a post visible at once (the plugin
      * off: the control), a post the plugin publishes through the webhook, and a post a
@@ -320,7 +357,9 @@ final class LiveForumTest extends TestCase
         self::assertGreaterThan(0, $answers['visible_at_once']['thread_pm'], 'the control reaches the PM subscriber');
         self::assertGreaterThan(0, $answers['visible_at_once']['forum_mail'], 'the control reaches the forum subscriber');
 
-        // Published by the plugin through the webhook.
+        // Published by the plugin through the webhook — with its own notifications off, so
+        // what MyBB itself sends on the approval shows.
+        $board->settings(['minos_notify_subscribers' => '0']);
         $answers['approved_by_webhook'] = $this->notificationsFor(function () use ($board, $author): void {
             $pid = $board->reply($author, self::$tid, 'Odpowiedź zatwierdzona przez webhook.');
             $topic = $board->thread($author, 'Wątek zatwierdzony przez webhook', 'Treść wątku zatwierdzonego przez webhook.');
@@ -328,6 +367,7 @@ final class LiveForumTest extends TestCase
             $board->deliver();
             self::assertSame([1, 1], [(int)$board->post($pid)['visible'], (int)$board->post($topic['pid'])['visible']]);
         });
+        $board->settings(['minos_notify_subscribers' => '1']);
 
         // Approved by a moderator in the ModCP queue (the mock never answers this one).
         $answers['approved_in_modcp'] = $this->notificationsFor(function () use ($board, $author): void {
@@ -337,6 +377,188 @@ final class LiveForumTest extends TestCase
         });
         self::$answers['q2_notifications'] = $answers;
         self::assertSame(['thread_mail' => 0, 'forum_mail' => 0, 'thread_pm' => 0], $answers['approved_by_webhook']);
+
+        $this->pluginNotifiesAsAtOnce($author, $answers['visible_at_once']);
+    }
+
+    /**
+     * K-31 (shared rule D9.8): with "Powiadamiaj subskrybentów…" on (the default), a reply
+     * and a thread the plugin publishes through the webhook queue what MyBB queues for posts
+     * visible at once — the e-mails and the private message, once; the failure mode's
+     * publication (fail-open, MyBB's `task.php`) too, and the late verdict after it nothing
+     * more; a blocked reply nothing. No warning: neither in MyBB's task log nor, with MyBB's
+     * error log on for the scenario, from the webhook (both run without a session user).
+     *
+     * @param array<string,int> $atOnce What MyBB queued for posts visible at once.
+     */
+    private function pluginNotifiesAsAtOnce(Browser $author, array $atOnce): void
+    {
+        $board = self::$board;
+        // MyBB's error log for the scenario: a warning in the plugin's notifications (the
+        // webhook and the task run without a session user) would land there.
+        @unlink($board->root . '/error.log');
+        $board->settings(['errorlogmedium' => 'log', 'errorloglocation' => './error.log']);
+        $answers = [];
+        $bodies = [];
+        $answers['published_by_the_plugin'] = $this->notificationsFor(function () use ($board, $author, &$bodies): void {
+            $pid = $board->reply($author, self::$tid, 'Odpowiedź, o której dowiedzą się subskrybenci.');
+            $topic = $board->thread($author, 'Wątek, o którym dowie się dział', 'Treść wątku dla subskrybentów działu.');
+            foreach ([$pid, $topic['pid']] as $id) {
+                $body = (string)json_encode(['id' => 'mybb:' . $id, 'status' => 'ocenione', 'kwalifikacja' => 'bezpieczne',
+                    'kategorie' => [], 'wsparcie' => false, 'wersja' => '3f0c9a41d2b7e8c5']);
+                $webhook = $board->guest();
+                $bodies[] = [$webhook->postRaw('minos-webhook.php', $body, ['Content-Type: application/json',
+                    Signature::HEADER . ': ' . Signature::sign($board->mockConfig()->webhookSecret, $body, time())]), $webhook->status];
+            }
+            self::assertSame([1, 1], [(int)$board->post($pid)['visible'], (int)$board->post($topic['pid'])['visible']]);
+            $board->deliver(); // the mock's own deliveries: already applied
+        });
+        $answers['webhook_answers'] = array_map(static function (array $answer): array {
+            return ['status' => $answer[1], 'body' => $answer[0]];
+        }, $bodies);
+
+        $board->settings(['minos_failure_mode' => 'fail-open']);
+        $late = 0;
+        $answers['published_by_the_failure_mode'] = $this->notificationsFor(function () use ($board, $author, &$late): void {
+            $late = $board->reply($author, self::$tid, 'Odpowiedź z późnym werdyktem [minos:blokuj].');
+            $board->exec('UPDATE {p}minos_pending SET accepted_at=? WHERE pid=?', [time() - 21 * 60, $late]);
+            $board->task('minos');
+            self::assertSame(['published', '1'], [$board->pending($late)['status'], (string)$board->pending($late)['auto_published']]);
+        });
+        $answers['late_verdict_after_it'] = $this->notificationsFor(function () use ($board, $late): void {
+            $board->deliver();
+            self::assertSame(0, (int)$board->post($late)['visible'], 'the late zablokowane sent it back to the queue');
+        });
+        $board->settings(['minos_failure_mode' => 'fail-closed']);
+        $answers['blocked'] = $this->notificationsFor(function () use ($board, $author): void {
+            $pid = $board->reply($author, self::$tid, 'Odpowiedź zablokowana [minos:blokuj].');
+            $board->deliver();
+            self::assertSame(['held', 'zablokowane'], [$board->pending($pid)['status'], $board->pending($pid)['verdict']]);
+        });
+        $answers['task_log_warnings'] = (int)$board->value("SELECT COUNT(*) FROM {p}tasklog WHERE data LIKE '%Warning%'");
+        $board->settings(['errorlogmedium' => 'none']);
+        $log = is_file($board->root . '/error.log') ? (string)file_get_contents($board->root . '/error.log') : '';
+        preg_match_all('#<error>.*?</error>#s', $log, $errors);
+        $answers['plugin_errors_logged'] = count(array_filter($errors[0], static function (string $error): bool {
+            return strpos($error, 'plugins/minos') !== false || strpos($error, 'minos-webhook.php') !== false;
+        }));
+        self::$answers['k31_notifications'] = $answers;
+
+        self::assertSame($atOnce, $answers['published_by_the_plugin'], 'what MyBB sends for posts visible at once');
+        self::assertSame(['thread_mail' => 1, 'forum_mail' => 0, 'thread_pm' => 1], $answers['published_by_the_failure_mode']);
+        self::assertSame(['thread_mail' => 0, 'forum_mail' => 0, 'thread_pm' => 0], $answers['late_verdict_after_it'], 'never again');
+        self::assertSame(['thread_mail' => 0, 'forum_mail' => 0, 'thread_pm' => 0], $answers['blocked']);
+        self::assertSame([['status' => 200, 'body' => ''], ['status' => 200, 'body' => '']], $answers['webhook_answers']);
+        self::assertSame(0, $answers['task_log_warnings'], 'MyBB logs a task\'s warnings in its task log');
+        self::assertSame(0, $answers['plugin_errors_logged'], 'nor in MyBB\'s error log, from the webhook');
+    }
+
+    /**
+     * K-41 (shared rule D9.9): a reply the gateway flags with `wsparcie` is published and
+     * reported to the moderators in MyBB's report centre — the ModCP's report list shows it
+     * with the plugin's comment, and MyBB's header announces the unread report; nothing goes
+     * to its author. With the setting "usuń (miękko)", a blocked reply with `wsparcie` stays
+     * held, not deleted.
+     */
+    public function testSupportIsReportedToTheModeratorsAndNeverDeleted(): void
+    {
+        $board = self::$board;
+        $author = $board->login(self::AUTHOR, self::$passwords[self::AUTHOR]);
+        $tid = $board->thread($board->admin(), 'Wątek sygnałów wsparcia', 'Pierwszy post administratora.')['tid'];
+        $pms = (int)$board->value('SELECT COUNT(*) FROM {p}privatemessages WHERE toid=?', [self::$uids[self::AUTHOR]]);
+        $before = html_entity_decode($board->admin()->get('index.php'), ENT_QUOTES, 'UTF-8');
+        self::assertStringNotContainsString('unread report', $before, 'the guard: no report announced before');
+
+        $safe = $board->reply($author, $tid, 'Ostatnio wszystko mnie przerasta [minos:wsparcie].');
+        $board->settings(['minos_blocked' => 'soft-delete']);
+        $blocked = $board->reply($author, $tid, 'Zablokowana odpowiedź z prośbą o pomoc [minos:blokuj] [minos:wsparcie].');
+        $board->deliver();
+        $board->settings(['minos_blocked' => 'queue']);
+
+        $reports = [];
+        foreach (['safe' => $safe, 'blocked' => $blocked] as $name => $pid) {
+            $report = $board->row("SELECT id, id2, id3, uid, reportstatus, type FROM {p}reportedcontent WHERE id=? AND type='post'", [$pid]);
+            $reports[$name] = [
+                'visible' => (int)$board->post($pid)['visible'],
+                'status' => $board->pending($pid)['status'],
+                'reports' => (int)$board->value("SELECT COUNT(*) FROM {p}reportedcontent WHERE id=? AND type='post'", [$pid]),
+                'report_names_thread_and_forum' => $report !== null && (int)$report['id2'] === $tid && (int)$report['id3'] === Board::FID,
+            ];
+        }
+        // MyBB's error log while the report list renders: its template reads the "last report"
+        // cell, which modcp.php fills only for a reporter with an id (the review of #8, M1).
+        @unlink($board->root . '/error.log');
+        $board->settings(['errorlogmedium' => 'log', 'errorloglocation' => './error.log']);
+        $modcp = html_entity_decode($board->admin()->get('modcp.php?action=reports'), ENT_QUOTES, 'UTF-8');
+        $board->settings(['errorlogmedium' => 'none']);
+        $errorLog = is_file($board->root . '/error.log') ? (string)file_get_contents($board->root . '/error.log') : '';
+        $index = html_entity_decode($board->admin()->get('index.php'), ENT_QUOTES, 'UTF-8');
+        $answers = [
+            'posts' => $reports,
+            'modcp_lists_the_report' => strpos($modcp, 'Minos — wsparcie') !== false && strpos($modcp, '#pid' . $safe) !== false,
+            'modcp_names_the_reporter' => strpos($modcp, 'Minos (sygnał bramy)') !== false,
+            'errors_logged_by_the_report_list' => substr_count($errorLog, '<error>'),
+            'header_announces_it' => preg_match('#modcp\.php\?action=reports">[^<]*unread report#', $index) === 1,
+            'messages_to_the_author' => (int)$board->value('SELECT COUNT(*) FROM {p}privatemessages WHERE toid=?',
+                [self::$uids[self::AUTHOR]]) - $pms,
+        ];
+        self::$answers['k41_support'] = $answers;
+        self::assertSame(['visible' => 1, 'status' => 'published', 'reports' => 1, 'report_names_thread_and_forum' => true],
+            $reports['safe']);
+        self::assertSame(['visible' => 0, 'status' => 'held', 'reports' => 1, 'report_names_thread_and_forum' => true],
+            $reports['blocked'], 'held, not deleted');
+        self::assertTrue($answers['modcp_lists_the_report']);
+        self::assertTrue($answers['modcp_names_the_reporter']);
+        self::assertSame(0, $answers['errors_logged_by_the_report_list'], 'no warning while the list renders');
+        self::assertTrue($answers['header_announces_it']);
+        self::assertSame(0, $answers['messages_to_the_author']);
+    }
+
+    /**
+     * K-42: the ModCP's moderation queue (`modcp.php?action=modqueue`) as MyBB 1.8.41 renders
+     * it, with the plugin's note after each post it holds — a censored reply with MyCode kept
+     * in the queue (the verdict, the categories, the gateway's mask), a blocked reply longer
+     * than 3000 characters (the note that only its beginning was assessed), and a blocked
+     * thread in the threads' queue.
+     */
+    public function testTheModCPQueueShowsTheVerdictAtEachPost(): void
+    {
+        $board = self::$board;
+        $author = $board->login(self::AUTHOR, self::$passwords[self::AUTHOR]);
+        $tid = $board->thread($board->admin(), 'Wątek kolejki moderatora', 'Pierwszy post administratora.')['tid'];
+        $censored = $board->reply($author, $tid, '[b]to jest[/b] [minos:cenzuruj] [minos:kategoria=wulgaryzmy] [[głupi]] pomysł');
+        $long = $board->reply($author, $tid, '[minos:blokuj] Długi wpis ' . str_repeat('słowo ', 600));
+        $thread = $board->thread($author, 'Zablokowany wątek do kolejki', 'Treść wątku [minos:blokuj].');
+        $board->deliver();
+        self::assertSame(['held', 'held', 'held'], [$board->pending($censored)['status'], $board->pending($long)['status'],
+            $board->pending($thread['pid'])['status']]);
+
+        $admin = $board->admin();
+        $posts = html_entity_decode($admin->get('modcp.php?action=modqueue&type=posts'), ENT_QUOTES, 'UTF-8');
+        $threads = html_entity_decode($admin->get('modcp.php?action=modqueue&type=threads'), ENT_QUOTES, 'UTF-8');
+        $notes = [
+            'censored' => self::queueNote($posts, 'posts', $censored),
+            'long'     => self::queueNote($posts, 'posts', $long),
+            'thread'   => self::queueNote($threads, 'threads', $thread['tid']),
+        ];
+        $answers = [
+            'censored' => [
+                'verdict' => strpos($notes['censored'], 'werdykt: ocenzurowane') !== false,
+                'categories' => strpos($notes['censored'], 'kategorie: wulgaryzmy') !== false,
+                'mask' => strpos($notes['censored'], '[[█████]]') !== false,
+            ],
+            'long' => [
+                'verdict' => strpos($notes['long'], 'werdykt: zablokowane') !== false,
+                'only_its_beginning' => strpos($notes['long'], 'wpis dłuższy niż 3000 znaków') !== false,
+            ],
+            'thread' => ['verdict' => strpos($notes['thread'], 'werdykt: zablokowane') !== false],
+            'no_secret' => strpos($posts . $threads, $board->mockConfig()->webhookSecret) === false
+                && strpos($posts . $threads, $board->mockConfig()->key) === false,
+        ];
+        self::$answers['k42_modqueue'] = $answers;
+        self::assertSame(['censored' => ['verdict' => true, 'categories' => true, 'mask' => true],
+            'long' => ['verdict' => true, 'only_its_beginning' => true], 'thread' => ['verdict' => true], 'no_secret' => true],
+            $answers);
     }
 
     /**
@@ -665,6 +887,20 @@ final class LiveForumTest extends TestCase
         $admin->post('modcp.php', ['action' => 'do_modqueue', 'posts' => [$pid => 'approve'],
             'my_post_key' => Browser::postKey($queue)]);
         self::assertSame(1, (int)self::$board->post($pid)['visible'], 'approved in the ModCP');
+    }
+
+    /**
+     * The plugin's note after a post's row in a ModCP queue page: between the post's form
+     * field and the next post's ('' when none).
+     */
+    private static function queueNote(string $html, string $list, int $id): string
+    {
+        $at = strpos($html, 'name="' . $list . '[' . $id . ']"');
+        self::assertNotFalse($at, "the guard: the queue lists {$list}[{$id}]");
+        $rest = (string)substr($html, (int)$at);
+        $next = preg_match('/name="' . $list . '\[(?!' . $id . '\])[0-9]+\]"/', $rest, $m, PREG_OFFSET_CAPTURE)
+            ? $m[0][1] : strlen($rest);
+        return preg_match('#<tr class="minos_modqueue">(.*?)</tr>#s', substr($rest, 0, $next), $note) ? $note[1] : '';
     }
 
     /**
