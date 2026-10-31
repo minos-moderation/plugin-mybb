@@ -295,12 +295,20 @@ final class TextTest extends TestCase
      * with JIT off (`fixtures/text-under-pcre-limits.php`).
      *
      * @param array<int,int>|null $limits The limits to try; null for the configured one.
+     * @param array<int,string>   $ini    The process's `-d` settings (JIT off by default).
      * @return array<int|string,array<string,mixed>> By limit (`default` for null), by call:
      *     the answer or `"error"`.
      */
-    private static function underPcreLimits(string $message, string $subject = '', ?array $limits = null): array
+    private static function underPcreLimits(string $message, string $subject = '', ?array $limits = null,
+        array $ini = ['pcre.jit=0']): array
     {
-        $process = proc_open([PHP_BINARY, '-d', 'pcre.jit=0', __DIR__ . '/fixtures/text-under-pcre-limits.php'],
+        $command = [PHP_BINARY];
+        foreach ($ini as $setting) {
+            $command[] = '-d';
+            $command[] = $setting;
+        }
+        $command[] = __DIR__ . '/fixtures/text-under-pcre-limits.php';
+        $process = proc_open($command,
             [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
         self::assertIsResource($process);
         fwrite($pipes[0], (string)json_encode(['message' => $message, 'subject' => $subject, 'limits' => $limits]));
@@ -314,6 +322,29 @@ final class TextTest extends TestCase
         self::assertIsArray($results, $output . $errors);
         self::assertCount($limits === null ? 1 : count($limits), $results);
         return $results;
+    }
+
+    /**
+     * The retry without JIT (a 60 000-character quote exhausts PCRE's JIT stack, and MyBB
+     * renders it) puts `pcre.jit` back as it found it, so the rest of the request runs with
+     * the host's setting (the review of S7c, minor a). The guard: on a host whose
+     * `disable_functions` holds `ini_set`, the retry cannot run, and the same post is a text
+     * the plugin could not read — `text_error`, as `docs/development.md` says (minor b).
+     */
+    public function testTheRetryWithoutJitPutsPcreJitBack(): void
+    {
+        $message = 'Obelga obelga [quote=Ktoś]' . str_repeat('słowo ', 10000) . '[/quote]';
+        $before = ini_get('pcre.jit');
+        self::assertSame('1', $before, 'the guard: JIT on, as PHP has it by default');
+
+        $text = Text::forPost($message);
+
+        self::assertFalse($text['error']);
+        self::assertStringStartsWith("Obelga obelga\nKtoś napisał(a):\nsłowo", $text['tekst']);
+        self::assertSame($before, ini_get('pcre.jit'), 'put back');
+        $withoutIniSet = self::underPcreLimits($message, '', null, ['pcre.jit=1', 'disable_functions=ini_set'])['default']['forPost'];
+        self::assertSame([true, ''], [$withoutIniSet['error'], $withoutIniSet['tekst']],
+            'without ini_set no retry: the JIT stack\'s limit stands');
     }
 
     /**

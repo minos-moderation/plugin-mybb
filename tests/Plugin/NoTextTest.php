@@ -74,7 +74,35 @@ final class NoTextTest extends PluginTestCase
             'HTML: an image with alt and &#8203;' => ['<img src="https://example.com/a.png" alt="podpis">&#8203;', ['allowhtml' => 1]],
             'HTML: a link with a title and &shy;' => ['<a href="https://example.com/" title="tytuł">&shy;</a>', ['allowhtml' => 1]],
             'HTML: an image and &ZeroWidthSpace;' => ['<img src="https://example.com/a.png">&ZeroWidthSpace;', ['allowhtml' => 1]],
+            // What comes before the first markup decides at once only when it shows (the
+            // review of S7c, minor c): an entity, a blank or an invisible character there
+            // does not.
+            'U+00AD before an image'      => ["\u{00AD}[img]https://example.com/a.png[/img]", []],
+            '&#173; before an image'      => ['&#173;[img]https://example.com/a.png[/img]', []],
+            'blanks before an image'      => [" \n\t[img]https://example.com/a.png[/img]", []],
+            'HTML: &shy; before an image' => ['&shy;<img src="https://example.com/a.png">', ['allowhtml' => 1]],
+            'HTML: &ZeroWidthSpace; before a blank link' => ['&ZeroWidthSpace;<a href="https://example.com/"> </a>', ['allowhtml' => 1]],
         ];
+    }
+
+    /**
+     * Whether a post shows text is read once when its first words show (the review of S7c,
+     * minor c: 2 000 `[img]` tags never closed after a word cost a second reading of every
+     * image pattern, three times the plain reading with `pcre.jit` off). The answer is the
+     * full reading's (the cases above and in `textToRead`); the time is a fraction of
+     * reading the post.
+     */
+    public function testAPostWhoseFirstWordsShowIsNotReadTwice(): void
+    {
+        $message = 'Obelga ' . str_repeat('[img]https://example.com/a.png', 2000);
+        $start = microtime(true);
+        Text::visible($message);
+        $reading = microtime(true) - $start;
+        self::assertGreaterThan(0.005, $reading, 'the guard: reading this post takes time');
+
+        $start = microtime(true);
+        self::assertTrue(Text::shows($message));
+        self::assertLessThan($reading / 10, microtime(true) - $start, 'a fraction of one reading');
     }
 
     /**

@@ -175,7 +175,10 @@ The text readers SEE, following MyBB's own text renderer
   and a hint are sent as before. The cases are MyBB 1.8.41's reader view as the live run
   recorded it (`reader-view.json`, checked by `ReaderViewTest`). The reading is linear (a
   link is replaced by its label, no recursion), and when PCRE gives up on it the body
-  counts as text: in doubt, the post is sent.
+  counts as text: in doubt, the post is sent. When what comes before the first `[`, `<`,
+  `&` or NUL already shows something, it is on the page as written whatever the forum's
+  options, and the answer is yes without that second reading (the same answer; a word
+  followed by 2 000 unclosed `[img]` tags no longer costs every image pattern twice).
 - The link signals count the links of what is sent, head included (`Text::sourceOf`).
 - Every regular expression runs through one checked helper in `Text`: a PCRE failure (a
   post crafted to exhaust the backtrack limit, e.g. a few hundred unclosed `[url=` tags)
@@ -184,8 +187,11 @@ The text readers SEE, following MyBB's own text renderer
   alone (`no_text` is for a post whose body shows no text and that has no poll). Only a
   failure of the match itself counts: a call that exhausts PCRE's JIT stack (a long
   attribute, a 60 000-character quote — markup MyBB renders) runs again with `pcre.jit`
-  off, under another key of PHP's pattern cache, and the text is sent; the patterns over
-  long runs are possessive, so they need no JIT stack per character. What stays
+  off, under another key of PHP's pattern cache, and the text is sent; `pcre.jit` is put
+  back at once (in a `finally`), as the request had it. The patterns over
+  long runs are possessive, so they need no JIT stack per character. On a host whose
+  `disable_functions` holds `ini_set` the retry cannot run: such a post (a 60 000-character
+  quote or list) stays `text_error`, held or published by the failure mode. What stays
   `text_error` is a post on which PCRE gives up without JIT too, as on the unclosed
   `[url=` tags MyBB itself shows as an empty body (question 1 below; shared rule F7).
 - `meta`: `links` (distinct links), `link_domains` (up to 10 registrable domains — the last

@@ -282,7 +282,10 @@ werdyktu nie ma:
   i ankietą;
 - nie udało się odczytać tekstu postu (np. treść tak zbudowana, że przetwarzanie wyrażeń
   regularnych przerywa się z błędem) — wtyczka nie wysyła wtedy niczego, nawet samego
-  tytułu wątku, a w dzienniku zapisuje zdarzenie z numerem postu;
+  tytułu wątku, a w dzienniku zapisuje zdarzenie z numerem postu. Bardzo długi cytat albo
+  lista (np. 60 000 znaków) są odczytywane drugi raz bez kompilacji JIT wyrażeń
+  regularnych; na serwerze, który blokuje funkcję PHP `ini_set` (`disable_functions`),
+  ten drugi odczyt jest niemożliwy i taki post też trafia tutaj;
 - post był dłuższy niż 3000 znaków, a brama uznała jego początek za bezpieczny.
 
 **fail-closed** (domyślnie) zostawia taki post w kolejce moderacji dla człowieka. Jeśli
