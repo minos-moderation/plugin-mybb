@@ -104,7 +104,10 @@ for a reporter with an id, and its template `modcp_reports_report` reads it anyw
 `Undefined array key "lastreporter"` per report): the `modcp_reports_report` hook fills it
 for the plugin's own reports (uid 0 on a post flagged `wsparcie`) with the moment and
 "Minos", escaped (`ModQueue::onReportRendered`); the live run checks MyBB's error log stays
-empty while the list renders. A report of the plugin's still unread for the post is not doubled; one that fails is
+empty while the list renders. A report of the plugin's still unread for the post is not doubled; a user's own open
+report of the same post is not looked at, so the post then has two open reports (known
+behaviour: MyBB's `report.php` would add the plugin to the user's report as a second
+reporter, which a uid-0 reporter cannot be). One that fails is
 logged as `error`/`support` and the verdict stands. Such a post is never deleted,
 rejected or hidden automatically: `zablokowane` keeps it held even with "usuń (miękko)",
 and a late `zablokowane` (or a late `ocenzurowane` whose mask cannot be published) leaves

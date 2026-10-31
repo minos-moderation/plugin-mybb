@@ -98,7 +98,7 @@ dezaktywacji, wtyczka wysyła ponownie przy pierwszym przebiegu zadania.
 | Tryb awaryjny | Co zrobić z postem bez werdyktu: **zostawić w kolejce moderacji** (fail-closed) albo **opublikować bez oceny** (fail-open). | fail-closed |
 | Czas oczekiwania na werdykt | Minuty, po których post bez werdyktu dostaje tryb awaryjny. **Najmniej 20** = 15 minut, przez które brama próbuje doręczyć werdykt, i 5 minut zapasu; mniejsza wartość jest traktowana jak 20. **Najwięcej 1440** (doba); większa jest traktowana jak 1440. | 20 |
 | Post ocenzurowany | **Opublikuj zamaskowany tekst** albo **zostaw w kolejce moderacji**. | opublikuj |
-| Post zablokowany | **Zostaw w kolejce moderacji** albo **usuń (miękko)** — moderator może go przywrócić. Post z sygnałem „wsparcie” zawsze zostaje w kolejce. | zostaw w kolejce |
+| Post zablokowany | **Zostaw w kolejce moderacji** albo **usuń (miękko)** — moderator może go przywrócić. Post z sygnałem „wsparcie” nigdy nie jest usuwany — zostaje w kolejce albo opublikowany. | zostaw w kolejce |
 | Fora | Fora, w których wtyczka moderuje nowe posty. | wszystkie |
 | Pomijaj moderatorów | Posty moderatorów, supermoderatorów i administratorów trafiają na forum bez oceny. | tak |
 | Powiadamiaj subskrybentów o postach opublikowanych przez wtyczkę | Subskrybenci wątku i działu dostają o poście opublikowanym przez wtyczkę to samo powiadomienie (e-mail albo prywatną wiadomość), które MyBB wysyła o poście widocznym od razu — opis niżej. Wyłącz, jeśli inna wtyczka już je wysyła. | tak |
