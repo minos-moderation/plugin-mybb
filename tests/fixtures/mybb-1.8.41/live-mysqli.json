@@ -340,6 +340,21 @@
             "modcp_lists_the_report": true,
             "header_announces_it": true,
             "messages_to_the_author": 0
+        },
+        "k42_modqueue": {
+            "censored": {
+                "verdict": true,
+                "categories": true,
+                "mask": true
+            },
+            "long": {
+                "verdict": true,
+                "only_its_beginning": true
+            },
+            "thread": {
+                "verdict": true
+            },
+            "no_secret": true
         }
     }
 }

@@ -164,15 +164,15 @@ ani dalsza część postu ponad 3000 znaków.
 **Post dłuższy niż 3000 znaków**: brama oceniła tylko jego początek, więc werdykt
 `bezpieczne` nie wystarcza do publikacji — post dostaje tryb awaryjny (fail-closed: zostaje
 w kolejce; fail-open: zostaje opublikowany). Uwagę „wpis dłuższy niż 3000 znaków — oceniono
-początek” widać w dzienniku wtyczki (Minos — dziennik, lista postów wymagających uwagi,
-kolumna „Werdykt”), nie w kolejce moderacji MyBB. Werdykt `zablokowane` działa normalnie, a `ocenzurowane` zawsze zostawia
-taki post w kolejce.
+początek” widać przy poście w kolejce moderacji (niżej, „W kolejce moderatora”) i w dzienniku
+wtyczki (Minos — dziennik, lista postów wymagających uwagi, kolumna „Werdykt”). Werdykt
+`zablokowane` działa normalnie, a `ocenzurowane` zawsze zostawia taki post w kolejce.
 
 Brama maskuje tekst, który zobaczyli czytelnicy, więc wtyczka publikuje zamaskowany tekst
 tylko wtedy, gdy jest on **dokładnie** tym, co wysłała, z niektórymi znakami zastąpionymi
 przez `█`, a post jest zwykłym tekstem. **Post z formatowaniem (MyCode, cytat, link)
-zostaje w kolejce, a zamaskowany tekst widać w dzienniku** (Minos — dziennik, kolumna
-„Tekst zamaskowany przez bramę”). Tak samo zostaje w kolejce zwykły tekst z nadmiarowymi
+zostaje w kolejce, a zamaskowany tekst widać przy poście w kolejce moderacji i w dzienniku**
+(Minos — dziennik, kolumna „Tekst zamaskowany przez bramę”). Tak samo zostaje w kolejce zwykły tekst z nadmiarowymi
 białymi znakami — podwójnymi spacjami, tabulatorami, twardymi spacjami, spacjami na
 początku lub końcu wiersza albo więcej niż jednym pustym wierszem z rzędu: wtyczka wysyła
 go z takimi odstępami ściśniętymi, więc maska nie odpowiada zapisanej treści znak w znak
@@ -211,6 +211,19 @@ zastosowania, więc:
 Własny post w kolejce moderacji autor może poprawić tylko wtedy, gdy forum na to pozwala
 (ustawienie MyBB `showownunapproved`, domyślnie wyłączone); poza tym poprawiają go
 moderatorzy.
+
+## W kolejce moderatora
+
+W panelu moderatora, w **kolejce moderacji** (posty i wątki czekające na moderację), pod
+każdym postem, który zatrzymała wtyczka, jest wiersz „Minos:” ze stanem postu (np. czeka na
+werdykt, w kolejce moderacji), werdyktem bramy albo powodem, dla którego post czeka
+(np. brak werdyktu w czasie, błąd konfiguracji, post bez tekstu), kategoriami, uwagą
+„wpis dłuższy niż 3000 znaków — oceniono początek”, sygnałem „wsparcie” i — przy poście
+ocenzurowanym, którego maski nie dało się opublikować — tekstem zamaskowanym przez bramę.
+Posty, które MyBB zatrzymał sam (np. forum moderuje wszystkie posty), nie mają tego
+wiersza. Wtyczka dopisuje go do listy, którą buduje MyBB (do wiersza z przyciskami
+„zatwierdź / usuń / ignoruj” danego postu); w motywie, który zmienił ten szablon tak, że
+wiersza nie da się znaleźć, uwagi trafiają na koniec listy, każda z numerem postu.
 
 ## Sygnał wsparcia
 
@@ -333,7 +346,8 @@ numer postu — nigdy treść błędu.
   pierwszym doręczeniu z poprawnym podpisem albo po zapisaniu nowego sekretu.
 - **Narzędzia i konserwacja → Dzienniki → Minos — dziennik**: stan konfiguracji, adres
   webhooka, posty wymagające uwagi (zatrzymane w kolejce, czekające na werdykt, opublikowane
-  bez oceny w trybie fail-open i rozstrzygnięte przez człowieka przed werdyktem; przy poście
+  bez oceny w trybie fail-open, opublikowane z maską bramy i rozstrzygnięte przez człowieka
+  przed werdyktem; przy poście
   ocenzurowanym zatrzymanym w kolejce — tekst zamaskowany przez bramę), osobna lista postów
   z sygnałem „wsparcie” (niezależnie od tego, co stało się z postem) oraz dziennik
   zdarzeń. Każda z tych tabel pokazuje 50 najnowszych wierszy, więc inne posty nie

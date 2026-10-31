@@ -34,6 +34,9 @@ final class Plugin
     /** @var Admin */
     public $admin;
 
+    /** @var ModQueue */
+    public $modQueue;
+
     private function __construct(Platform $platform, Gateway $gateway)
     {
         $applier = new Applier($platform);
@@ -43,6 +46,7 @@ final class Plugin
         $this->task = new Task($platform, $this->submitter, $applier);
         $this->installer = new Installer($platform);
         $this->admin = new Admin($platform);
+        $this->modQueue = new ModQueue($platform);
     }
 
     /**

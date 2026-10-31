@@ -6,7 +6,7 @@ namespace Minos\MyBB;
 
 /**
  * The ONE place the plugin touches MyBB: its globals (`$mybb`, `$db`, `$cache`, `$lang`,
- * `$page`), its functions (`is_moderator`, `forum_permissions`, `get_forum`,
+ * `$page`, the ModCP queue's `$posts`/`$threads`), its functions (`is_moderator`, `forum_permissions`, `get_forum`,
  * `rebuild_settings`, `fetch_next_run`, `add_task_log`, `get_post_link`,
  * `get_thread_link`, `my_substr`, `my_serialize`), its classes (`Moderation`, `postParser`, `MyLanguage`,
  * `PMDataHandler`) and its tables.
@@ -838,8 +838,9 @@ final class Platform
 
     /**
      * The newest rows a moderator should look at: held, waiting, published unassessed by the
-     * failure mode, decided by a human before the verdict came (a moderator's edit, say), or
-     * left to a human after a step kept failing. Rows flagged with `wsparcie` have their own
+     * failure mode, published with the gateway's mask (`censored`), decided by a human before
+     * the verdict came (a moderator's edit, say), or left to a human after a step kept
+     * failing. Rows flagged with `wsparcie` have their own
      * list ({@see supportRows}).
      *
      * @param int $limit At most this many.
@@ -849,7 +850,8 @@ final class Platform
     {
         return $this->rows(self::PENDING_TABLE,
             "auto_published='1' OR verdict='" . Status::REASON_APPLY_ERROR . "' OR status IN ('"
-                . implode("','", [Status::HELD, Status::PENDING, Status::RETRY, Status::APPLYING, Status::SUPERSEDED]) . "')",
+                . implode("','", [Status::HELD, Status::PENDING, Status::RETRY, Status::APPLYING, Status::SUPERSEDED,
+                    Status::CENSORED]) . "')",
             ['order_by' => 'submitted_at', 'order_dir' => 'DESC', 'limit' => $limit]);
     }
 
@@ -1165,6 +1167,72 @@ final class Platform
     {
         $this->requireTaskFunctions();
         add_task_log($task, $message);
+    }
+
+    // ---------------------------------------------------------------- the ModCP
+
+    /**
+     * The list of queued posts or threads `modcp.php` has built (`action=modqueue`) and puts
+     * into its page after the `modcp_modqueue_posts_end` / `_threads_end` hooks: the page's
+     * global `$posts` or `$threads`.
+     *
+     * @param string $list `posts` or `threads`.
+     * @return string The HTML; '' when there is none.
+     */
+    public function modQueueList(string $list): string
+    {
+        $html = $GLOBALS[$list === 'threads' ? 'threads' : 'posts'] ?? '';
+        return is_string($html) ? $html : '';
+    }
+
+    /**
+     * Gives `modcp.php` the list back with the plugin's notes in it.
+     *
+     * @param string $list `posts` or `threads`.
+     * @param string $html The HTML.
+     */
+    public function setModQueueList(string $list, string $html): void
+    {
+        $GLOBALS[$list === 'threads' ? 'threads' : 'posts'] = $html;
+    }
+
+    /**
+     * The plugin's rows of some posts.
+     *
+     * @param array<int,int> $pids The posts.
+     * @return array<int,array<string,mixed>> Rows by post id.
+     */
+    public function pendingRows(array $pids): array
+    {
+        return $this->rowsBy('pid', $pids, '');
+    }
+
+    /**
+     * The plugin's rows of some threads' first posts.
+     *
+     * @param array<int,int> $tids The threads.
+     * @return array<int,array<string,mixed>> Rows by thread id.
+     */
+    public function threadRows(array $tids): array
+    {
+        return $this->rowsBy('tid', $tids, " AND is_thread='1'");
+    }
+
+    /**
+     * @param array<int,int> $ids
+     * @return array<int,array<string,mixed>>
+     */
+    private function rowsBy(string $column, array $ids, string $more): array
+    {
+        $ids = array_values(array_filter(array_map('intval', $ids)));
+        if ($ids === []) {
+            return [];
+        }
+        $rows = [];
+        foreach ($this->rows(self::PENDING_TABLE, $column . " IN ('" . implode("','", $ids) . "')" . $more, []) as $row) {
+            $rows[(int)$row[$column]] = $row;
+        }
+        return $rows;
     }
 
     // ---------------------------------------------------------------- the ACP

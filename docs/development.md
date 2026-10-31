@@ -36,6 +36,7 @@ The classes:
 | `Applier` | A verdict or the failure mode → approve, hold, soft-delete, or publish the masked text. |
 | `Task` | Timeouts, due retries, pruning. |
 | `Installer` | Settings group, tables, task; the lifecycle functions. |
+| `ModQueue` | The ModCP's moderation queue: after each post the plugin holds, a note with its state, the verdict or reason, the categories, the 3000-character note, `wsparcie` and the kept mask. |
 | `Admin` | Masked secrets on the settings page, the ACP notice (problems, a configuration error, a 2xx other than 202 at the gateway's address, a daily limit or overload until a given time, refused signatures), the Tools → Logs page with the last 7 days' verdict figures, the posts that need a look and the `wsparcie` posts on a list of their own. |
 | `Plugin` | Builds the objects once per request. |
 
@@ -106,6 +107,20 @@ a fail-open publication published. Nothing is sent to the author. The ACP page l
 `wsparcie` rows on their own list (`Platform::supportRows`), which the other rows never
 push out. (`nieocenione` carries no `wsparcie`: `WebhookPayload::parse` reads none from a
 payload without a verdict.) Verified on a live forum: `k41_support`.
+
+**The ModCP's moderation queue** (K-42). `modcp.php?action=modqueue` builds the list of
+queued posts (threads) from MyBB's templates into its global `$posts` (`$threads`), runs
+`modcp_modqueue_posts_end` (`_threads_end`, no arguments) and only then outputs it; MyBB
+1.8.41 has no hook per post. `ModQueue` finds each post by MyBB's own form field
+(`posts[<pid>]`, `threads[<tid>]`) and inserts, after the `</tr>` that follows it, a row
+`<tr class="minos_modqueue">` with the plugin's note: its state, the verdict or the
+failure mode's reason (`minos_reason_*`), the 3000-character note when the text was cut,
+the categories, `wsparcie`, and the gateway's masked text of a censored post it kept
+(`masked_text`, shared rule A2d) — all escaped, nothing but the plugin's own row. A post
+without a row (MyBB held it itself) gets nothing; a theme whose template has no such field
+or row gets the notes at the end of the list, each naming its post. Posts published with
+the mask (`censored`) are on the ACP page's list of posts that need a look. Verified on a
+live forum: `k42_modqueue`.
 
 ## What `tekst` is
 
@@ -489,6 +504,7 @@ reading the code; what the live run below goes through is verified on a real for
 | `admin_config_settings_change` before `upsetting` is saved | `admin/modules/config/settings.php` | `Admin::onSettingsChange` |
 | `admin_formcontainer_output_row` (references; a setting row's `row_options['id']` is `row_setting_<name>`) | `admin/inc/class_form.php` | `Admin::onFormRow` |
 | `admin_tools_action_handler`, `admin_tools_menu_logs`, `admin_tools_permissions`, `admin_load` before the module file is required | `admin/modules/tools/module_meta.php`, `admin/index.php` | `Admin` |
+| `modcp_modqueue_posts_end` / `modcp_modqueue_threads_end` (no arguments) with the page's global `$posts` / `$threads` built from `modcp_modqueue_posts_post` / `modcp_modqueue_threads_thread` (the `posts[<pid>]` / `threads[<tid>]` radio fields) | `modcp.php`, `install/resources/mybb_theme.xml` | `ModQueue`, `Platform::modQueueList`, `setModQueueList` |
 | `$page->extra_messages`, `output_header`, `output_footer` (exits), `output_confirm_action` (exits), `add_breadcrumb_item` | `admin/inc/class_page.php` | `Platform` |
 | tasks: the `tasks` columns, `task_<file>($task)`, `fetch_next_run`, `add_task_log`, `$cache->update_tasks()`, a comma list of minutes | `inc/functions_task.php`, `admin/modules/tools/tasks.php`, `install/resources/mysql_db_tables.php` | `Platform`, `inc/tasks/minos.php` |
 | `$lang->load($section, true, true)` with the `english` fallback, `{1}` placeholders | `inc/class_language.php` | `Platform::lang` |
@@ -505,7 +521,7 @@ reading the code; what the live run below goes through is verified on a real for
 (`bin/build-zip.sh --stage-only`), serves it and the mock gateway with PHP's built-in
 server and runs `tests/Live/LiveForumTest.php` through the forum's own pages: the ACP's
 plugin and settings pages, `member.php`, `newreply.php`, `newthread.php`, `polls.php`,
-`editpost.php`, `modcp.php`, `showthread.php`, `printthread.php`, `search.php` and the
+`editpost.php`, `modcp.php` (its moderation queue and report list), `task.php`, `showthread.php`, `printthread.php`, `search.php` and the
 real `minos-webhook.php`, with deliveries signed by the mock's worker. The test reads the
 database to see what happened. It writes to it outside those pages only to set the stage:
 `tests/Live/fixtures/minos-live-cli.php` (copied into the forum, never shipped) changes
@@ -537,7 +553,9 @@ reply published with its mask; a late verdict for a reply MyBB's `task.php` held
 fail-closed timeout applied as on time, and one for a reply a moderator approved in the
 ModCP meanwhile changing nothing (`k43_late_after_timeout`); a reply with `wsparcie`
 published and reported in the ModCP's report list and the header, and a blocked one held,
-not deleted, with "usuń (miękko)", nothing to the author (`k41_support`); a forged signature `401` and named in the ACP; switched
+not deleted, with "usuń (miękko)", nothing to the author (`k41_support`); the ModCP's
+moderation queue with the plugin's note after a held censored reply (verdict, categories,
+mask), a blocked reply cut at 3000 characters and a blocked thread (`k42_modqueue`); a forged signature `401` and named in the ACP; switched
 off or deactivated `404`, and a deactivated plugin holds and sends nothing; uninstall
 "No" keeps the rows, "Yes" drops the tables. The approval inside the webhook's request
 took 36–75 ms end to end (audit measurement C-39).

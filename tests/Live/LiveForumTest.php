@@ -505,6 +505,53 @@ final class LiveForumTest extends TestCase
     }
 
     /**
+     * K-42: the ModCP's moderation queue (`modcp.php?action=modqueue`) as MyBB 1.8.41 renders
+     * it, with the plugin's note after each post it holds — a censored reply with MyCode kept
+     * in the queue (the verdict, the categories, the gateway's mask), a blocked reply longer
+     * than 3000 characters (the note that only its beginning was assessed), and a blocked
+     * thread in the threads' queue.
+     */
+    public function testTheModCPQueueShowsTheVerdictAtEachPost(): void
+    {
+        $board = self::$board;
+        $author = $board->login(self::AUTHOR, self::$passwords[self::AUTHOR]);
+        $tid = $board->thread($board->admin(), 'Wątek kolejki moderatora', 'Pierwszy post administratora.')['tid'];
+        $censored = $board->reply($author, $tid, '[b]to jest[/b] [minos:cenzuruj] [minos:kategoria=wulgaryzmy] [[głupi]] pomysł');
+        $long = $board->reply($author, $tid, '[minos:blokuj] Długi wpis ' . str_repeat('słowo ', 600));
+        $thread = $board->thread($author, 'Zablokowany wątek do kolejki', 'Treść wątku [minos:blokuj].');
+        $board->deliver();
+        self::assertSame(['held', 'held', 'held'], [$board->pending($censored)['status'], $board->pending($long)['status'],
+            $board->pending($thread['pid'])['status']]);
+
+        $admin = $board->admin();
+        $posts = html_entity_decode($admin->get('modcp.php?action=modqueue&type=posts'), ENT_QUOTES, 'UTF-8');
+        $threads = html_entity_decode($admin->get('modcp.php?action=modqueue&type=threads'), ENT_QUOTES, 'UTF-8');
+        $notes = [
+            'censored' => self::queueNote($posts, 'posts', $censored),
+            'long'     => self::queueNote($posts, 'posts', $long),
+            'thread'   => self::queueNote($threads, 'threads', $thread['tid']),
+        ];
+        $answers = [
+            'censored' => [
+                'verdict' => strpos($notes['censored'], 'werdykt: ocenzurowane') !== false,
+                'categories' => strpos($notes['censored'], 'kategorie: wulgaryzmy') !== false,
+                'mask' => strpos($notes['censored'], '[[█████]]') !== false,
+            ],
+            'long' => [
+                'verdict' => strpos($notes['long'], 'werdykt: zablokowane') !== false,
+                'only_its_beginning' => strpos($notes['long'], 'wpis dłuższy niż 3000 znaków') !== false,
+            ],
+            'thread' => ['verdict' => strpos($notes['thread'], 'werdykt: zablokowane') !== false],
+            'no_secret' => strpos($posts . $threads, $board->mockConfig()->webhookSecret) === false
+                && strpos($posts . $threads, $board->mockConfig()->key) === false,
+        ];
+        self::$answers['k42_modqueue'] = $answers;
+        self::assertSame(['censored' => ['verdict' => true, 'categories' => true, 'mask' => true],
+            'long' => ['verdict' => true, 'only_its_beginning' => true], 'thread' => ['verdict' => true], 'no_secret' => true],
+            $answers);
+    }
+
+    /**
      * Question 3: a poll on a thread that waits for its verdict — the form, a direct post of
      * it, the hooks that ran, and what the plugin sends.
      */
@@ -830,6 +877,20 @@ final class LiveForumTest extends TestCase
         $admin->post('modcp.php', ['action' => 'do_modqueue', 'posts' => [$pid => 'approve'],
             'my_post_key' => Browser::postKey($queue)]);
         self::assertSame(1, (int)self::$board->post($pid)['visible'], 'approved in the ModCP');
+    }
+
+    /**
+     * The plugin's note after a post's row in a ModCP queue page: between the post's form
+     * field and the next post's ('' when none).
+     */
+    private static function queueNote(string $html, string $list, int $id): string
+    {
+        $at = strpos($html, 'name="' . $list . '[' . $id . ']"');
+        self::assertNotFalse($at, "the guard: the queue lists {$list}[{$id}]");
+        $rest = (string)substr($html, (int)$at);
+        $next = preg_match('/name="' . $list . '\[(?!' . $id . '\])[0-9]+\]"/', $rest, $m, PREG_OFFSET_CAPTURE)
+            ? $m[0][1] : strlen($rest);
+        return preg_match('#<tr class="minos_modqueue">(.*?)</tr>#s', substr($rest, 0, $next), $note) ? $note[1] : '';
     }
 
     /**

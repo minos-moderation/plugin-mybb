@@ -96,7 +96,7 @@ $l['minos_acp_figures_none'] = 'brak danych';
 $l['minos_acp_seconds'] = '{1} s';
 $l['minos_acp_minutes'] = '{1} min {2} s';
 $l['minos_acp_attention'] = 'Posty, które wymagają uwagi';
-$l['minos_acp_attention_desc'] = 'Posty zatrzymane w kolejce moderacji, posty czekające na werdykt, posty opublikowane bez oceny w trybie fail-open i posty, o których przed werdyktem zdecydował człowiek (np. poprawione przez moderatora). Posty z sygnałem wsparcia mają własną listę niżej.';
+$l['minos_acp_attention_desc'] = 'Posty zatrzymane w kolejce moderacji, posty czekające na werdykt, posty opublikowane bez oceny w trybie fail-open, posty opublikowane z maską bramy (ocenzurowane) i posty, o których przed werdyktem zdecydował człowiek (np. poprawione przez moderatora). Posty z sygnałem wsparcia mają własną listę niżej.';
 $l['minos_acp_support'] = 'Posty z sygnałem wsparcia';
 $l['minos_acp_support_desc'] = 'Posty, przy których brama zasygnalizowała, że autor może potrzebować wsparcia (wsparcie) — niezależnie od werdyktu. Każdy taki post trafia też do zgłoszeń w panelu moderatora (Zgłoszona zawartość). Wtyczka nigdy nie usuwa, nie odrzuca ani nie ukrywa takiego postu sama i nie pisze do jego autora: post zostaje w kolejce albo opublikowany, aż zdecyduje człowiek.';
 $l['minos_acp_log'] = 'Dziennik';
@@ -112,6 +112,13 @@ $l['minos_acp_col_event'] = 'Zdarzenie';
 $l['minos_acp_col_code'] = 'Kod';
 $l['minos_acp_support_yes'] = 'Tak — okaż autorowi wsparcie';
 $l['minos_support_report'] = 'Minos — wsparcie: brama zasygnalizowała, że autor tego postu może potrzebować pomocy (werdykt: {1}). Wtyczka nie usunęła ani nie ukryła postu i nie napisała do autora — zdecyduj, jak mu pomóc.';
+
+$l['minos_modqueue_title'] = 'Minos:';
+$l['minos_modqueue_status'] = 'stan: {1}';
+$l['minos_modqueue_verdict'] = 'werdykt: {1}';
+$l['minos_modqueue_categories'] = 'kategorie: {1}';
+$l['minos_modqueue_support'] = 'wsparcie — autor może potrzebować pomocy (zobacz zgłoszenie)';
+$l['minos_modqueue_masked'] = 'Tekst zamaskowany przez bramę (post został w kolejce, bo maski nie dało się opublikować):';
 
 $l['minos_status_pending'] = 'Czeka na werdykt';
 $l['minos_status_retry'] = 'Czeka na ponowną wysyłkę';
