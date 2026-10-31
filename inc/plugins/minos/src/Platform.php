@@ -1235,6 +1235,40 @@ final class Platform
         return $rows;
     }
 
+    /**
+     * The report `modcp.php` (`action=reports`) is about to render, in its global `$report`
+     * at the `modcp_reports_report` hook (run before the `modcp_reports_report` template).
+     *
+     * @return array<string,mixed>|null The report's row, with `lastreporter`; null outside.
+     */
+    public function modcpReport(): ?array
+    {
+        $report = $GLOBALS['report'] ?? null;
+        return is_array($report) ? $report : null;
+    }
+
+    /**
+     * Whether the report being rendered has its "last report" cell
+     * (`$report_data['lastreporter']`, which `modcp.php` sets only for a reporter with an
+     * id: the plugin reports as uid 0).
+     */
+    public function modcpReportHasLastReporter(): bool
+    {
+        $data = $GLOBALS['report_data'] ?? null;
+        return is_array($data) && isset($data['lastreporter']);
+    }
+
+    /**
+     * Fills the report's "last report" cell (already escaped HTML), which the template reads.
+     */
+    public function setModcpReportLastReporter(string $html): void
+    {
+        if (!isset($GLOBALS['report_data']) || !is_array($GLOBALS['report_data'])) {
+            $GLOBALS['report_data'] = [];
+        }
+        $GLOBALS['report_data']['lastreporter'] = $html;
+    }
+
     // ---------------------------------------------------------------- the ACP
 
     /**

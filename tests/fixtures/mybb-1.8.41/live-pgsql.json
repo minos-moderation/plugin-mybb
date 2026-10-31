@@ -538,6 +538,8 @@
                 }
             },
             "modcp_lists_the_report": true,
+            "modcp_names_the_reporter": true,
+            "errors_logged_by_the_report_list": 0,
             "header_announces_it": true,
             "messages_to_the_author": 0
         },

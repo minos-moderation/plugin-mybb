@@ -64,6 +64,30 @@ final class ModQueue
     }
 
     /**
+     * `modcp_reports_report`: a report the plugin raised for `wsparcie` is filed by uid 0,
+     * and MyBB 1.8.41's `modcp.php` fills the "last report" cell only for a reporter with an
+     * id, while its template `modcp_reports_report` reads it anyway (`Undefined array key
+     * "lastreporter"` on PHP 8, an empty cell). For the plugin's own reports — uid 0 on a
+     * post whose row the gateway flagged with `wsparcie` — the cell names the moment and
+     * Minos. Any other report is MyBB's.
+     */
+    public function onReportRendered(): void
+    {
+        $report = $this->platform->modcpReport();
+        if ($report === null || $this->platform->modcpReportHasLastReporter() || (int)($report['uid'] ?? -1) !== 0
+            || !in_array((string)($report['type'] ?? ''), ['post', ''], true)) {
+            return;
+        }
+        $row = $this->platform->pendingRows([(int)($report['id'] ?? 0)]);
+        $row = reset($row);
+        if ($row === false || (int)$row['support'] !== 1) {
+            return;
+        }
+        $this->platform->setModcpReportLastReporter(self::e($this->platform->lang('minos_report_lastreporter',
+            date('Y-m-d H:i', (int)($report['lastreport'] ?? $report['dateline'] ?? 0)))));
+    }
+
+    /**
      * One post's note: escaped HTML.
      *
      * @param array<string,mixed> $row The plugin's row of the post.

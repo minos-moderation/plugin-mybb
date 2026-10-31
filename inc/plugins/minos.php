@@ -34,6 +34,8 @@ $plugins->add_hook('newthread_start', 'minos_hook_form_shown');
 // The ModCP's moderation queue: the gateway's verdict at each post the plugin holds.
 $plugins->add_hook('modcp_modqueue_posts_end', 'minos_hook_modqueue_posts');
 $plugins->add_hook('modcp_modqueue_threads_end', 'minos_hook_modqueue_threads');
+// The ModCP's report list: the "last report" cell of the plugin's own reports (uid 0).
+$plugins->add_hook('modcp_reports_report', 'minos_hook_modcp_report');
 
 if (defined('IN_ADMINCP')) {
     $plugins->add_hook('admin_config_settings_change', 'minos_hook_settings_change');
@@ -178,6 +180,15 @@ function minos_hook_modqueue_posts()
 function minos_hook_modqueue_threads()
 {
     \Minos\MyBB\Plugin::instance()->modQueue->onRendered(true);
+}
+
+/**
+ * `modcp_reports_report` (no arguments: the report in `modcp.php`'s globals `$report`,
+ * `$report_data`).
+ */
+function minos_hook_modcp_report()
+{
+    \Minos\MyBB\Plugin::instance()->modQueue->onReportRendered();
 }
 
 /**

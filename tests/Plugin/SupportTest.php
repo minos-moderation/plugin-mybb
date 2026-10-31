@@ -48,6 +48,40 @@ final class SupportTest extends PluginTestCase
     }
 
     /**
+     * The ModCP's report list (`modcp.php`, `action=reports`) fills the "last report" cell
+     * only for a reporter with an id, and its template reads it anyway: for the plugin's own
+     * report (uid 0) the `modcp_reports_report` hook fills it, escaped. A user's report, and
+     * a uid-0 report on a post without `wsparcie`, are left to MyBB.
+     */
+    public function testTheReportListGetsALastReporterForThePluginsReport(): void
+    {
+        $pid = $this->heldReply('Potrzebuję pomocy.');
+        $this->forum->deliver(self::support($pid));
+        $plain = $this->heldReply('Zwykły post.');
+        $this->forum->deliver(self::payload($plain));
+        $report = $this->forum->reports()[0];
+
+        // As modcp.php has them before the template: no `lastreporter` for uid 0.
+        $GLOBALS['report'] = $report + ['lastreporter' => 0];
+        $GLOBALS['report_data'] = ['content' => 'x', 'comment' => 'y', 'reports' => '1'];
+        $GLOBALS['plugins']->run_hooks('modcp_reports_report');
+        self::assertStringContainsString('Minos', $GLOBALS['report_data']['lastreporter']);
+        self::assertStringContainsString(date('Y-m-d H:i', (int)$report['lastreport']), $GLOBALS['report_data']['lastreporter']);
+
+        foreach ([['uid' => 5] + $report, ['id' => $plain] + $report] as $other) {
+            $GLOBALS['report'] = $other;
+            $GLOBALS['report_data'] = ['content' => 'x'];
+            $GLOBALS['plugins']->run_hooks('modcp_reports_report');
+            self::assertArrayNotHasKey('lastreporter', $GLOBALS['report_data'], 'MyBB\'s own report');
+        }
+        $GLOBALS['report'] = $report;
+        $GLOBALS['report_data'] = ['lastreporter' => 'MyBB'];
+        $GLOBALS['plugins']->run_hooks('modcp_reports_report');
+        self::assertSame('MyBB', $GLOBALS['report_data']['lastreporter'], 'a cell MyBB filled is kept');
+        unset($GLOBALS['report'], $GLOBALS['report_data']);
+    }
+
+    /**
      * The report says nothing of the post, the key, the secret or the delivery: its comment
      * is the plugin's text with the verdict.
      */

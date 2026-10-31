@@ -485,11 +485,19 @@ final class LiveForumTest extends TestCase
                 'report_names_thread_and_forum' => $report !== null && (int)$report['id2'] === $tid && (int)$report['id3'] === Board::FID,
             ];
         }
+        // MyBB's error log while the report list renders: its template reads the "last report"
+        // cell, which modcp.php fills only for a reporter with an id (the review of #8, M1).
+        @unlink($board->root . '/error.log');
+        $board->settings(['errorlogmedium' => 'log', 'errorloglocation' => './error.log']);
         $modcp = html_entity_decode($board->admin()->get('modcp.php?action=reports'), ENT_QUOTES, 'UTF-8');
+        $board->settings(['errorlogmedium' => 'none']);
+        $errorLog = is_file($board->root . '/error.log') ? (string)file_get_contents($board->root . '/error.log') : '';
         $index = html_entity_decode($board->admin()->get('index.php'), ENT_QUOTES, 'UTF-8');
         $answers = [
             'posts' => $reports,
             'modcp_lists_the_report' => strpos($modcp, 'Minos — wsparcie') !== false && strpos($modcp, '#pid' . $safe) !== false,
+            'modcp_names_the_reporter' => strpos($modcp, 'Minos (sygnał bramy)') !== false,
+            'errors_logged_by_the_report_list' => substr_count($errorLog, '<error>'),
             'header_announces_it' => preg_match('#modcp\.php\?action=reports">[^<]*unread report#', $index) === 1,
             'messages_to_the_author' => (int)$board->value('SELECT COUNT(*) FROM {p}privatemessages WHERE toid=?',
                 [self::$uids[self::AUTHOR]]) - $pms,
@@ -500,6 +508,8 @@ final class LiveForumTest extends TestCase
         self::assertSame(['visible' => 0, 'status' => 'held', 'reports' => 1, 'report_names_thread_and_forum' => true],
             $reports['blocked'], 'held, not deleted');
         self::assertTrue($answers['modcp_lists_the_report']);
+        self::assertTrue($answers['modcp_names_the_reporter']);
+        self::assertSame(0, $answers['errors_logged_by_the_report_list'], 'no warning while the list renders');
         self::assertTrue($answers['header_announces_it']);
         self::assertSame(0, $answers['messages_to_the_author']);
     }

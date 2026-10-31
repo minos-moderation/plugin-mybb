@@ -111,6 +111,7 @@ $l['minos_acp_col_time'] = 'Czas';
 $l['minos_acp_col_event'] = 'Zdarzenie';
 $l['minos_acp_col_code'] = 'Kod';
 $l['minos_acp_support_yes'] = 'Tak — okaż autorowi wsparcie';
+$l['minos_report_lastreporter'] = '{1} — Minos (sygnał bramy)';
 $l['minos_support_report'] = 'Minos — wsparcie: brama zasygnalizowała, że autor tego postu może potrzebować pomocy (werdykt: {1}). Wtyczka nie usunęła ani nie ukryła postu i nie napisała do autora — zdecyduj, jak mu pomóc.';
 
 $l['minos_modqueue_title'] = 'Minos:';

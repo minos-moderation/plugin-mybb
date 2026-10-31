@@ -99,7 +99,12 @@ the verdict, never content, a key or a secret — unread), then
 notice to moderators. `add_report` itself is not called: with the board's `reportmethod`
 set to e-mail or PMs it calls `send_report`, which reads the reporting user's session and
 the page's `$post`/`$thread`/`$forum` globals, none of which the webhook or the task has.
-A report of the plugin's still unread for the post is not doubled; one that fails is
+MyBB 1.8.41's report list (`modcp.php?action=reports`) fills the "last report" cell only
+for a reporter with an id, and its template `modcp_reports_report` reads it anyway (on PHP 8
+`Undefined array key "lastreporter"` per report): the `modcp_reports_report` hook fills it
+for the plugin's own reports (uid 0 on a post flagged `wsparcie`) with the moment and
+"Minos", escaped (`ModQueue::onReportRendered`); the live run checks MyBB's error log stays
+empty while the list renders. A report of the plugin's still unread for the post is not doubled; one that fails is
 logged as `error`/`support` and the verdict stands. Such a post is never deleted,
 rejected or hidden automatically: `zablokowane` keeps it held even with "usuń (miękko)",
 and a late `zablokowane` (or a late `ocenzurowane` whose mask cannot be published) leaves
@@ -505,6 +510,7 @@ reading the code; what the live run below goes through is verified on a real for
 | subscription notifications: inline in `insert_post`/`insert_thread`, only for `visible == 1`; none on approval — the two blocks copied (`threadsubscriptions`, `forumsubscriptions`, `users.lastactive`/`language`, `usergroups.isbannedgroup`, `mailqueue`, `threads.lastpost`, `forums.lastpost`) | `inc/datahandlers/post.php`, `inc/class_moderation.php`, `modcp.php` | `Platform::lastPosts`, `notifySubscribers` |
 | `postParser::text_parse_message`, `parse_badwords`; `my_substr`; `get_thread_link($tid, 0, 'newpost')`; `$mybb->settings['subscribeexcerpt'/'orig_bblanguage'/'bblanguage'/'enablepms']` | `inc/class_parser.php`, `inc/functions.php` | `Platform::notifySubscribers` |
 | `MyLanguage` (`set_path`, `set_language`, `load`, `language_exists`, `sprintf`; `messages`: `emailsubject_subscription`, `email_subscription`, `pmsubject_subscription`, `pm_subscription`, `emailsubject_forumsubscription`, `email_forumsubscription`, `emailbit_viewthread`; `global`: `guest`) | `inc/class_language.php`, `task.php` | `Platform::boardLanguage`, `languageFor` |
+| `modcp_reports_report` (no arguments; the report in `modcp.php`'s globals `$report` and `$report_data`, before the template reads `$report_data['lastreporter']`) | `modcp.php` | `ModQueue::onReportRendered`, `Platform::modcpReport`, `setModcpReportLastReporter` |
 | `add_report($report, 'post')`'s row: `reportedcontent` (`id`, `id2`, `id3`, `uid`, `reportstatus`, `reasonid`, `reason` ≤ 250, `type`, `reports`, `dateline`, `lastreport`, `reporters` by `my_serialize`), `reportreasons` (`<lang:report_reason_other>`, `extra`), `$cache->update_reportedcontent()`; the ModCP's report list (`modcp.php?action=reports`) and the header's `global_unreadreports` | `inc/functions_modcp.php`, `modcp.php`, `global.php`, `inc/class_datacache.php`, `install/resources/mysql_db_inserts.php` | `Platform::reportForSupport` |
 | `send_pm($pm, -1, true)` → `PMDataHandler` (`admin_override`, `set_data`, `validate_pm`, `insert_pm`); `$cache->update_mailqueue()` | `inc/functions.php`, `inc/datahandlers/pm.php`, `inc/class_datacache.php` | `Platform::sendPm`, `queueMail` |
 | `admin_config_settings_change` before `upsetting` is saved | `admin/modules/config/settings.php` | `Admin::onSettingsChange` |
