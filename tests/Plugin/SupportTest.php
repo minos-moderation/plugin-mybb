@@ -45,6 +45,29 @@ final class SupportTest extends PluginTestCase
 
         self::assertSame(200, $this->forum->deliver(self::support($pid)), 'a repeated delivery');
         self::assertCount(1, $this->forum->reports(), 'reports nothing twice');
+
+        // A repeat after a moderator closed the report: the row remembers the signal.
+        $closed = $this->heldReply('Ostatnio wszystko mnie przerasta, drugi raz.');
+        $this->forum->deliver(self::support($closed));
+        $this->forum->db->update_query('reportedcontent', ['reportstatus' => 1], "id='" . $closed . "'");
+        self::assertSame(200, $this->forum->deliver(self::support($closed)));
+        self::assertSame([$pid, $closed], array_map('intval', array_column($this->forum->reports(), 'id')));
+    }
+
+    /**
+     * A delivery that comes while another delivery of the same revision is being applied
+     * (the row claimed, `applying`) raises nothing itself: the one being applied brings the
+     * signal with its verdict.
+     */
+    public function testADeliveryBesideOneBeingAppliedRaisesNothing(): void
+    {
+        $pid = $this->heldReply('Dostarczony dwa razy naraz.');
+        self::assertTrue($this->forum->platform()->claimPending($pid, TIME_NOW), 'the guard: the other delivery claimed it');
+
+        self::assertSame(200, $this->forum->deliver(self::support($pid)));
+
+        self::assertSame([], $this->forum->reports());
+        self::assertSame(Status::APPLYING, $this->forum->row($pid)['status']);
     }
 
     /**
@@ -181,6 +204,8 @@ final class SupportTest extends PluginTestCase
         self::assertSame(Status::SUPERSEDED, $this->forum->row($decided)['status']);
         self::assertSame([$none, $decided], array_map('intval', array_column($this->forum->reports(), 'id')));
         self::assertStringContainsString('ocenzurowane', $this->forum->reports()[0]['reason']);
+        self::assertSame($this->forum->platform()->lang('minos_support_report_after_decision', 'bezpieczne'),
+            $this->forum->reports()[1]['reason'], 'the decided post\'s report notes the decision');
     }
 
     /**
@@ -230,6 +255,131 @@ final class SupportTest extends PluginTestCase
             'the guard: the list of posts needing a look is full');
         self::assertStringNotContainsString('>#' . $supported . '</a>', $attention);
         self::assertStringContainsString('>#' . $supported . '</a>', explode('<div class="title">Dziennik', $support)[0]);
+    }
+
+    /**
+     * A7, also after a person's decision (the owner's decision of 2026-11-01): a reply the
+     * failure mode held for its timeout, which a moderator then approved in the ModCP queue,
+     * gets a late `zablokowane` with `wsparcie` — the moderators get one report, noting that
+     * the verdict came after the decision, and the post stays as the moderator left it
+     * (published, not deleted even with "usuń (miękko)"). A repeated delivery raises
+     * nothing more, even once a moderator closed the report; the same verdict without
+     * `wsparcie` raises nothing.
+     */
+    public function testSupportAfterAModeratorApprovedTheHeldPostIsReportedOnce(): void
+    {
+        $this->forum->set(['minos_blocked' => 'soft-delete']);
+        $supported = $this->heldReply('Zatwierdzony po czasie, z sygnałem.');
+        $plain = $this->heldReply('Zatwierdzony po czasie, bez sygnału.');
+        foreach ([$supported, $plain] as $pid) {
+            $this->forum->platform()->updatePending($pid, ['accepted_at' => TIME_NOW - 21 * 60]);
+        }
+        task_minos(['tid' => 1]);
+        (new \Moderation())->approve_posts([$supported, $plain]); // the ModCP's queue
+        $GLOBALS['minos_test']['moderation'] = [];
+        $before = [$this->forum->row($supported)['status'], $this->forum->row($supported)['verdict']];
+        self::assertSame([Status::HELD, Status::REASON_TIMEOUT], $before, 'the guard: held for its timeout');
+
+        self::assertSame(200, $this->forum->deliver(self::support($supported, ['kwalifikacja' => 'zablokowane'])));
+        self::assertSame(200, $this->forum->deliver(self::payload($plain, ['kwalifikacja' => 'zablokowane'])));
+
+        $reports = $this->forum->reports();
+        self::assertSame([$supported], array_map('intval', array_column($reports, 'id')));
+        self::assertSame($this->forum->platform()->lang('minos_support_report_after_decision', 'zablokowane'),
+            $reports[0]['reason'], 'the note says the verdict came after the decision');
+        foreach ([$supported, $plain] as $pid) {
+            self::assertSame([1, Status::HELD, Status::REASON_TIMEOUT], [(int)$this->forum->post($pid)['visible'],
+                $this->forum->row($pid)['status'], $this->forum->row($pid)['verdict']], "post {$pid} as the moderator left it");
+        }
+        self::assertSame([], self::moderation(), 'nothing unapproved or deleted');
+        self::assertSame(['1', '0'], [(string)$this->forum->row($supported)['support'], (string)$this->forum->row($plain)['support']],
+            'listed with the ACP\'s support posts');
+        self::assertSame([[], []], [$this->forum->pms(), $this->forum->mails()], 'nothing to the author');
+
+        $this->forum->db->update_query('reportedcontent', ['reportstatus' => 1], "id='" . $supported . "'");
+        self::assertSame(200, $this->forum->deliver(self::support($supported, ['kwalifikacja' => 'zablokowane'])), 'a repeat');
+        self::assertCount(1, $this->forum->reports(), 'a repeated delivery raises nothing, the report closed or not');
+    }
+
+    /**
+     * A7 while the post waited for its verdict: a moderator approved it, soft-deleted it or
+     * edited it in the queue before the verdict came. Each gets the report noting the
+     * decision; each stays visible, deleted or held as the moderator left it.
+     */
+    public function testSupportAfterAModeratorsDecisionWhileThePostWaitedIsReported(): void
+    {
+        $approved = $this->heldReply('Zatwierdzony, zanim przyszedł werdykt.');
+        $deleted = $this->heldReply('Usunięty miękko, zanim przyszedł werdykt.');
+        $edited = $this->heldReply('Poprawiony przez moderatora.');
+        (new \Moderation())->approve_posts([$approved]);
+        (new \Moderation())->soft_delete_posts([$deleted]);
+        $GLOBALS['minos_test']['moderators'] = [self::UID];
+        $this->forum->edit($edited, 'Poprawiony przez moderatora, inną treścią.');
+        $GLOBALS['minos_test']['moderators'] = [];
+        $GLOBALS['minos_test']['moderation'] = [];
+        self::assertSame([Status::SUPERSEDED, Status::REASON_EDITED],
+            [$this->forum->row($edited)['status'], $this->forum->row($edited)['verdict']], 'the guard: the edit decided it');
+
+        foreach ([$approved, $deleted, $edited] as $pid) {
+            self::assertSame(200, $this->forum->deliver(self::support($pid, ['kwalifikacja' => 'zablokowane'])));
+            self::assertSame(200, $this->forum->deliver(self::support($pid, ['kwalifikacja' => 'zablokowane'])), 'a repeat');
+        }
+
+        self::assertSame([$approved, $deleted, $edited], array_map('intval', array_column($this->forum->reports(), 'id')));
+        foreach ($this->forum->reports() as $report) {
+            self::assertSame($this->forum->platform()->lang('minos_support_report_after_decision', 'zablokowane'), $report['reason']);
+        }
+        self::assertSame([1, -1, 0], [(int)$this->forum->post($approved)['visible'], (int)$this->forum->post($deleted)['visible'],
+            (int)$this->forum->post($edited)['visible']]);
+        self::assertSame([], self::moderation());
+    }
+
+    /**
+     * A7 on an older revision (S3): its author edited the waiting post, so the verdict on
+     * the first text is not applied — but its `wsparcie` is reported, once, and the post
+     * keeps waiting for the verdict on its new text, which then applies as usual; the mark
+     * stays on the ACP's support list.
+     */
+    public function testSupportOnARevisionTheAuthorReplacedIsReported(): void
+    {
+        $pid = $this->heldReply('Pierwsza wersja z prośbą o pomoc.');
+        $this->forum->edit($pid, 'Druga wersja, inną treścią.');
+        task_minos(['tid' => 1]);
+        self::assertSame([Status::PENDING, '1'], [$this->forum->row($pid)['status'], (string)$this->forum->row($pid)['rev']],
+            'the guard: revision 1 waits');
+
+        self::assertSame(200, $this->forum->deliver(self::support($pid, ['kwalifikacja' => 'zablokowane'])));
+        self::assertSame(200, $this->forum->deliver(self::support($pid, ['kwalifikacja' => 'zablokowane'])), 'a repeat');
+        self::assertSame([0, Status::PENDING], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']],
+            'still waiting for the verdict on the new text');
+        self::assertCount(1, $this->forum->reports());
+
+        self::assertSame(200, $this->forum->deliver(self::payload($pid, ['id' => 'mybb:' . $pid . '.1'])));
+        self::assertSame([1, Status::PUBLISHED, '1'], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status'],
+            (string)$this->forum->row($pid)['support']]);
+        self::assertCount(1, $this->forum->reports());
+    }
+
+    /**
+     * A7 on a post the failure mode published (fail-open) and its author edited since: the
+     * late `zablokowane` judged a text that is gone and is not applied — the post stays
+     * published — but its `wsparcie` is reported; without it nothing happens.
+     */
+    public function testSupportOnAPublishedPostEditedSinceIsReported(): void
+    {
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $supported = $this->autoPublished('Opublikowany bez oceny, potem poprawiony.');
+        $plain = $this->autoPublished('Opublikowany bez oceny, poprawiony, bez sygnału.');
+        $this->forum->edit($supported, 'Poprawiona treść.');
+        $this->forum->edit($plain, 'Poprawiona treść bez sygnału.');
+        $GLOBALS['minos_test']['moderation'] = [];
+
+        $this->forum->deliver(self::support($supported, ['kwalifikacja' => 'zablokowane']));
+        $this->forum->deliver(self::payload($plain, ['kwalifikacja' => 'zablokowane']));
+
+        self::assertSame([$supported], array_map('intval', array_column($this->forum->reports(), 'id')));
+        self::assertSame([1, 1], [(int)$this->forum->post($supported)['visible'], (int)$this->forum->post($plain)['visible']]);
+        self::assertSame([], self::moderation(), 'nothing sent back to the queue');
     }
 
     /**

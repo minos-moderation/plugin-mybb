@@ -240,6 +240,14 @@ zostaje w kolejce albo zostaje opublikowany, aż zdecyduje człowiek — werdykt
 który przyjdzie po publikacji bez oceny (fail-open), nie cofa go do kolejki. Wtyczka nigdy
 nie pisze do autora postu. Posty z sygnałem są też na osobnej liście w dzienniku wtyczki.
 
+Zgłoszenie przychodzi także wtedy, gdy człowiek zdecydował pierwszy: moderator zatwierdził,
+usunął albo poprawił post, zanim przyszedł werdykt (również po czasie oczekiwania albo po
+publikacji bez oceny), albo autor poprawił post i werdykt dotyczy jego poprzedniej wersji.
+Komentarz zgłoszenia mówi wtedy, że werdykt przyszedł po decyzji moderatora lub edycji
+postu. Reszty takiego werdyktu wtyczka nie stosuje: post zostaje widoczny, usunięty albo
+w kolejce — tak, jak zostawił go człowiek. Powtórzona dostawa tego samego werdyktu nie
+dodaje drugiego zgłoszenia, także gdy moderator zamknął już pierwsze.
+
 ## Powiadomienia subskrybentów
 
 MyBB powiadamia subskrybentów wątku (e-mailem albo prywatną wiadomością, według

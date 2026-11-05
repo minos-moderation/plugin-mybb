@@ -30,6 +30,9 @@ use Minos\Client\WebhookPayload;
  *   centre and the row is listed on the ACP page; such a post is never deleted, rejected or
  *   hidden automatically — `zablokowane` keeps it held even with the soft-delete setting, a
  *   late `zablokowane` leaves it published (shared rule D9.9). Nothing goes to its author.
+ *   The report comes even when a person decided first — a moderator approved, deleted or
+ *   edited the post, or its author edited it since — with a note that the verdict came
+ *   after that decision, and the post stays as the person left it ({@see supportAfterDecision}).
  *
  * A post the plugin publishes from the queue (a verdict, the failure mode in `fail-open`)
  * notifies its subscribers as MyBB notifies them of a post visible at once, by setting and
@@ -254,8 +257,10 @@ final class Applier
      * in the ModCP's report centre ({@see Platform::reportForSupport}), which MyBB also
      * announces to them at the top of every page. Never a message to the author. Raised once
      * per applied delivery while the post exists; a report still open for the post is not
-     * doubled. One that fails is logged (`error`/`support`, the post id) and changes
-     * nothing of the verdict.
+     * doubled, and the row remembers the revision ({@see Platform::claimSupportSignal}), so
+     * a repeated delivery raises nothing. A post a moderator dealt with before the verdict
+     * came (`superseded`) gets the note that the verdict came after that decision. One that
+     * fails is logged (`error`/`support`, the post id) and changes nothing of the verdict.
      *
      * @param array<string,mixed>                       $row     The claimed row.
      * @param array{kwalifikacja:?string,wsparcie:bool} $payload The payload.
@@ -267,11 +272,60 @@ final class Applier
             return;
         }
         try {
-            $this->platform->reportForSupport((int)$row['pid'], $this->platform->lang('minos_support_report',
-                $payload['kwalifikacja'] ?? 'nieocenione'), $now);
+            $this->platform->updatePending((int)$row['pid'], ['support_rev' => (int)$row['rev'] + 1]);
+            $this->report((int)$row['pid'], $payload, $status === Status::SUPERSEDED, $now);
         } catch (\Throwable $e) {
             $this->platform->log('error', 'support', (int)$row['pid'], $now);
         }
+    }
+
+    /**
+     * `wsparcie` on a verdict the plugin does not apply because a person decided first
+     * (A7: the signal comes whatever the verdict, also after a person's decision): a
+     * moderator approved, deleted or edited the post — while it waited, or after the
+     * failure mode held or published it — or its author edited it since, so the verdict
+     * is about an older revision (S3). The moderators get the report, with the note that
+     * the verdict came after that decision; nothing else of the verdict is applied: the
+     * post stays visible or held as the person left it. Once per post and revision
+     * ({@see Platform::claimSupportSignal}): a repeated delivery raises nothing, and neither
+     * does a delivery without `wsparcie`. One that fails is logged (`error`/`support`, the
+     * post id), as in {@see signalSupport}.
+     *
+     * @param array<string,mixed>                       $row     The post's row, as read.
+     * @param array{kwalifikacja:?string,wsparcie:bool} $payload The payload.
+     * @param int                                       $rev     The revision it is about.
+     * @param int                                       $now     Unix seconds.
+     */
+    public function supportAfterDecision(array $row, array $payload, int $rev, int $now): void
+    {
+        if (!$payload['wsparcie']) {
+            return;
+        }
+        $pid = (int)$row['pid'];
+        try {
+            if ($this->platform->claimSupportSignal($pid, $rev)) {
+                $this->report($pid, $payload, true, $now);
+            }
+        } catch (\Throwable $e) {
+            try {
+                $this->platform->log('error', 'support', $pid, $now);
+            } catch (\Throwable $ignored) {
+                // The database refuses even this; the verdict was not to be applied anyway.
+            }
+        }
+    }
+
+    /**
+     * The moderators' report of a post with `wsparcie`.
+     *
+     * @param array{kwalifikacja:?string} $payload
+     * @param bool $afterDecision Whether a person decided before the verdict came.
+     */
+    private function report(int $pid, array $payload, bool $afterDecision, int $now): void
+    {
+        $this->platform->reportForSupport($pid, $this->platform->lang(
+            $afterDecision ? 'minos_support_report_after_decision' : 'minos_support_report',
+            $payload['kwalifikacja'] ?? 'nieocenione'), $now);
     }
 
     /**
@@ -322,11 +376,12 @@ final class Applier
     private static function record(array $payload): array
     {
         $qualification = $payload['status'] === WebhookPayload::ASSESSED ? $payload['kwalifikacja'] : null;
+        // `support` is only ever set: a mark an earlier revision's verdict left
+        // ({@see supportAfterDecision}) stays with the post.
         return [
             'verdict'    => $qualification ?? 'nieocenione',
             'categories' => substr(implode(',', $payload['kategorie']), 0, 255),
-            'support'    => $payload['wsparcie'] ? 1 : 0,
-        ];
+        ] + ($payload['wsparcie'] ? ['support' => 1] : []);
     }
 
     /**

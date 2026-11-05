@@ -39,7 +39,10 @@ use Minos\Client\WebhookPayload;
  *    author's edit started a new revision, which this verdict is not about. When applying throws, the
  *    claim is given back and the answer is `500`, so the gateway delivers again and the
  *    redelivery applies the verdict ({@see Applier::failedStep}: after three failures the
- *    post is left to a human).
+ *    post is left to a human). A verdict that is not applied because a person decided
+ *    first — a moderator approved, deleted or edited the post, or its author edited it
+ *    since (an older revision) — still brings its `wsparcie` to the moderators, once per
+ *    revision, and changes nothing else ({@see Applier::supportAfterDecision}, A7).
  * 6. The answer is a bare `200`; the gateway discards its body. The work in step 5 is a
  *    few queries, well inside the gateway's 10 seconds.
  *
@@ -108,8 +111,16 @@ final class Receiver
         $pid = (int)$m[1];
         $rev = isset($m[2]) ? (int)$m[2] : 0;
         $row = $this->platform->pending($pid);
-        if ($row === null || (int)$row['rev'] !== $rev) {
-            return 200; // unknown, or a revision an edit has since replaced
+        if ($row === null) {
+            return 200; // unknown
+        }
+        if ((int)$row['rev'] !== $rev) {
+            // A revision an author's edit has since replaced: not applied, but its `wsparcie`
+            // still reaches the moderators (A7).
+            if ($rev < (int)$row['rev']) {
+                $this->applier->supportAfterDecision($row, $payload, $rev, $now);
+            }
+            return 200;
         }
         // The claims name the revision too: an edit between the read above and the claim
         // starts a new one, and this verdict is then not applied.
@@ -137,6 +148,11 @@ final class Receiver
                 $this->applier->failedStep($pid, 'verdict', $now);
                 return 500;
             }
+        } else {
+            // Already applied (deliveries repeat), or a person decided first — approved,
+            // deleted or edited the post: nothing of the verdict is applied, but its
+            // `wsparcie` still reaches the moderators, once (A7).
+            $this->applier->supportAfterDecision($row, $payload, $rev, $now);
         }
         return 200; // applied, or already handled
     }

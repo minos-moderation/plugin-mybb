@@ -116,6 +116,27 @@ a fail-open publication published. Nothing is sent to the author. The ACP page l
 push out. (`nieocenione` carries no `wsparcie`: `WebhookPayload::parse` reads none from a
 payload without a verdict.) Verified on a live forum: `k41_support`.
 
+The signal comes even when a person decided first (A7, the owner's decision of
+2026-11-01): a verdict the plugin does not apply — a moderator approved, soft-deleted or
+edited the post while it waited, or after the failure mode held it for its timeout or
+published it; its author edited it since, so the verdict is about an older revision — still
+adds the report, with the comment `minos_support_report_after_decision` ("the verdict came
+after a moderator's decision or an edit of the post: the plugin did not change the post"),
+and nothing else of the verdict is applied: the post stays visible, deleted or held as the
+person left it (`Applier::supportAfterDecision`, from `Receiver::handle`). A post a moderator
+dealt with before its verdict's claim (the row still waiting) is `superseded` by that
+verdict and gets the same comment (`Applier::signalSupport`). Once per post and revision:
+`Platform::claimSupportSignal` is one conditional `UPDATE` that sets `support` (the ACP's
+list, the report list's "last report" cell) and `support_rev` (one more than the newest
+revision signalled), and takes nothing once that revision or a newer one was signalled, nor
+while a delivery of the same revision is being applied (`applying`), whose own signal comes
+with it; a normal signal records `support_rev` too. A repeated delivery therefore adds no
+second report even after a moderator closed the first. `support` is only ever set — neither
+the next revision's verdict nor `Platform::revise` clears it. Activation of an upgraded
+table sets `support_rev` for rows an earlier version already reported. Verified on a live
+forum: `a7_support_after_decision`, and end to end (`EndToEndTest`: an author's edit and a
+moderator's approval after the timeout, each verdict delivered twice).
+
 **The ModCP's moderation queue** (K-42). `modcp.php?action=modqueue` builds the list of
 queued posts (threads) from MyBB's templates into its global `$posts` (`$threads`), runs
 `modcp_modqueue_posts_end` (`_threads_end`, no arguments) and only then outputs it; MyBB
@@ -313,7 +334,7 @@ applying for more than 5 min ─► back to claimed_from (the task)
   receiver accepts `mybb:<pid>` and `mybb:<pid>.<n>` (n ≥ 1, no leading zero) and applies a
   verdict only to the row's current revision: its claim names the revision, so an edit
   between the receiver's read and its claim wins. A verdict for another revision gets `200`
-  and nothing else. A moderator's edit of a waiting post, or of one held for its timeout,
+  and nothing else but its `wsparcie` signal (below). A moderator's edit of a waiting post, or of one held for its timeout,
   leaves it to humans: `superseded` with `edited`, nothing sent, no late verdict applied,
   listed on the ACP page. Edits of published posts are not
   assessed again (shared rule D9.2, not adopted yet).
@@ -363,6 +384,15 @@ with two counts.
 secret. Log entries are kept 30 days; decided rows — with the verdict, the original text
 of a censored post and the mask of a held one — 30 days after their decision (shared rule
 D9.11, `Task::DECIDED_RETENTION_S`).
+
+## Shared rules: compliance
+
+How this plugin meets the shared plugin rules of client-php's `docs/plugin-behaviour.md`,
+for the rules recorded here so far (the others are described where the code is above).
+
+| Rule | Here |
+|---|---|
+| A7 | `wsparcie`, whatever the verdict: a report in the ModCP's report centre (`Platform::reportForSupport`), the row on the ACP's support list; never a deletion, rejection or hiding. Also after a person's decision (a moderator's approval, deletion or edit, an author's edit: an older revision), with a note that the verdict came after it and the post left as the person left it; once per post and revision. |
 
 ## Tests
 
@@ -567,7 +597,9 @@ saved through the plugin's fields (the page shows prefixes only); an author's re
 and sent once to the gateway; the signed verdict publishes it (`visible = 1`); a censored
 reply published with its mask; a late verdict for a reply MyBB's `task.php` held after the
 fail-closed timeout applied as on time, and one for a reply a moderator approved in the
-ModCP meanwhile changing nothing (`k43_late_after_timeout`); a reply with `wsparcie`
+ModCP meanwhile changing nothing (`k43_late_after_timeout`) — and, with `wsparcie`,
+delivered twice, one report noting the decision, the post left published
+(`a7_support_after_decision`); a reply with `wsparcie`
 published and reported in the ModCP's report list and the header, and a blocked one held,
 not deleted, with "usuń (miękko)", nothing to the author (`k41_support`); the ModCP's
 moderation queue with the plugin's note after a held censored reply (verdict, categories,

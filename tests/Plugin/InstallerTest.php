@@ -136,19 +136,23 @@ final class InstallerTest extends TestCase
             . " claimed_at int NOT NULL default '0', claimed_from varchar(20) NOT NULL default '', original_text text NOT NULL default '',"
             . ' PRIMARY KEY (pid))');
         $this->forum->pdo->exec("INSERT INTO mybb_minos_pending (pid, tid, status, verdict, original_text) VALUES (41, 5, 'censored', 'ocenzurowane', 'Oryginał.')");
+        // A post the earlier version already reported for `wsparcie`.
+        $this->forum->pdo->exec("INSERT INTO mybb_minos_pending (pid, tid, status, verdict, support) VALUES (42, 5, 'published', 'bezpieczne', 1)");
         self::assertFalse($this->forum->db->field_exists('sent_sha256', 'minos_pending'), 'the old shape lacks the new columns');
 
         minos_install();
         minos_activate();
 
-        foreach (['sent_sha256', 'masked_text', 'apply_errors', 'first_post', 'rev', 'answer', 'answered_at', 'own_subject'] as $column) {
+        foreach (['sent_sha256', 'masked_text', 'apply_errors', 'first_post', 'rev', 'answer', 'answered_at', 'own_subject', 'support_rev'] as $column) {
             self::assertTrue($this->forum->db->field_exists($column, 'minos_pending'), $column);
         }
         $row = $this->forum->platform()->pending(41);
         self::assertSame(['5', 'censored', 'ocenzurowane', 'Oryginał.', '', '', '0', '0'],
             [(string)$row['tid'], $row['status'], $row['verdict'], $row['original_text'], $row['sent_sha256'], $row['masked_text'],
                 (string)$row['apply_errors'], (string)$row['rev']]);
-        self::assertSame(1, (int)$this->forum->pdo->query('SELECT COUNT(*) FROM mybb_minos_pending')->fetchColumn());
+        self::assertSame(2, (int)$this->forum->pdo->query('SELECT COUNT(*) FROM mybb_minos_pending')->fetchColumn());
+        self::assertSame(['0', '1'], [(string)$row['support_rev'], (string)$this->forum->platform()->pending(42)['support_rev']],
+            'a post already reported counts as signalled: a repeated delivery after the upgrade reports nothing');
 
         minos_activate();
         self::assertTrue($this->forum->db->field_exists('masked_text', 'minos_pending'), 'a second activation changes nothing');
