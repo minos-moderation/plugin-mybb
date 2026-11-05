@@ -196,8 +196,11 @@ The text readers SEE, following MyBB's own text renderer
   their content; formatting tags go; MyCode MyBB would not parse stays literally. (A post
   with a labelled link or an image sent by a version that still sent "Y (X)" or the
   image's address, whose verdict comes after the upgrade, renders to another text than its
-  digest: on time it is held for a human as `text_changed`, late nothing is applied — the
-  safe direction.)
+  digest. On time it is held for a human as `text_changed`, the safe direction. Late —
+  after the failure mode published it (fail-open) — nothing is applied: it stays public
+  even when the verdict is `zablokowane`, and it leaves the ACP's list of posts published
+  unassessed (`auto_published` is cleared). That is not the safe direction; only a person
+  who looks at it takes it down.)
 - What heads the post goes in front, a blank line between the parts (`Text::ofPost`): a
   new thread's subject (always escaped, never parsed), then its poll — the question
   escaped like a subject, each option on its own line through the post rules above, as
@@ -400,7 +403,8 @@ applying for more than 5 min ─► back to claimed_from (the task)
   `tekst` in `sent_sha256` (never the text); before any verdict, on time or late, the post
   is rendered again (`Text::forPost` with the forum's current options) and compared. No
   match (a change past the edit hook, another rendering, a row without a digest) → on time
-  `held` with `text_changed`, late nothing (the late window closes).
+  `held` with `text_changed`, late nothing (the late window closes): a post the failure
+  mode published stays public whatever the late verdict says, `zablokowane` included.
 - The masked text replaces the message only when it stands for the whole post (see
   `Applier`): not when the text sent was cut, not unless every character of the mask is
   the one sent or `█` (`Text::maskFits`), not when a mask falls in a new thread's subject,

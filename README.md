@@ -198,7 +198,11 @@ wtyczka porównuje skrót (SHA-256) wysłanego tekstu z tekstem postu w tej chwi
 tekst nie jest przechowywany. Jeśli treść zmieniła się z pominięciem edycji (np. przez inną
 wtyczkę), werdykt nie jest stosowany: post zostaje w kolejce dla człowieka („tekst postu
 inny niż wysłany do oceny”), a post opublikowany wcześniej w trybie fail-open zostaje taki,
-jaki jest.
+jaki jest — opublikowany, także gdy spóźniony werdykt to `zablokowane` — i znika z listy
+postów opublikowanych bez oceny. Tak samo po aktualizacji wtyczki, która zmienia sposób
+odczytu tekstu (np. linków z opisem albo obrazków): post wysłany przed aktualizacją
+i opublikowany w trybie fail-open nie wraca do kolejki po spóźnionym werdykcie; trzeba go
+sprawdzić ręcznie.
 
 Jeśli moderator zdąży zatwierdzić albo usunąć post, zanim nadejdzie werdykt, wtyczka go nie
 rusza — decyzja człowieka wygrywa.
