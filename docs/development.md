@@ -186,8 +186,12 @@ The text readers SEE, following MyBB's own text renderer
 - MyCode: `[quote=NAME]` → "NAME napisał(a):"; `[url=X]Y[/url]` → "Y" alone (shared rule
   S1: the reader does not see the address; it is counted in `links`, S2), except a `data:`
   address, which MyBB shows instead of a link (`mycode_parse_url`); an image MyBB shows as
-  an image (`Text::IMAGE`, MyBB's own patterns, with the forum's image MyCode on) is left
-  out with its address (F7/S2); an `[img]` MyBB shows as a link (image MyCode off) or
+  an image (`Text::IMAGE`, MyBB's own patterns, with the forum's image MyCode on) is its
+  `alt` without its address (F7/S2): the text a reader sees when the image does not load,
+  which its author chooses — the address's last part, cut as `mycode_parse_img` cuts it
+  (40 characters, "...", the last 10, when longer than 55) and encoded as `encode_url`
+  encodes it, without the board language's "[Image: …]" frame (`Text::imageAlt`); an image
+  with nothing else that shows is still no text (F7); an `[img]` MyBB shows as a link (image MyCode off) or
   leaves as typed, and `[video=…]X[/video]`, → X beside other text; `[code]`/`[php]` keep
   their content; formatting tags go; MyCode MyBB would not parse stays literally. (A post
   with a labelled link or an image sent by a version that still sent "Y (X)" or the
@@ -224,8 +228,9 @@ The text readers SEE, following MyBB's own text renderer
   characters — U+200B, U+2060, U+FEFF, `&#173;`… —, `\p{Cc}` controls, `\p{M}` marks
   without a base such as U+034F or U+FE0F, the Hangul fillers and the blank Braille
   pattern). A bare address the reader sees is text (`https://…`, `[url]X[/url]`, an image
-  or video tag MyBB leaves as a link or as typed); beside other text, an HTML image's hint
-  (`alt`/`title`) is sent, an image's address never. The cases are MyBB 1.8.41's reader view as the live run
+  or video tag MyBB leaves as a link or as typed); beside other text, an image's `alt` (an
+  `[img]`'s as MyBB builds it, an HTML image's `alt`/`title`) is sent, an image's address
+  never. The cases are MyBB 1.8.41's reader view as the live run
   recorded it (`reader-view.json`, checked by `ReaderViewTest`). The reading is linear (a
   link is replaced by its label, no recursion), and when PCRE gives up on it the body
   counts as text: in doubt, the post is sent. When what comes before the first `[`, `<`,
@@ -425,7 +430,7 @@ left out.
 |---|---|---|
 | `F5d` | optional: re-send what fail-open published unassessed once the limit renews | not implemented: the rule is optional and off by default (nie wdrożono, reguła opcjonalna); not a deviation |
 | `F7` | no text to assess → the failure mode; a bare address and visible punctuation are text | `Text::shows`: an image MyBB shows as an image, an embedded video, an attachment, a link without a label (`alt`/`title` notwithstanding) or only invisible characters → `no_text`, nothing sent. An emoticon (`:)`) is text: MyBB shows its smilie image, but the characters the author typed are sent and assessed; `NoTextTest` |
-| `F7`, `S2` | an image's address is not text and not a link | `[img]` MyBB shows as an image (its image MyCode on) and `<img>` on an HTML forum add no text (`Text::visible`) and no link (`Text::sourceOf` with the forum's options); an `[img]` MyBB shows as a link (image MyCode off) or leaves as typed is text and a link; `LinksAndImagesTest` |
+| `F7`, `S2` | an image's address is not text and not a link | `[img]` MyBB shows as an image (its image MyCode on) and `<img>` on an HTML forum add only their `alt` beside other text, never the address (`Text::visible`; an `[img]`'s `alt` as `mycode_parse_img` builds it from the address's last part, `Text::imageAlt`), no text alone (`Text::shows`) and no link (`Text::sourceOf` with the forum's options); an `[img]` MyBB shows as a link (image MyCode off) or leaves as typed is text and a link; `LinksAndImagesTest` |
 | `S1` | `tekst` is what the reader sees; never an `href` | `[url=X]Y[/url]` is sent as `Y` alone (a `data:` address, which MyBB shows instead of a link, as the address); an HTML forum's `alt`/`title` next to the text; `LinksAndImagesTest`, `TextTest` |
 | `A7` | `wsparcie`: an active signal in the moderators' queue, whatever the verdict | a report in the ModCP's report centre (`Platform::reportForSupport`), the row on the ACP's support list; never deleted, rejected or hidden automatically. Also after a person's decision (a moderator's approval, deletion or edit, an author's edit: an older revision), with a note saying so and the post left as the person left it; once per post and revision; `SupportTest`, `EndToEndTest`, live `a7_support_after_decision` |
 

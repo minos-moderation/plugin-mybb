@@ -44,15 +44,20 @@ final class LinksAndImagesTest extends PluginTestCase
                 'Zobacz opis tu.', 1, ['example.net']],
             'a data: address MyBB shows instead of a link' => ['Zobacz [url=data:text/plain,abc]opis[/url]', [],
                 'Zobacz data:text/plain,abc', 0, []],
-            'an image beside text: neither text nor a link' => [
-                'Zdjęcie: [img]https://obrazki.example.org/a.png[/img] koniec', [], 'Zdjęcie: koniec', 0, []],
+            'an image beside text: its alt, without its address, no link' => [
+                'Zdjęcie: [img]https://obrazki.example.org/a.png[/img] koniec', [], 'Zdjęcie: a.png koniec', 0, []],
+            'an image whose address ends in a word the author chose' => [
+                'Tekst obok [img]https://nieistnieje.invalid/katalog/słowo[/img]', [], 'Tekst obok słowo', 0, []],
+            'a long alt, cut as MyBB cuts it, its spaces encoded' => [
+                'Opis [img]https://obrazki.example.org/x/' . str_repeat('ą', 30) . ' środek ' . str_repeat('b', 30) . '.png[/img]', [],
+                'Opis ' . str_repeat('ą', 30) . '%20środek%20bb...bbbbbb.png', 0, []],
             'an image with its size and alignment' => [
-                "Opis [img=100x50 align=right]\nhttps://obrazki.example.org/a.png[/img] dalej", [], 'Opis dalej', 0, []],
+                "Opis [img=100x50 align=right]\nhttps://obrazki.example.org/a.png[/img] dalej", [], 'Opis a.png dalej', 0, []],
             'an image inside a link: the link counts, the image does not' => [
-                '[url=https://example.com/][img]https://cdn.example.org/a.png[/img][/url] i tekst', [], 'i tekst', 1, ['example.com']],
+                '[url=https://example.com/][img]https://cdn.example.org/a.png[/img][/url] i tekst', [], 'a.png i tekst', 1, ['example.com']],
             'a bare address beside an image: text and a link' => [
                 'Patrz https://example.net/strona [img]https://obrazki.example.org/a.png[/img]', [],
-                'Patrz https://example.net/strona', 1, ['example.net']],
+                'Patrz https://example.net/strona a.png', 1, ['example.net']],
             'an image MyBB shows as a link (image MyCode off)' => [
                 '[img]https://obrazki.example.org/a.png[/img] opis', ['allowimgcode' => 0],
                 'https://obrazki.example.org/a.png opis', 1, ['example.org']],
@@ -64,7 +69,7 @@ final class LinksAndImagesTest extends PluginTestCase
                 "[img]https://obrazki.example.org/a.png[/img]\ntekst", 1, ['example.org']],
             'a quoted image and a link in the quote' => [
                 '[quote=Ktoś][img]https://obrazki.example.org/a.png[/img] [url=https://example.com/]tu[/url][/quote] Zgoda.', [],
-                "Ktoś napisał(a):\ntu\nZgoda.", 1, ['example.com']],
+                "Ktoś napisał(a):\na.png tu\nZgoda.", 1, ['example.com']],
             'HTML: an image\'s hint is text, its address is no link' => [
                 'Tekst <img src="https://obrazki.example.org/a.png" alt="podpis"> <a href="https://example.com/">link</a>',
                 ['allowhtml' => 1], 'Tekst podpis link', 1, ['example.com']],

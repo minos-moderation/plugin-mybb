@@ -141,7 +141,10 @@ Wysyłane jest tylko:
     `[url=ADRES]opis[/url]` — samym „opis”, bo adresu czytelnik nie widzi (link jest
     liczony w sygnałach antyspamowych); obrazek, który MyBB pokazuje jako obrazek
     (`[img]ADRES[/img]`, na forum z HTML `<img>`), nie jest wysyłany ani on, ani jego adres
-    (na forum z HTML zostaje tylko jego `alt`/`title`); adres, który czytelnik widzi
+    — zostaje tylko jego tekst zastępczy, widoczny, gdy obrazek się nie wczyta: przy
+    `[img]` ostatni człon adresu (np. `obrazek.png`), skrócony jak w MyBB, a na forum
+    z HTML `alt`/`title`; sam obrazek bez innego tekstu nadal nie jest tekstem do oceny;
+    adres, który czytelnik widzi
     (goły adres, `[url]ADRES[/url]`, `[img]` przy wyłączonym MyCode obrazków — MyBB
     pokazuje go wtedy jako link), jest tekstem i linkiem; film obok innego tekstu — samym
     adresem;

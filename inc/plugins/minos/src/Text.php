@@ -95,9 +95,13 @@ final class Text
     /**
      * An image MyBB 1.8.41 shows as an image when its image MyCode is on: its own four
      * patterns (`parse_mycode`) in one — at most one line break before the address, nothing
-     * else. Any other `[img]` stays on the page as typed.
+     * else; the address is the first group. Any other `[img]` stays on the page as typed.
      */
-    private const IMAGE = '#\[img(?:=[1-9][0-9]*x[1-9][0-9]*)?(?: align=(?:left|right))?\](?:\r\n?|\n?)https?://[^<>"\']+?\[/img\]#is';
+    private const IMAGE = '#\[img(?:=[1-9][0-9]*x[1-9][0-9]*)?(?: align=(?:left|right))?\](?:\r\n?|\n?)(https?://[^<>"\']+?)\[/img\]#is';
+
+    /** What MyBB 1.8.41's `Postparser::encode_url` replaces in an image's `alt`. */
+    private const URL_ENTITIES = ['$' => '%24', '&#36;' => '%24', '^' => '%5E', '`' => '%60', '[' => '%5B', ']' => '%5D',
+        '{' => '%7B', '}' => '%7D', '"' => '%22', '<' => '%3C', '>' => '%3E', ' ' => '%20'];
 
     /** `[code]` and `[php]`, whose content MyBB shows as written. */
     private const CODE_BLOCK = '#\[(code|php)\](.*?)\[/\1\]#is';
@@ -585,8 +589,10 @@ final class Text
      * The MyCode after quotes and code blocks, rendered as text the way MyBB's text renderer
      * does (`text_parse_message`), but for what the reader does not see (shared rule S1): a
      * link is its label alone ({@see linkLabels}), and an image MyBB shows as an image is
-     * gone, its address with it (`$images`, the forum's image MyCode). An image tag MyBB
-     * shows as a link or leaves as typed, and a video, become their address.
+     * its `alt` — the text the reader sees when it does not load, which its author can
+     * choose — without its address ({@see imageAlt}; `$images`, the forum's image MyCode).
+     * An image tag MyBB shows as a link or leaves as typed, and a video, become their
+     * address.
      */
     private static function inline(string $text, bool $video, bool $images = false): string
     {
@@ -610,7 +616,9 @@ final class Text
         for ($pass = 0; $pass < 20; $pass++) {
             $before = $text;
             if ($images) {
-                $text = self::replace(self::IMAGE, ' ', $text);
+                $text = self::replaceCallback(self::IMAGE, static function (array $m): string {
+                    return ' ' . self::imageAlt($m[1]) . ' ';
+                }, $text);
             }
             $text = self::linkLabels($text);
             $text = self::replace(array_keys($find), array_values($find), $text);
@@ -662,6 +670,23 @@ final class Text
             }
         }
         return $text;
+    }
+
+    /**
+     * What MyBB 1.8.41 puts in an image's `alt` (`Postparser::mycode_parse_img`), without
+     * the board language's frame ("[Image: …]"): the last part of its address, cut to its
+     * first 40 characters, "..." and its last 10 when longer than 55, with the characters
+     * `encode_url` encodes encoded. Never the address itself.
+     *
+     * @param string $url The image's address, as in the message.
+     */
+    private static function imageAlt(string $url): string
+    {
+        $alt = basename(str_replace(["\n", "\r"], '', trim($url)));
+        if (mb_strlen($alt, 'UTF-8') > 55) {
+            $alt = mb_substr($alt, 0, 40, 'UTF-8') . '...' . mb_substr($alt, -10, null, 'UTF-8');
+        }
+        return strtr($alt, self::URL_ENTITIES);
     }
 
     /**
