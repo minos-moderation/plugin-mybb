@@ -138,13 +138,18 @@ Wysyłane jest tylko:
     między nimi), więc tak są wysyłane, a komentarzy HTML (`<!-- … -->`) czytelnik nie
     widzi, więc nie są wysyłane;
   - cytat `[quote=NAZWA]` staje się „NAZWA napisał(a):” i cytowanym tekstem;
-    `[url=ADRES]opis[/url]` — „opis (ADRES)”; `[img]ADRES[/img]` i filmy obok innego
-    tekstu — samym adresem;
+    `[url=ADRES]opis[/url]` — samym „opis”, bo adresu czytelnik nie widzi (link jest
+    liczony w sygnałach antyspamowych); obrazek, który MyBB pokazuje jako obrazek
+    (`[img]ADRES[/img]`, na forum z HTML `<img>`), nie jest wysyłany ani on, ani jego adres
+    (na forum z HTML zostaje tylko jego `alt`/`title`); adres, który czytelnik widzi
+    (goły adres, `[url]ADRES[/url]`, `[img]` przy wyłączonym MyCode obrazków — MyBB
+    pokazuje go wtedy jako link), jest tekstem i linkiem; film obok innego tekstu — samym
+    adresem;
   - MyCode, którego MyBB nie rozpozna (nieznany znacznik, znacznik bez pary, forum
     z wyłączonym MyCode), zostaje dosłownie — tak jak widzi go czytelnik;
 - profil oceny;
 - sygnały antyspamowe: liczba linków w poście, domeny tych linków (najwyżej 10, np.
-  `example.com`) i — dla zarejestrowanego autora — czy to jego pierwszy post: czy licznik
+  `example.com`; adres obrazka nie jest linkiem i nie jest liczony) i — dla zarejestrowanego autora — czy to jego pierwszy post: czy licznik
   postów jego konta w MyBB wynosił 0, gdy post był wysyłany pierwszy raz (ponowienie
   wysyła tę samą wartość, a dla gościa ten sygnał nie jest wysyłany).
 

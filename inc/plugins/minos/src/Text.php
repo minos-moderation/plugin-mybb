@@ -21,8 +21,13 @@ namespace Minos\MyBB;
  *   text, and so are they sent; an HTML comment is hidden from readers, and so is it from
  *   the gateway (verified on MyBB 1.8.41: `tests/fixtures/mybb-1.8.41/reader-view.json`).
  * - MyCode (when the forum parses it): `[quote=NAME]` becomes "NAME napisał(a):" before the
- *   quoted text; `[url=X]Y[/url]` becomes "Y (X)"; `[img]X[/img]` and `[video=…]X[/video]`
- *   become the address X; `[code]` and `[php]` keep their content as written; formatting
+ *   quoted text; `[url=X]Y[/url]` becomes its label "Y" alone — the reader does not see the
+ *   address, which is counted in `links` (shared rules S1, S2) — unless MyBB shows the
+ *   address instead of a link (a `data:` address); an image MyBB shows as an image (`[img]`
+ *   with its image MyCode on, as its own patterns match) is left out with its address (an
+ *   image's address is neither text nor a link, F7/S2), while an `[img]` it shows as a link
+ *   (its image MyCode off) or leaves as typed, and `[video=…]X[/video]`, become the address
+ *   X; `[code]` and `[php]` keep their content as written; formatting
  *   tags go and their text stays. MyCode MyBB would not parse — an unknown tag, a tag
  *   without its pair, a `[size]`, `[align]`, `[color]` or `[font]` whose value MyBB's
  *   patterns refuse (`[size=OBELGA]`), any tag in a forum with MyCode off — stays
@@ -37,7 +42,8 @@ namespace Minos\MyBB;
  * video or a link whose label shows nothing (F7): a body that shows only `[img]` (with
  * MyBB's image MyCode on), a `[video]` MyBB embeds, `[url=X] [/url]` or an `<img>`, even
  * with its `alt` or `title`, shows no text ({@see shows}); a bare address the reader sees is
- * text. Beside other text, an image's address or hint is still sent as before.
+ * text. Beside other text, an image's hint (an HTML `alt` or `title`) is sent; its address
+ * never is.
  *
  * Only the FIRST 3000 characters are sent; {@see Applier} does not publish a cut post on a
  * verdict about its beginning. Works without mbstring (PCRE with `/u`).
@@ -85,6 +91,16 @@ final class Text
 
     /** A link, for the spam signals. */
     private const LINK = '~(?:https?://|www\.)[^\s\[\]<>"\'()]+~iu';
+
+    /**
+     * An image MyBB 1.8.41 shows as an image when its image MyCode is on: its own four
+     * patterns (`parse_mycode`) in one — at most one line break before the address, nothing
+     * else. Any other `[img]` stays on the page as typed.
+     */
+    private const IMAGE = '#\[img(?:=[1-9][0-9]*x[1-9][0-9]*)?(?: align=(?:left|right))?\](?:\r\n?|\n?)https?://[^<>"\']+?\[/img\]#is';
+
+    /** `[code]` and `[php]`, whose content MyBB shows as written. */
+    private const CODE_BLOCK = '#\[(code|php)\](.*?)\[/\1\]#is';
 
     /**
      * Two-label public suffixes common on Polish forums and elsewhere: a registrable domain
@@ -164,24 +180,65 @@ final class Text
 
     /**
      * The raw text the link signals of a post are read from: what {@see ofPost} sends, as
-     * stored (subject, poll, message).
+     * stored (subject, poll, message). With the forum's parsing options, the images MyBB
+     * shows as images are left out of the message and the poll's options, which MyBB
+     * parses: an image's address is not a link (shared rule S2).
      *
-     * @param array<string,mixed> $post        As for {@see ofPost}.
-     * @param bool                $opensThread The post opens its thread.
-     * @param bool|null           $ownSubject  As for {@see ofPost}.
+     * @param array<string,mixed>      $post        As for {@see ofPost}.
+     * @param bool                     $opensThread The post opens its thread.
+     * @param bool|null                $ownSubject  As for {@see ofPost}.
+     * @param array<string,mixed>|null $forum       The forum's parsing options; null keeps
+     *     every part as stored.
      * @return string The parts, one per line.
+     * @throws TextError When PCRE fails on it.
      */
-    public static function sourceOf(array $post, bool $opensThread, ?bool $ownSubject = null): string
+    public static function sourceOf(array $post, bool $opensThread, ?bool $ownSubject = null, ?array $forum = null): string
     {
+        $parsed = static function (string $part) use ($forum): string {
+            return $forum === null ? $part : self::withoutImages($part, $forum);
+        };
         $parts = [$opensThread ? (string)$post['subject'] : self::replySubject($post, $ownSubject)];
         if ($opensThread && is_array($post['poll'] ?? null)) {
             $parts[] = (string)$post['poll']['question'];
             foreach ((array)$post['poll']['options'] as $option) {
-                $parts[] = (string)$option;
+                $parts[] = $parsed((string)$option);
             }
         }
-        $parts[] = (string)$post['message'];
+        $parts[] = $parsed((string)$post['message']);
         return implode("\n", $parts);
+    }
+
+    /**
+     * A message without what its readers see as an image: `[img]` MyBB shows as one (its
+     * MyCode and image MyCode on, outside `[code]`/`[php]`, which show it as written), and
+     * `<img>` in a forum with HTML on. What is left is still the message as stored.
+     *
+     * @param array<string,mixed> $forum The forum's parsing options.
+     * @throws TextError When PCRE fails on it.
+     */
+    private static function withoutImages(string $message, array $forum): string
+    {
+        $forum += self::DEFAULT_FORUM;
+        $text = self::valid($message);
+        $blocks = [];
+        if (!empty($forum['allowmycode'])) {
+            $text = self::replaceCallback(self::CODE_BLOCK, static function (array $m) use (&$blocks): string {
+                $blocks[] = $m[0];
+                return "\x00" . (count($blocks) - 1) . "\x00";
+            }, $text);
+            if (!empty($forum['allowimgcode'])) {
+                $text = self::replace(self::IMAGE, ' ', $text);
+            }
+        }
+        if (!empty($forum['allowhtml'])) {
+            $text = self::replace('#<img\b' . self::ATTRIBUTES . '>#i', ' ', $text);
+        }
+        if ($blocks === []) {
+            return $text;
+        }
+        return self::replaceCallback('#\x00([0-9]+)\x00#', static function (array $m) use ($blocks): string {
+            return $blocks[(int)$m[1]] ?? $m[0];
+        }, $text);
     }
 
     /**
@@ -509,13 +566,14 @@ final class Text
     {
         // [code] and [php] show their content as written, MyCode included.
         $blocks = [];
-        $text = self::replaceCallback('#\[(code|php)\](.*?)\[/\1\]#is', static function (array $m) use (&$blocks): string {
+        $text = self::replaceCallback(self::CODE_BLOCK, static function (array $m) use (&$blocks): string {
             $blocks[] = $m[2];
             return "\x00" . (count($blocks) - 1) . "\x00";
         }, $text);
 
         $text = self::quotes($text);
-        $text = $textOnly ? self::shownMyCode($text, $forum) : self::inline($text, !empty($forum['allowvideocode']));
+        $text = $textOnly ? self::shownMyCode($text, $forum)
+            : self::inline($text, !empty($forum['allowvideocode']), !empty($forum['allowimgcode']));
 
         // PCRE's own `\x00` escape: PHP before 8.2 refuses a literal NUL byte in a pattern.
         return self::replaceCallback('#\x00([0-9]+)\x00#', static function (array $m) use ($blocks): string {
@@ -525,10 +583,12 @@ final class Text
 
     /**
      * The MyCode after quotes and code blocks, rendered as text the way MyBB's text renderer
-     * does (`text_parse_message`): an image or a video becomes its address, a link its label
-     * and its address.
+     * does (`text_parse_message`), but for what the reader does not see (shared rule S1): a
+     * link is its label alone ({@see linkLabels}), and an image MyBB shows as an image is
+     * gone, its address with it (`$images`, the forum's image MyCode). An image tag MyBB
+     * shows as a link or leaves as typed, and a video, become their address.
      */
-    private static function inline(string $text, bool $video): string
+    private static function inline(string $text, bool $video, bool $images = false): string
     {
         $find = [
             '#\[(b|u|i|s|url|email)\](.*?)\[/\1\]#is'                                                  => '$2',
@@ -541,8 +601,6 @@ final class Text
             '#\[align=(left|center|right|justify)\](.*?)\[/align\]#si'                                   => '$2',
             '#\[font=\s*("?)([a-z0-9 ,\-_\'"]+)\1\s*\](.*?)\[/font\]#si'                                => '$3',
             '#\[img(?:=[1-9][0-9]*x[1-9][0-9]*)?(?: align=(?:left|right))?\]\s*(https?://[^<>"\']+?)\[/img\]#is' => '$1',
-            '#\[url=((?!javascript)[a-z]+?://)([^\r\n"<]+?)\](.+?)\[/url\]#si'                         => '$3 ($1$2)',
-            '#\[url=((?!javascript:)[^\r\n"<&\(\)]+?)\](.+?)\[/url\]#si'                               => '$2 ($1)',
             '#\[attachment=[0-9]+\]#i'                                                                 => '',
             '#\[hr\]#i'                                                                                => "\n",
         ];
@@ -551,6 +609,10 @@ final class Text
         }
         for ($pass = 0; $pass < 20; $pass++) {
             $before = $text;
+            if ($images) {
+                $text = self::replace(self::IMAGE, ' ', $text);
+            }
+            $text = self::linkLabels($text);
             $text = self::replace(array_keys($find), array_values($find), $text);
             // Lists, innermost first: each `[*]` starts a line.
             $text = self::replaceCallback('#\[list(?:=(?:a|A|i|I|1))?\]((?:(?!\[list(?:=[aAiI1])?\]).)*?)\[/list\]#is',
@@ -580,18 +642,12 @@ final class Text
             $before = $text;
             // A link first, by its label, before the images: `[url=X][img]…[/img][/url]` is an
             // image link, not the text "[url=X][/url]" that removing the image first would
-            // leave. MyBB shows a `data:` address instead of the link (`mycode_parse_url`).
-            foreach (['#\[url=((?!javascript)[a-z]+?://)([^\r\n"<]+?)\](.+?)\[/url\]#si' => [3, 1, 2],
-                '#\[url=((?!javascript:)[^\r\n"<&\(\)]+?)\](.+?)\[/url\]#si' => [2, 1, 1]] as $pattern => $parts) {
-                $text = self::replaceCallback($pattern, static function (array $m) use ($parts): string {
-                    $address = $parts[1] === $parts[2] ? $m[$parts[1]] : $m[$parts[1]] . $m[$parts[2]];
-                    return ' ' . (stripos($address, 'data:') === 0 ? $address : $m[$parts[0]]) . ' ';
-                }, $text);
-            }
-            // MyBB 1.8.41's own image patterns (`parse_mycode`): at most one line break before
-            // the address, nothing else; any other `[img]` stays on the page as typed.
+            // leave.
+            $text = self::linkLabels($text, ' ');
+            // MyBB 1.8.41's own image patterns ({@see IMAGE}); any other `[img]` stays on
+            // the page as typed.
             if ($images) {
-                $text = self::replace('#\[img(?:=[1-9][0-9]*x[1-9][0-9]*)?(?: align=(?:left|right))?\](?:\r\n?|\n?)https?://[^<>"\']+?\[/img\]#is', ' ', $text);
+                $text = self::replace(self::IMAGE, ' ', $text);
             }
             // MyBB's video pattern (no line breaks), and only a video it embeds goes; one it
             // leaves as typed stays text — and is kept as typed, not read again below.
@@ -604,6 +660,26 @@ final class Text
             if ($text === $before) {
                 break;
             }
+        }
+        return $text;
+    }
+
+    /**
+     * `[url=X]Y[/url]` as its reader sees it: the label Y alone — the address is not on the
+     * page (shared rule S1; it is counted in `links`, S2) — except where MyBB shows the
+     * address instead of a link (a `data:` address, `mycode_parse_url`).
+     *
+     * @param string $pad Around each label: '' for the text as read, ' ' where only whether
+     *     something shows matters ({@see shownMyCode}).
+     */
+    private static function linkLabels(string $text, string $pad = ''): string
+    {
+        foreach (['#\[url=((?!javascript)[a-z]+?://)([^\r\n"<]+?)\](.+?)\[/url\]#si' => [3, 1, 2],
+            '#\[url=((?!javascript:)[^\r\n"<&\(\)]+?)\](.+?)\[/url\]#si' => [2, 1, 1]] as $pattern => $parts) {
+            $text = self::replaceCallback($pattern, static function (array $m) use ($parts, $pad): string {
+                $address = $parts[1] === $parts[2] ? $m[$parts[1]] : $m[$parts[1]] . $m[$parts[2]];
+                return $pad . (stripos($address, 'data:') === 0 ? $address : $m[$parts[0]]) . $pad;
+            }, $text);
         }
         return $text;
     }

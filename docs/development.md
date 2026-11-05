@@ -168,9 +168,17 @@ The text readers SEE, following MyBB's own text renderer
   and the content of `<textarea>`, `<title>`, `<xmp>`, `<plaintext>`, `<iframe>`,
   `<noembed>`, `<noframes>` and `<noscript>` stays — as the live run shows
   (`reader-view.json`).
-- MyCode: `[quote=NAME]` → "NAME napisał(a):"; `[url=X]Y[/url]` → "Y (X)"; `[img]X[/img]`,
-  `[video=…]X[/video]` → X beside other text; `[code]`/`[php]` keep their content; formatting tags go; MyCode
-  MyBB would not parse stays literally.
+- MyCode: `[quote=NAME]` → "NAME napisał(a):"; `[url=X]Y[/url]` → "Y" alone (shared rule
+  S1: the reader does not see the address; it is counted in `links`, S2), except a `data:`
+  address, which MyBB shows instead of a link (`mycode_parse_url`); an image MyBB shows as
+  an image (`Text::IMAGE`, MyBB's own patterns, with the forum's image MyCode on) is left
+  out with its address (F7/S2); an `[img]` MyBB shows as a link (image MyCode off) or
+  leaves as typed, and `[video=…]X[/video]`, → X beside other text; `[code]`/`[php]` keep
+  their content; formatting tags go; MyCode MyBB would not parse stays literally. (A post
+  with a labelled link or an image sent by a version that still sent "Y (X)" or the
+  image's address, whose verdict comes after the upgrade, renders to another text than its
+  digest: on time it is held for a human as `text_changed`, late nothing is applied — the
+  safe direction.)
 - What heads the post goes in front, a blank line between the parts (`Text::ofPost`): a
   new thread's subject (always escaped, never parsed), then its poll — the question
   escaped like a subject, each option on its own line through the post rules above, as
@@ -201,8 +209,8 @@ The text readers SEE, following MyBB's own text renderer
   characters — U+200B, U+2060, U+FEFF, `&#173;`… —, `\p{Cc}` controls, `\p{M}` marks
   without a base such as U+034F or U+FE0F, the Hangul fillers and the blank Braille
   pattern). A bare address the reader sees is text (`https://…`, `[url]X[/url]`, an image
-  or video tag MyBB leaves as a link or as typed); beside other text, an image's address
-  and a hint are sent as before. The cases are MyBB 1.8.41's reader view as the live run
+  or video tag MyBB leaves as a link or as typed); beside other text, an HTML image's hint
+  (`alt`/`title`) is sent, an image's address never. The cases are MyBB 1.8.41's reader view as the live run
   recorded it (`reader-view.json`, checked by `ReaderViewTest`). The reading is linear (a
   link is replaced by its label, no recursion), and when PCRE gives up on it the body
   counts as text: in doubt, the post is sent. When what comes before the first `[`, `<`,
@@ -227,6 +235,10 @@ The text readers SEE, following MyBB's own text renderer
 - `meta`: `links` (distinct links), `link_domains` (up to 10 registrable domains — the last
   two host labels, or three under a two-label public suffix from a short list; an
   approximation of the Public Suffix List), `author_first_post` for registered authors.
+  Both are read from what is sent, as stored (`Text::sourceOf`), without the images MyBB
+  shows as images in the message and the poll's options — `[img]` with the image MyCode on
+  (outside `[code]`/`[php]`, which show it as written) and `<img>` with HTML on: an
+  image's address is not a link (S2). An `[img]` MyBB shows as a link counts.
 
 ## The row's life
 
@@ -392,6 +404,9 @@ for the rules recorded here so far (the others are described where the code is a
 
 | Rule | Here |
 |---|---|
+| F7 | No text to assess (an image, an embedded video, an attachment, a link without a label, `alt`/`title` notwithstanding; only invisible characters) → `no_text`, nothing sent; a bare address the reader sees and visible punctuation are text (`Text::shows`). |
+| S1 | `tekst` is what the reader sees (`Text::visible`): a labelled link is its label alone, an image MyBB shows as an image is left out with its address; an HTML forum's `alt`/`title` is sent next to the text. |
+| S2 | `links`, `link_domains`, `author_first_post`; never account data; an image's address is not a link (`Text::sourceOf` with the forum's options). |
 | A7 | `wsparcie`, whatever the verdict: a report in the ModCP's report centre (`Platform::reportForSupport`), the row on the ACP's support list; never a deletion, rejection or hiding. Also after a person's decision (a moderator's approval, deletion or edit, an author's edit: an older revision), with a note that the verdict came after it and the post left as the person left it; once per post and revision. |
 
 ## Tests
