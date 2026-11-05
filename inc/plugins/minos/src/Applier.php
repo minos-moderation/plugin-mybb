@@ -295,17 +295,21 @@ final class Applier
      * @param array{kwalifikacja:?string,wsparcie:bool} $payload The payload.
      * @param int                                       $rev     The revision it is about.
      * @param int                                       $now     Unix seconds.
+     * @return bool True when this delivery took the signal of its revision; false when it
+     *     carries none, or the signal was taken already — or cannot be yet, while another
+     *     step applies the same revision (`applying`), which the caller answers for.
      */
-    public function supportAfterDecision(array $row, array $payload, int $rev, int $now): void
+    public function supportAfterDecision(array $row, array $payload, int $rev, int $now): bool
     {
         if (!$payload['wsparcie']) {
-            return;
+            return false;
         }
         $pid = (int)$row['pid'];
         try {
-            if ($this->platform->claimSupportSignal($pid, $rev)) {
-                $this->report($pid, $payload, true, $now);
+            if (!$this->platform->claimSupportSignal($pid, $rev)) {
+                return false;
             }
+            $this->report($pid, $payload, true, $now);
         } catch (\Throwable $e) {
             try {
                 $this->platform->log('error', 'support', $pid, $now);
@@ -313,6 +317,7 @@ final class Applier
                 // The database refuses even this; the verdict was not to be applied anyway.
             }
         }
+        return true;
     }
 
     /**

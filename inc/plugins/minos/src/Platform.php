@@ -721,9 +721,10 @@ final class Platform
      * not apply because a person decided first (A7 of client-php's
      * `docs/plugin-behaviour.md`): one conditional `UPDATE`, so a repeated or concurrent
      * delivery raises it once. It marks the row `support` (the ACP's list, the ModCP's
-     * report cell) and `support_rev`; it takes nothing while a delivery of this same
-     * revision is being applied (`applying`), whose own signal comes with it, nor once the
-     * signal of this revision or a newer one was raised.
+     * report cell) and `support_rev`; it takes nothing while a step applies this same
+     * revision (`applying`) — the webhook then answers `503` and the redelivery meets that
+     * step's outcome ({@see Receiver::handle}) — nor once the signal of this revision or a
+     * newer one was raised.
      *
      * @param int $pid The post.
      * @param int $rev The revision the verdict is about.

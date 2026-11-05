@@ -43,6 +43,10 @@ use Minos\Client\WebhookPayload;
  *    first — a moderator approved, deleted or edited the post, or its author edited it
  *    since (an older revision) — still brings its `wsparcie` to the moderators, once per
  *    revision, and changes nothing else ({@see Applier::supportAfterDecision}, A7).
+ *    A delivery that finds its revision's row claimed by another step — the task timing it
+ *    out, a moderator's edit, another delivery — gets `503`: what that step decides is not
+ *    known yet, and the redelivery meets it (applies the verdict late or as on time, or
+ *    raises the signal after the decision).
  * 6. The answer is a bare `200`; the gateway discards its body. The work in step 5 is a
  *    few queries, well inside the gateway's 10 seconds.
  *
@@ -152,9 +156,25 @@ final class Receiver
             // Already applied (deliveries repeat), or a person decided first — approved,
             // deleted or edited the post: nothing of the verdict is applied, but its
             // `wsparcie` still reaches the moderators, once (A7).
-            $this->applier->supportAfterDecision($row, $payload, $rev, $now);
+            if (!$this->applier->supportAfterDecision($row, $payload, $rev, $now) && $this->inFlight($pid)) {
+                // Another step holds this revision's row (the task's timeout, a moderator's
+                // edit, another delivery): its outcome is not known yet, so this verdict
+                // is neither applied nor its signal raised. The gateway delivers again and
+                // the redelivery meets the outcome.
+                return 503;
+            }
         }
         return 200; // applied, or already handled
+    }
+
+    /**
+     * Whether a row is claimed (`applying`), read again: a step is still applying it, and
+     * a delivery cannot know its outcome yet.
+     */
+    private function inFlight(int $pid): bool
+    {
+        $row = $this->platform->pending($pid);
+        return $row !== null && $row['status'] === Status::APPLYING;
     }
 
     /**

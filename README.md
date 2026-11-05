@@ -251,7 +251,11 @@ publikacji bez oceny), albo autor poprawił post i werdykt dotyczy jego poprzedn
 Komentarz zgłoszenia mówi wtedy, że werdykt przyszedł po decyzji moderatora lub edycji
 postu. Reszty takiego werdyktu wtyczka nie stosuje: post zostaje widoczny, usunięty albo
 w kolejce — tak, jak zostawił go człowiek. Powtórzona dostawa tego samego werdyktu nie
-dodaje drugiego zgłoszenia, także gdy moderator zamknął już pierwsze.
+dodaje drugiego zgłoszenia, także gdy moderator zamknął już pierwsze. Gdy werdykt
+przychodzi akurat wtedy, gdy wtyczka zajmuje się tym postem w inny sposób (zadanie kończy
+jego czas oczekiwania, moderator go właśnie poprawia), webhook odpowiada `503`, a brama
+doręcza werdykt ponownie, gdy ten krok jest już zakończony — werdykt ani zgłoszenie nie
+przepadają.
 
 ## Powiadomienia subskrybentów
 

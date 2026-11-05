@@ -56,18 +56,101 @@ final class SupportTest extends PluginTestCase
 
     /**
      * A delivery that comes while another delivery of the same revision is being applied
-     * (the row claimed, `applying`) raises nothing itself: the one being applied brings the
-     * signal with its verdict.
+     * (the row claimed, `applying`) raises nothing itself and is not acknowledged: the
+     * gateway delivers it again, and the redelivery meets the outcome.
      */
-    public function testADeliveryBesideOneBeingAppliedRaisesNothing(): void
+    public function testADeliveryBesideOneBeingAppliedIsDeliveredAgain(): void
     {
         $pid = $this->heldReply('Dostarczony dwa razy naraz.');
         self::assertTrue($this->forum->platform()->claimPending($pid, TIME_NOW), 'the guard: the other delivery claimed it');
 
-        self::assertSame(200, $this->forum->deliver(self::support($pid)));
+        $code = $this->forum->deliver(self::support($pid));
 
+        self::assertGreaterThanOrEqual(500, $code, 'not acknowledged: the gateway delivers again');
         self::assertSame([], $this->forum->reports());
         self::assertSame(Status::APPLYING, $this->forum->row($pid)['status']);
+    }
+
+    /**
+     * A verdict with `wsparcie` that comes while the task times its post out (the row
+     * claimed by the task) is not acknowledged; delivered again after the task's step, it
+     * is applied as a late verdict — under fail-open and under fail-closed — and its signal
+     * reaches the moderators.
+     *
+     * @dataProvider failureModes
+     */
+    public function testASignalThatComesWhileTheTaskTimesThePostOutReachesTheModerators(string $mode, int $visible): void
+    {
+        $this->forum->set(['minos_failure_mode' => $mode]);
+        $pid = $this->heldReply('Czeka, a zadanie właśnie kończy czas oczekiwania.');
+        $this->forum->platform()->updatePending($pid, ['accepted_at' => TIME_NOW - 21 * 60]);
+        $forum = $this->forum;
+        $during = null;
+        $this->forum->db->beforeNextWrite("verdict='" . Status::REASON_TIMEOUT . "'",
+            static function () use ($forum, $pid, &$during): void {
+                $during = [$forum->row($pid)['status'], $forum->deliver(self::support($pid, ['kwalifikacja' => 'zablokowane'])),
+                    count($forum->reports())];
+            });
+
+        $this->forum->plugin->task->run(TIME_NOW);
+
+        self::assertNotNull($during, 'the guard: the delivery came during the task\'s step');
+        self::assertSame(Status::APPLYING, $during[0], 'the guard: the task held the row');
+        self::assertGreaterThanOrEqual(500, $during[1], 'not acknowledged while the task applied the row');
+        self::assertSame(0, $during[2]);
+        self::assertSame(Status::REASON_TIMEOUT, $this->forum->row($pid)['verdict'], 'the task\'s step was applied');
+
+        self::assertSame(200, $this->forum->deliver(self::support($pid, ['kwalifikacja' => 'zablokowane'])));
+
+        $reports = $this->forum->reports();
+        self::assertSame([$pid], array_map('intval', array_column($reports, 'id')));
+        self::assertSame($this->forum->platform()->lang('minos_support_report', 'zablokowane'), $reports[0]['reason'],
+            'the verdict was applied, late');
+        self::assertSame([$visible, 'zablokowane'], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['verdict']]);
+        self::assertSame(200, $this->forum->deliver(self::support($pid, ['kwalifikacja' => 'zablokowane'])));
+        self::assertCount(1, $this->forum->reports(), 'once');
+    }
+
+    /**
+     * @return array<string,array{0:string,1:int}> The failure mode, and the post's
+     *     visibility after the late `zablokowane` with `wsparcie` (never hidden: D9.9).
+     */
+    public function failureModes(): array
+    {
+        return ['fail-open' => ['fail-open', 1], 'fail-closed' => ['fail-closed', 0]];
+    }
+
+    /**
+     * A verdict with `wsparcie` that comes while a moderator's edit holds the row is not
+     * acknowledged; delivered again after the edit, it raises the report with the note that
+     * the verdict came after the moderator's decision, and changes nothing else.
+     */
+    public function testASignalThatComesDuringAModeratorsEditReachesTheModerators(): void
+    {
+        $pid = $this->heldReply('Moderator właśnie poprawia ten post.');
+        $GLOBALS['minos_test']['moderators'] = [self::UID];
+        $forum = $this->forum;
+        $during = null;
+        $this->forum->db->beforeNextWrite("verdict='" . Status::REASON_EDITED . "'",
+            static function () use ($forum, $pid, &$during): void {
+                $during = [$forum->row($pid)['status'], $forum->deliver(self::support($pid)), count($forum->reports())];
+            });
+
+        $this->forum->edit($pid, 'Wersja moderatora.');
+
+        self::assertNotNull($during, 'the guard: the delivery came during the edit');
+        self::assertSame(Status::APPLYING, $during[0], 'the guard: the edit held the row');
+        self::assertGreaterThanOrEqual(500, $during[1], 'not acknowledged while the edit applied the row');
+        self::assertSame(0, $during[2]);
+        self::assertSame(Status::SUPERSEDED, $this->forum->row($pid)['status'], 'the edit was applied');
+
+        self::assertSame(200, $this->forum->deliver(self::support($pid)));
+
+        $reports = $this->forum->reports();
+        self::assertSame([$pid], array_map('intval', array_column($reports, 'id')));
+        self::assertSame($this->forum->platform()->lang('minos_support_report_after_decision', 'bezpieczne'), $reports[0]['reason']);
+        self::assertSame([0, Status::SUPERSEDED], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
+        self::assertSame([], self::moderation(), 'the moderator\'s decision stands');
     }
 
     /**

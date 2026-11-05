@@ -134,8 +134,12 @@ verdict and gets the same comment (`Applier::signalSupport`). Once per post and 
 `Platform::claimSupportSignal` is one conditional `UPDATE` that sets `support` (the ACP's
 list, the report list's "last report" cell) and `support_rev` (one more than the newest
 revision signalled), and takes nothing once that revision or a newer one was signalled, nor
-while a delivery of the same revision is being applied (`applying`), whose own signal comes
-with it; a normal signal records `support_rev` too. A repeated delivery therefore adds no
+while a step applies the same revision (`applying`); a normal signal records `support_rev`
+too. A delivery that finds the row `applying` and takes no signal — the task timing the post
+out, a moderator's edit or another delivery holds it — answers `503`: that step's outcome is
+not known yet, and the gateway's redelivery meets it (the verdict applied late or as on
+time, or the signal raised after the decision); a `200` there would lose the verdict and its
+`wsparcie` for good. A repeated delivery therefore adds no
 second report even after a moderator closed the first. `support` is only ever set — neither
 the next revision's verdict nor `Platform::revise` clears it. Activation of an upgraded
 table sets `support_rev` for rows an earlier version already reported. Verified on a live
@@ -293,7 +297,9 @@ applying for more than 5 min ─► back to claimed_from (the task)
   an `auto_published` `published`) to `applying` with a conditional `UPDATE`, recording
   `claimed_from` and `claimed_at`; only the caller that changed it applies anything.
   Repeated and concurrent deliveries, and the task beside the webhook, apply nothing twice.
-  The task gives back claims older than 5 minutes (their holder died).
+  A delivery that meets a row another step has claimed answers `503`, so the gateway
+  delivers it again after that step. The task gives back claims older than 5 minutes
+  (their holder died).
 - The receive timeout is at least 20 minutes (the gateway's 15-minute TTL plus grace). A
   post the failure mode published (`fail-open`) is marked `auto_published`; a verdict that
   still arrives is applied by `Applier::late` while the post is public and untouched

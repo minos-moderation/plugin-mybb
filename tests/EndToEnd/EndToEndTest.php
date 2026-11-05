@@ -107,11 +107,13 @@ final class EndToEndTest extends TestCase
                 // replaces the first; a moderator approves the second after its timeout.
                 'replaced' => [false, 'Pierwsza prośba [minos:blokuj] [minos:wsparcie] [minos:dwa-razy]'],
                 'approved' => [false, 'Zatwierdzony [minos:blokuj] [minos:wsparcie] [minos:dwa-razy]'],
+                // Its verdict comes while the task holds the row for its timeout.
+                'inflight' => [false, 'W trakcie [minos:blokuj] [minos:wsparcie]'],
             ],
         ])), true);
         self::assertStringStartsWith(realpath($forumRoot), (string)$posted['plugin'], 'the posting side ran the staged plugin');
         $pids = array_map('intval', (array)$posted['pids']);
-        self::assertCount(11, $pids);
+        self::assertCount(12, $pids);
 
         $forum = Forum::create($database);
         foreach ($pids as $name => $pid) {
@@ -134,12 +136,28 @@ final class EndToEndTest extends TestCase
         $forum->db->update_query('posts', ['visible' => 1], "pid='" . $pids['approved'] . "'");
         self::assertSame([Status::PENDING, '1'], [$forum->row($pids['edited'])['status'], (string)$forum->row($pids['edited'])['rev']],
             'revision 1 accepted (202)');
+        // The task claims `inflight` to time it out, as its run does first, when the mock
+        // delivers its verdict.
+        self::assertTrue($forum->platform()->claimPending($pids['inflight'], time()));
 
         // Two passes: `[minos:dwa-razy]` is delivered again on the second.
         $first = $this->runCommand([PHP_BINARY, self::MOCK . '/bin/worker.php', '--once'], $mockEnv);
         $second = $this->runCommand([PHP_BINARY, self::MOCK . '/bin/worker.php', '--once'], $mockEnv);
         self::assertStringContainsString('mybb:' . $pids['forged'] . ' ponowienie 401', $first, 'a forged delivery is refused');
         self::assertMatchesRegularExpression('/mybb:' . $pids['twice'] . ' dostarczony 200/', $second, 'the repeat reached the webhook');
+        // While the task holds `inflight`, its verdict is not acknowledged. The task's step
+        // then holds it (fail-closed, `timeout`), and the redelivery — after the mock's
+        // backoff — is applied as on time, with its signal.
+        self::assertStringContainsString('mybb:' . $pids['inflight'] . ' ponowienie 503', $first, 'not acknowledged while claimed');
+        self::assertNotContains($pids['inflight'], array_map('intval', array_column($forum->reports(), 'id')), 'nothing raised while claimed');
+        $forum->platform()->updatePending($pids['inflight'],
+            ['status' => Status::HELD, 'verdict' => Status::REASON_TIMEOUT, 'decided_at' => time()]);
+        $redelivered = $second;
+        for ($pass = 0; $pass < 40 && !preg_match('/mybb:' . $pids['inflight'] . ' dostarczony 200/', $redelivered); $pass++) {
+            usleep(150000);
+            $redelivered .= $this->runCommand([PHP_BINARY, self::MOCK . '/bin/worker.php', '--once'], $mockEnv);
+        }
+        self::assertMatchesRegularExpression('/mybb:' . $pids['inflight'] . ' dostarczony 200/', $redelivered, 'delivered again');
 
         $state = function (string $name) use ($forum, $pids): array {
             $row = $forum->row($pids[$name]);
@@ -168,13 +186,15 @@ final class EndToEndTest extends TestCase
         }
         self::assertSame([1, Status::PUBLISHED, 'bezpieczne'], $state('replaced'), 'as the verdict on its new text left it');
         self::assertSame([1, Status::HELD, Status::REASON_TIMEOUT], $state('approved'), 'as the moderator left it');
+        self::assertSame([0, Status::HELD, 'zablokowane'], $state('inflight'), 'the redelivery applied the verdict');
         $reports = [];
         foreach ($forum->reports() as $report) {
             $reports[(int)$report['id']][] = $report['reason'];
         }
         $note = $forum->platform()->lang('minos_support_report_after_decision', 'zablokowane');
-        self::assertSame([$pids['support'], $pids['replaced'], $pids['approved']], array_keys($reports));
+        self::assertSame([$pids['support'], $pids['replaced'], $pids['approved'], $pids['inflight']], array_keys($reports));
         self::assertSame([[$note], [$note]], [$reports[$pids['replaced']], $reports[$pids['approved']]]);
+        self::assertSame([$forum->platform()->lang('minos_support_report', 'zablokowane')], $reports[$pids['inflight']]);
     }
 
     /**
