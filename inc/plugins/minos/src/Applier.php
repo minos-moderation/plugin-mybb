@@ -104,7 +104,7 @@ final class Applier
      */
     private function onTime(array $row, array $payload, Settings $settings, int $now): string
     {
-        $record = self::record($payload) + self::answered($payload, $now);
+        $record = self::record($row, $payload) + self::answered($payload, $now);
         if ($payload['status'] !== WebhookPayload::ASSESSED || $payload['kwalifikacja'] === null) {
             return $this->failure($row, 'nieocenione', $settings, $now, $record);
         }
@@ -201,8 +201,15 @@ final class Applier
      */
     public function late(array $row, array $payload, Settings $settings, int $now): string
     {
+        // A post published unassessed may be claimed again by a repeat of the verdict that
+        // left it so (`bezpieczne` on a cut text keeps `auto_published`): the claimed row
+        // tells whether this revision's signal was raised already.
+        $claimed = $this->platform->pending((int)$row['pid']);
+        $signalled = $claimed !== null && (int)$claimed['support_rev'] > (int)$row['rev'];
         $status = $this->afterPublication($row, $payload, $settings, $now);
-        $this->signalSupport($row, $payload, $status, $now);
+        if (!$signalled) {
+            $this->signalSupport($row, $payload, $status, $now);
+        }
         return $status;
     }
 
@@ -216,7 +223,8 @@ final class Applier
     {
         $pid = (int)$row['pid'];
         $qualification = $payload['status'] === WebhookPayload::ASSESSED ? $payload['kwalifikacja'] : null;
-        $answered = self::answered($payload, $now);
+        // Every outcome below records the revision's signal in the same write as its status.
+        $answered = self::answered($payload, $now) + self::signalMark($row, $payload);
         $post = $this->platform->post($pid);
         $status = self::untouchable($post, 1);
         if ($status !== null) {
@@ -234,7 +242,7 @@ final class Applier
             return Status::PUBLISHED;
         }
 
-        $record = self::record($payload) + $answered + ['auto_published' => 0, 'decided_at' => $now];
+        $record = self::record($row, $payload) + $answered + ['auto_published' => 0, 'decided_at' => $now];
         if ($qualification === 'bezpieczne') {
             $status = Status::PUBLISHED;
         } elseif ($qualification === 'ocenzurowane' && $this->censor($row, $post, $payload['ocenzurowany'], $sent, $settings)) {
@@ -257,8 +265,9 @@ final class Applier
      * in the ModCP's report centre ({@see Platform::reportForSupport}), which MyBB also
      * announces to them at the top of every page. Never a message to the author. Raised once
      * per applied delivery while the post exists; a report still open for the post is not
-     * doubled, and the row remembers the revision ({@see Platform::claimSupportSignal}), so
-     * a repeated delivery raises nothing. A post a moderator dealt with before the verdict
+     * doubled, and the row remembers the revision in the same write that records the
+     * outcome ({@see signalMark}), so a repeated delivery raises nothing — not even one that
+     * comes before this report is written ({@see Platform::claimSupportSignal}). A post a moderator dealt with before the verdict
      * came (`superseded`) gets the note that the verdict came after that decision. One that
      * fails is logged (`error`/`support`, the post id) and changes nothing of the verdict.
      *
@@ -272,7 +281,6 @@ final class Applier
             return;
         }
         try {
-            $this->platform->updatePending((int)$row['pid'], ['support_rev' => (int)$row['rev'] + 1]);
             $this->report((int)$row['pid'], $payload, $status === Status::SUPERSEDED, $now);
         } catch (\Throwable $e) {
             $this->platform->log('error', 'support', (int)$row['pid'], $now);
@@ -375,18 +383,35 @@ final class Applier
     /**
      * The columns a payload fills.
      *
+     * @param array<string,mixed> $row The claimed row.
      * @param array{status:string,kwalifikacja:?string,kategorie:array<int,string>,wsparcie:bool} $payload
      * @return array<string,int|string>
      */
-    private static function record(array $payload): array
+    private static function record(array $row, array $payload): array
     {
         $qualification = $payload['status'] === WebhookPayload::ASSESSED ? $payload['kwalifikacja'] : null;
-        // `support` is only ever set: a mark an earlier revision's verdict left
-        // ({@see supportAfterDecision}) stays with the post.
         return [
             'verdict'    => $qualification ?? 'nieocenione',
             'categories' => substr(implode(',', $payload['kategorie']), 0, 255),
-        ] + ($payload['wsparcie'] ? ['support' => 1] : []);
+        ] + self::signalMark($row, $payload);
+    }
+
+    /**
+     * The columns of a payload's `wsparcie`, written with the outcome's status in ONE
+     * `UPDATE`: `support` (the ACP's list) and `support_rev`, the revision signalled. A
+     * repeated delivery that comes after the outcome is recorded finds the revision
+     * signalled and raises nothing ({@see Platform::claimSupportSignal}); one that came
+     * between two writes would raise the report a second time, as after a decision.
+     * `support` is only ever set: a mark an earlier revision's verdict left
+     * ({@see supportAfterDecision}) stays with the post.
+     *
+     * @param array<string,mixed>  $row     The claimed row.
+     * @param array{wsparcie:bool} $payload
+     * @return array<string,int>
+     */
+    private static function signalMark(array $row, array $payload): array
+    {
+        return $payload['wsparcie'] ? ['support' => 1, 'support_rev' => (int)$row['rev'] + 1] : [];
     }
 
     /**

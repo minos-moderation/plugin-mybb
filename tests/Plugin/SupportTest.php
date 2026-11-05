@@ -72,6 +72,78 @@ final class SupportTest extends PluginTestCase
     }
 
     /**
+     * A repeated delivery that comes at any moment after the verdict's outcome is recorded —
+     * here before the very next write of the delivery that applies it — raises nothing:
+     * the outcome and the revision's signal are one write. The one report says the verdict
+     * was applied, not that it came after a decision. On time, and late on a post the
+     * failure mode published whose text changed past the edit hook (nothing applied).
+     *
+     * @dataProvider outcomes
+     */
+    public function testARepeatRightAfterTheOutcomeIsRecordedRaisesNothingMore(string $case): void
+    {
+        if ($case === 'late') {
+            $this->forum->set(['minos_failure_mode' => 'fail-open']);
+            $pid = $this->autoPublished('Powtórka tuż po zapisaniu późnego werdyktu.');
+            $this->forum->db->update_query('posts', ['message' => 'Zmieniony obok edycji.'], "pid='" . $pid . "'");
+        } else {
+            $pid = $this->heldReply('Powtórka tuż po zapisaniu werdyktu.');
+        }
+        $forum = $this->forum;
+        $claimed = false;
+        $repeat = null;
+        $watch = static function () use (&$watch, $forum, $pid, &$claimed, &$repeat): void {
+            if ($forum->row($pid)['status'] === Status::APPLYING) {
+                $claimed = true;
+            } elseif ($claimed) {
+                $repeat = $forum->deliver(self::support($pid)); // the first write after the outcome
+                return;
+            }
+            $forum->db->beforeNextWrite('mybb_', $watch);
+        };
+        $this->forum->db->beforeNextWrite('mybb_', $watch);
+
+        self::assertSame(200, $this->forum->deliver(self::support($pid)));
+
+        self::assertSame(200, $repeat, 'the guard: the repeat came after the outcome, and was acknowledged');
+        self::assertSame([1, Status::PUBLISHED, '1'], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status'],
+            (string)$this->forum->row($pid)['support_rev']]);
+        $reports = $this->forum->reports();
+        self::assertSame([$pid], array_map('intval', array_column($reports, 'id')));
+        self::assertSame($this->forum->platform()->lang('minos_support_report', 'bezpieczne'), $reports[0]['reason'],
+            'the verdict was applied: no note of a decision');
+    }
+
+    /**
+     * A post the failure mode published stays open to a late verdict after a `bezpieczne`
+     * on its cut text (still unassessed as a whole): a repeat of that verdict is claimed
+     * again, and raises nothing more, even after a moderator closed the report.
+     */
+    public function testARepeatedLateVerdictOnACutTextRaisesTheSignalOnce(): void
+    {
+        $this->forum->set(['minos_failure_mode' => 'fail-open']);
+        $pid = $this->autoPublished(str_repeat('a', 3000) . ' dalej niż wysłany początek');
+        self::assertSame('1', (string)$this->forum->row($pid)['truncated'], 'the guard: its text was cut');
+
+        self::assertSame(200, $this->forum->deliver(self::support($pid)));
+        $this->forum->db->update_query('reportedcontent', ['reportstatus' => 1], "id='" . $pid . "'");
+        self::assertSame(['1', '1'], [(string)$this->forum->row($pid)['auto_published'], (string)$this->forum->row($pid)['support_rev']],
+            'the guard: still open to a late verdict, its signal recorded');
+        self::assertSame(200, $this->forum->deliver(self::support($pid)));
+
+        self::assertSame([$pid], array_map('intval', array_column($this->forum->reports(), 'id')));
+        self::assertSame([1, Status::PUBLISHED], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
+    }
+
+    /**
+     * @return array<string,array{0:string}>
+     */
+    public function outcomes(): array
+    {
+        return ['on time' => ['on time'], 'late, text changed' => ['late']];
+    }
+
+    /**
      * A verdict with `wsparcie` that comes while the task times its post out (the row
      * claimed by the task) is not acknowledged; delivered again after the task's step, it
      * is applied as a late verdict — under fail-open and under fail-closed — and its signal

@@ -135,7 +135,10 @@ verdict and gets the same comment (`Applier::signalSupport`). Once per post and 
 list, the report list's "last report" cell) and `support_rev` (one more than the newest
 revision signalled), and takes nothing once that revision or a newer one was signalled, nor
 while a step applies the same revision (`applying`); a normal signal records `support_rev`
-too. A delivery that finds the row `applying` and takes no signal — the task timing the post
+too, in the same `UPDATE` as the verdict's outcome (`Applier::signalMark`), so a repeat
+that comes before the report is written raises no second one with the note, and a repeat
+the late path claims again (a cut text's `bezpieczne` keeps `auto_published`) finds the
+revision signalled. A delivery that finds the row `applying` and takes no signal — the task timing the post
 out, a moderator's edit or another delivery holds it — answers `503`: that step's outcome is
 not known yet, and the gateway's redelivery meets it (the verdict applied late or as on
 time, or the signal raised after the decision); a `200` there would lose the verdict and its
