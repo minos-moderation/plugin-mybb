@@ -88,7 +88,12 @@ again, and a moderator's approval in the ModCP is MyBB's own (nothing sent). Not
 `datahandler_post_insert_subscribed` hook, which passes a post datahandler the plugin does
 not have. A notification that throws is logged as `error`/`notify` with the post id; the
 post stays published. The copied block needs upkeep with every 1.8.x; the live run
-compares the counts with a post visible at once (`k31_notifications`).
+compares the counts with a post visible at once (`k31_notifications`). Known limitation:
+the notifications of a post a verdict publishes are built inside the webhook's request
+(one mail-queue row or one PM per recipient), so on a thread or forum with many
+subscribers the answer to the gateway takes longer — against the receiving checklist's
+"answer 2xx fast", well inside the gateway's 10 seconds for an ordinary board, but not
+bounded by the plugin. Not changed in this version.
 
 **`wsparcie`** (shared rule D9.9, A7). Whatever the verdict, an applied delivery with
 `wsparcie` adds a report to MyBB's report centre (`Platform::reportForSupport`): the
@@ -397,17 +402,20 @@ secret. Log entries are kept 30 days; decided rows — with the verdict, the ori
 of a censored post and the mask of a held one — 30 days after their decision (shared rule
 D9.11, `Task::DECIDED_RETENTION_S`).
 
-## Shared rules: compliance
+## The shared rules
 
-How this plugin meets the shared plugin rules of client-php's `docs/plugin-behaviour.md`,
-for the rules recorded here so far (the others are described where the code is above).
+The rules every Minos plugin shares are client-php's `docs/plugin-behaviour.md`; the
+entries above say how this plugin carries them out. This table names, for the rules whose
+form differs between the plugins, this plugin's mechanism, a deviation, or an optional rule
+left out.
 
-| Rule | Here |
-|---|---|
-| F7 | No text to assess (an image, an embedded video, an attachment, a link without a label, `alt`/`title` notwithstanding; only invisible characters) → `no_text`, nothing sent; a bare address the reader sees and visible punctuation are text (`Text::shows`). |
-| S1 | `tekst` is what the reader sees (`Text::visible`): a labelled link is its label alone, an image MyBB shows as an image is left out with its address; an HTML forum's `alt`/`title` is sent next to the text. |
-| S2 | `links`, `link_domains`, `author_first_post`; never account data; an image's address is not a link (`Text::sourceOf` with the forum's options). |
-| A7 | `wsparcie`, whatever the verdict: a report in the ModCP's report centre (`Platform::reportForSupport`), the row on the ACP's support list; never a deletion, rejection or hiding. Also after a person's decision (a moderator's approval, deletion or edit, an author's edit: an older revision), with a note that the verdict came after it and the post left as the person left it; once per post and revision. |
+| Id | In short | MyBB: mechanism, or deviation |
+|---|---|---|
+| `F5d` | optional: re-send what fail-open published unassessed once the limit renews | not implemented: the rule is optional and off by default (nie wdrożono, reguła opcjonalna); not a deviation |
+| `F7` | no text to assess → the failure mode; a bare address and visible punctuation are text | `Text::shows`: an image MyBB shows as an image, an embedded video, an attachment, a link without a label (`alt`/`title` notwithstanding) or only invisible characters → `no_text`, nothing sent. An emoticon (`:)`) is text: MyBB shows its smilie image, but the characters the author typed are sent and assessed; `NoTextTest` |
+| `F7`, `S2` | an image's address is not text and not a link | `[img]` MyBB shows as an image (its image MyCode on) and `<img>` on an HTML forum add no text (`Text::visible`) and no link (`Text::sourceOf` with the forum's options); an `[img]` MyBB shows as a link (image MyCode off) or leaves as typed is text and a link; `LinksAndImagesTest` |
+| `S1` | `tekst` is what the reader sees; never an `href` | `[url=X]Y[/url]` is sent as `Y` alone (a `data:` address, which MyBB shows instead of a link, as the address); an HTML forum's `alt`/`title` next to the text; `LinksAndImagesTest`, `TextTest` |
+| `A7` | `wsparcie`: an active signal in the moderators' queue, whatever the verdict | a report in the ModCP's report centre (`Platform::reportForSupport`), the row on the ACP's support list; never deleted, rejected or hidden automatically. Also after a person's decision (a moderator's approval, deletion or edit, an author's edit: an older revision), with a note saying so and the post left as the person left it; once per post and revision; `SupportTest`, `EndToEndTest`, live `a7_support_after_decision` |
 
 ## Tests
 

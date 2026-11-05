@@ -405,6 +405,16 @@ numer postu — nigdy treść błędu.
 - Powiadomienia subskrybentów o poście zatwierdzonym przez moderatora z kolejki MyBB
   wysyła MyBB — czyli żadne (tak działa MyBB przy każdej ręcznej moderacji); wtyczka wysyła
   je tylko dla postów, które sama publikuje (niżej, „Powiadomienia subskrybentów”).
+- Powiadomienia subskrybentów o poście, który wtyczka publikuje po werdykcie, są
+  przygotowywane w trakcie odpowiedzi na webhook bramy (po jednym wpisie w kolejce poczty
+  albo jednej prywatnej wiadomości na odbiorcę). Przy wątku albo dziale z bardzo wieloma
+  subskrybentami odpowiedź dla bramy trwa przez to dłużej.
+- Emotikona (np. `:)`) jest tekstem: MyBB pokazuje ją jako obrazek, ale wtyczka wysyła do
+  oceny znaki wpisane przez autora — post z samą emotikoną jest oceniany, a nie trafia
+  w tryb awaryjny.
+- Opcjonalna reguła ponownego wysłania postów opublikowanych bez oceny po odnowieniu limitu
+  bramy (F5d) nie jest wdrożona (reguła jest opcjonalna): taki post zostaje opublikowany bez
+  oceny — widać go na liście w dzienniku wtyczki — i nie jest wysyłany ponownie.
 - Zgłoszenie z sygnałem „wsparcie” widać w panelu moderatora (Zgłoszona zawartość) i w
   powiadomieniu MyBB o nieprzeczytanych zgłoszeniach; wtyczka nie wysyła go moderatorom
   e-mailem ani prywatną wiadomością, nawet gdy forum tak ustawiło powiadamianie
