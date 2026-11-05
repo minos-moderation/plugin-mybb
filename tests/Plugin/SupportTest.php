@@ -457,6 +457,58 @@ final class SupportTest extends PluginTestCase
     }
 
     /**
+     * A report after a person's decision that cannot be written (the report centre refuses
+     * the insert) is logged by step and post id, and not acknowledged: the redelivery
+     * raises it, once. After a moderator's approval of a post held for its timeout, and on
+     * a revision its author has replaced.
+     *
+     * @dataProvider decisions
+     */
+    public function testAReportAfterADecisionThatFailsIsRaisedByTheRedelivery(string $decision): void
+    {
+        $pid = $this->heldReply('Zgłoszenie po decyzji, które się nie zapisuje.');
+        $payload = self::support($pid, ['kwalifikacja' => 'zablokowane']);
+        if ($decision === 'approved') {
+            $this->forum->platform()->updatePending($pid, ['accepted_at' => TIME_NOW - 21 * 60]);
+            task_minos(['tid' => 1]);
+            (new \Moderation())->approve_posts([$pid]); // the ModCP's queue
+        } else {
+            $this->forum->edit($pid, 'Druga wersja, inna.');
+            task_minos(['tid' => 1]);
+            self::assertSame('1', (string)$this->forum->row($pid)['rev'], 'the guard: a new revision');
+        }
+        $this->forum->pdo->exec('CREATE TRIGGER minos_test_no_report BEFORE INSERT ON mybb_reportedcontent'
+            . " BEGIN SELECT RAISE(ABORT, '" . \Moderation::SECRET_TEXT . "'); END");
+
+        $code = $this->forum->deliver($payload);
+
+        self::assertGreaterThanOrEqual(500, $code, 'not acknowledged: the gateway delivers again');
+        self::assertSame([], $this->forum->reports());
+        self::assertSame([['support', $pid]], array_map(static function (array $entry): array {
+            return [$entry['code'], (int)$entry['pid']];
+        }, array_values(array_filter($this->logEntries(), static function (array $entry): bool {
+            return $entry['event'] === 'error';
+        }))));
+        self::assertStringNotContainsString(\Moderation::SECRET_TEXT, (string)json_encode($this->logEntries()));
+
+        $this->forum->pdo->exec('DROP TRIGGER minos_test_no_report');
+        self::assertSame(200, $this->forum->deliver($payload));
+        self::assertSame(200, $this->forum->deliver($payload), 'a repeat');
+
+        $reports = $this->forum->reports();
+        self::assertSame([$pid], array_map('intval', array_column($reports, 'id')));
+        self::assertSame($this->forum->platform()->lang('minos_support_report_after_decision', 'zablokowane'), $reports[0]['reason']);
+    }
+
+    /**
+     * @return array<string,array{0:string}>
+     */
+    public function decisions(): array
+    {
+        return ['a moderator approved it' => ['approved'], 'its author edited it' => ['edited']];
+    }
+
+    /**
      * A7 while the post waited for its verdict: a moderator approved it, soft-deleted it or
      * edited it in the queue before the verdict came. Each gets the report noting the
      * decision; each stays visible, deleted or held as the moderator left it.

@@ -138,12 +138,15 @@ while a step applies the same revision (`applying`); a normal signal records `su
 too, in the same `UPDATE` as the verdict's outcome (`Applier::signalMark`), so a repeat
 that comes before the report is written raises no second one with the note, and a repeat
 the late path claims again (a cut text's `bezpieczne` keeps `auto_published`) finds the
-revision signalled. A delivery that finds the row `applying` and takes no signal — the task timing the post
-out, a moderator's edit or another delivery holds it — answers `503`: that step's outcome is
-not known yet, and the gateway's redelivery meets it (the verdict applied late or as on
-time, or the signal raised after the decision); a `200` there would lose the verdict and its
-`wsparcie` for good. A repeated delivery therefore adds no
-second report even after a moderator closed the first. `support` is only ever set — neither
+revision signalled. A repeated delivery therefore adds no second report even after a
+moderator closed the first. A delivery that finds the row `applying` and takes no signal —
+the task timing the post out, a moderator's edit or another delivery holds it — answers
+`503`: that step's outcome is not known yet, and the gateway's redelivery meets it (the
+verdict applied late or as on time, or the signal raised after the decision); a `200` there
+would lose the verdict and its `wsparcie` for good. A report after a decision that cannot
+be written is logged as `error`/`support`, its claim is given back
+(`Platform::releaseSupportSignal`, `support` stays set) and the webhook answers `500`, so the
+redelivery raises it. `support` is only ever set — neither
 the next revision's verdict nor `Platform::revise` clears it. Activation of an upgraded
 table sets `support_rev` for rows an earlier version already reported. Verified on a live
 forum: `a7_support_after_decision`, and end to end (`EndToEndTest`: an author's edit and a

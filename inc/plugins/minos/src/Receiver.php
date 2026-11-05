@@ -43,6 +43,8 @@ use Minos\Client\WebhookPayload;
  *    first — a moderator approved, deleted or edited the post, or its author edited it
  *    since (an older revision) — still brings its `wsparcie` to the moderators, once per
  *    revision, and changes nothing else ({@see Applier::supportAfterDecision}, A7).
+ *    When that report cannot be written, the signal's claim is given back and the answer
+ *    is `500`, so the redelivery raises it.
  *    A delivery that finds its revision's row claimed by another step — the task timing it
  *    out, a moderator's edit, another delivery — gets `503`: what that step decides is not
  *    known yet, and the redelivery meets it (applies the verdict late or as on time, or
@@ -122,7 +124,11 @@ final class Receiver
             // A revision an author's edit has since replaced: not applied, but its `wsparcie`
             // still reaches the moderators (A7).
             if ($rev < (int)$row['rev']) {
-                $this->applier->supportAfterDecision($row, $payload, $rev, $now);
+                try {
+                    $this->applier->supportAfterDecision($row, $payload, $rev, $now);
+                } catch (\Throwable $e) {
+                    return 500; // the signal's claim was given back: the gateway delivers again
+                }
             }
             return 200;
         }
@@ -156,7 +162,12 @@ final class Receiver
             // Already applied (deliveries repeat), or a person decided first — approved,
             // deleted or edited the post: nothing of the verdict is applied, but its
             // `wsparcie` still reaches the moderators, once (A7).
-            if (!$this->applier->supportAfterDecision($row, $payload, $rev, $now) && $this->inFlight($pid)) {
+            try {
+                $raised = $this->applier->supportAfterDecision($row, $payload, $rev, $now);
+            } catch (\Throwable $e) {
+                return 500; // the signal's claim was given back: the gateway delivers again
+            }
+            if (!$raised && $this->inFlight($pid)) {
                 // Another step holds this revision's row (the task's timeout, a moderator's
                 // edit, another delivery): its outcome is not known yet, so this verdict
                 // is neither applied nor its signal raised. The gateway delivers again and

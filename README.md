@@ -255,7 +255,8 @@ dodaje drugiego zgłoszenia, także gdy moderator zamknął już pierwsze. Gdy w
 przychodzi akurat wtedy, gdy wtyczka zajmuje się tym postem w inny sposób (zadanie kończy
 jego czas oczekiwania, moderator go właśnie poprawia), webhook odpowiada `503`, a brama
 doręcza werdykt ponownie, gdy ten krok jest już zakończony — werdykt ani zgłoszenie nie
-przepadają.
+przepadają. Tak samo, gdy zgłoszenia po decyzji człowieka nie udało się zapisać: webhook
+odpowiada `500`, a ponowiona dostawa je dodaje.
 
 ## Powiadomienia subskrybentów
 

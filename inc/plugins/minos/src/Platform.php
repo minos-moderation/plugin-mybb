@@ -739,6 +739,22 @@ final class Platform
     }
 
     /**
+     * Gives back the `wsparcie` signal {@see claimSupportSignal} took, when its report could
+     * not be written: one conditional `UPDATE`, while the row still names this revision as
+     * the newest signalled, back to what it named before. `support` stays set — the ACP's
+     * list still shows the post — and the redelivery takes the signal again.
+     *
+     * @param int $pid      The post.
+     * @param int $rev      The revision whose signal was taken.
+     * @param int $previous `support_rev` before the claim.
+     */
+    public function releaseSupportSignal(int $pid, int $rev, int $previous): void
+    {
+        $this->db->update_query(self::PENDING_TABLE, ['support_rev' => min($previous, $rev)],
+            "pid='" . $pid . "' AND support_rev='" . ($rev + 1) . "'");
+    }
+
+    /**
      * Gives back claims older than a moment: the process that took them died between the
      * claim and the outcome. The row returns to the status it was claimed from.
      *

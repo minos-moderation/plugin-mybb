@@ -297,7 +297,9 @@ final class Applier
      * post stays visible or held as the person left it. Once per post and revision
      * ({@see Platform::claimSupportSignal}): a repeated delivery raises nothing, and neither
      * does a delivery without `wsparcie`. One that fails is logged (`error`/`support`, the
-     * post id), as in {@see signalSupport}.
+     * post id, never the error's message), its claim is given back
+     * ({@see Platform::releaseSupportSignal}) and the error goes to the caller, which
+     * answers so that the gateway delivers again: nothing else would raise this signal.
      *
      * @param array<string,mixed>                       $row     The post's row, as read.
      * @param array{kwalifikacja:?string,wsparcie:bool} $payload The payload.
@@ -306,6 +308,7 @@ final class Applier
      * @return bool True when this delivery took the signal of its revision; false when it
      *     carries none, or the signal was taken already — or cannot be yet, while another
      *     step applies the same revision (`applying`), which the caller answers for.
+     * @throws \Throwable When the signal could not be raised: the claim was given back.
      */
     public function supportAfterDecision(array $row, array $payload, int $rev, int $now): bool
     {
@@ -313,19 +316,24 @@ final class Applier
             return false;
         }
         $pid = (int)$row['pid'];
+        $claimed = false;
         try {
-            if (!$this->platform->claimSupportSignal($pid, $rev)) {
-                return false;
+            $claimed = $this->platform->claimSupportSignal($pid, $rev);
+            if ($claimed) {
+                $this->report($pid, $payload, true, $now);
             }
-            $this->report($pid, $payload, true, $now);
         } catch (\Throwable $e) {
             try {
                 $this->platform->log('error', 'support', $pid, $now);
+                if ($claimed) {
+                    $this->platform->releaseSupportSignal($pid, $rev, (int)($row['support_rev'] ?? 0));
+                }
             } catch (\Throwable $ignored) {
-                // The database refuses even this; the verdict was not to be applied anyway.
+                // The database refuses even this: the redelivery meets the row as it is.
             }
+            throw $e;
         }
-        return true;
+        return $claimed;
     }
 
     /**
