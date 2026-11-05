@@ -44,6 +44,21 @@ final class LinksAndImagesTest extends PluginTestCase
                 'Zobacz opis tu.', 1, ['example.net']],
             'a data: address MyBB shows instead of a link' => ['Zobacz [url=data:text/plain,abc]opis[/url]', [],
                 'Zobacz data:text/plain,abc', 0, []],
+            'a labelled link without a scheme or www.: MyBB links it with http://' => [
+                'Kliknij [url=spam.example/promocja]tutaj[/url] teraz.', [], 'Kliknij tutaj teraz.', 1, ['spam.example']],
+            'a link MyCode without a scheme around its address' => [
+                'Zobacz [url]sklep.example.org/a[/url]', [], 'Zobacz sklep.example.org/a', 1, ['example.org']],
+            'a labelled link to another scheme' => [
+                'Pliki: [url=ftp://pliki.example.net/a]tu[/url]', [], 'Pliki: tu', 1, ['example.net']],
+            'one address, a labelled link and a bare one: one link' => [
+                'Patrz [url=spam.example]tu[/url] i http://spam.example', [], 'Patrz tu i http://spam.example', 1, ['spam.example']],
+            'links in their order of appearance' => [
+                'https://pierwszy.example.com/ [url=drugi.example.org]b[/url] [url]trzeci.example.net[/url]', [],
+                'https://pierwszy.example.com/ b trzeci.example.net', 3, ['example.com', 'example.org', 'example.net']],
+            'a javascript: address MyBB leaves as typed: no link' => [
+                'Zobacz [url=javascript:alert(1)]opis[/url]', [], 'Zobacz [url=javascript:alert(1)]opis[/url]', 0, []],
+            'link MyCode in a code block, shown as written: no link' => [
+                '[code][url=spam.example]opis[/url][/code] tekst', [], "[url=spam.example]opis[/url]\ntekst", 0, []],
             'an image beside text: its alt, without its address, no link' => [
                 'Zdjęcie: [img]https://obrazki.example.org/a.png[/img] koniec', [], 'Zdjęcie: a.png koniec', 0, []],
             'an image whose address ends in a word the author chose' => [
@@ -77,6 +92,22 @@ final class LinksAndImagesTest extends PluginTestCase
                 'Tekst <img src="https://obrazki.example.org/a.png">', [],
                 'Tekst <img src="https://obrazki.example.org/a.png">', 1, ['example.org']],
         ];
+    }
+
+    /**
+     * A link MyCode in a poll's option without a scheme is a link, as in the post: MyBB
+     * links it with `http://`.
+     */
+    public function testAPollOptionsLinkWithoutASchemeIsALink(): void
+    {
+        $handler = $this->forum->write(true, 'Pierwszy post z ankietą.', ['subject' => 'Ankieta']);
+        $this->forum->addPoll((int)$handler->return_values['tid'], 'Które?', ['[url=spam.example]ta[/url]', 'inna']);
+        task_minos(['tid' => 1]); // the author's poll: the thread sent again, with it
+        self::assertStringContainsString("ta\ninna", $this->forum->transport->lastBody()['elementy'][0]['tekst'],
+            'the guard: the revision with the poll was sent');
+
+        $meta = $this->forum->transport->lastBody()['elementy'][0]['meta'];
+        self::assertSame([1, ['spam.example']], [$meta['links'], $meta['link_domains'] ?? []]);
     }
 
     /**

@@ -89,8 +89,21 @@ final class Text
     /** A forum's parsing options when MyBB does not say (its defaults for a new forum). */
     public const DEFAULT_FORUM = ['allowhtml' => 0, 'allowmycode' => 1, 'allowimgcode' => 1, 'allowvideocode' => 1];
 
-    /** A link, for the spam signals. */
-    private const LINK = '~(?:https?://|www\.)[^\s\[\]<>"\'()]+~iu';
+    /** A bare address, for the spam signals (the body of a pattern). */
+    private const LINK = '(?:https?://|www\.)[^\s\[\]<>"\'()]+';
+
+    /**
+     * MyBB 1.8.41's link MyCode (`cache_mycode`: `url_simple`, `url_simple2`, `url_complex`,
+     * `url_complex2`), in the order MyBB applies them: the groups that make the address, and
+     * the label's group (0 for none). MyBB matches them on the message with `<` escaped
+     * (`parse_html`), so a `<` does not end an address here either.
+     */
+    private const LINK_MYCODE = [
+        '#\[url\]((?!javascript)[a-z]+?://)([^\r\n"]+?)\[/url\]#si'       => [[1, 2], 0],
+        '#\[url\]((?!javascript:)[^\r\n"]+?)\[/url\]#i'                   => [[1], 0],
+        '#\[url=((?!javascript)[a-z]+?://)([^\r\n"]+?)\](.+?)\[/url\]#si' => [[1, 2], 3],
+        '#\[url=((?!javascript:)[^\r\n"]+?)\](.+?)\[/url\]#si'            => [[1], 2],
+    ];
 
     /**
      * An image MyBB 1.8.41 shows as an image when its image MyCode is on: its own four
@@ -894,16 +907,68 @@ final class Text
     }
 
     /**
-     * The distinct links of a message, lower-cased, in order.
+     * The distinct links of a message, lower-cased, in order: where MyBB's link MyCode
+     * points ({@see LINK_MYCODE}, {@see href}; outside `[code]`/`[php]`, which show it as
+     * written), and every bare address ({@see LINK}) — in a label too.
      *
      * @return array<int,string>
+     * @throws TextError When PCRE fails on it.
      */
     private static function urls(string $message): array
     {
-        if (self::matchAll(self::LINK, self::valid($message), $m) === 0) {
+        $text = self::valid($message);
+        $blocks = [];
+        $text = self::replaceCallback(self::CODE_BLOCK, static function (array $m) use (&$blocks): string {
+            $blocks[] = $m[0];
+            return "\x00" . (count($blocks) - 1) . "\x00";
+        }, $text);
+        // Each link MyCode becomes a numbered mark, then its label: the marks keep the order
+        // of appearance, and — quoted, as MyBB's `<a href="…">` is — end any address around
+        // them.
+        $hrefs = [];
+        foreach (self::LINK_MYCODE as $pattern => $groups) {
+            $text = self::replaceCallback($pattern, static function (array $m) use (&$hrefs, $groups): string {
+                $address = '';
+                foreach ($groups[0] as $group) {
+                    $address .= $m[$group];
+                }
+                $hrefs[] = self::href($address);
+                return " \"\x01" . (count($hrefs) - 1) . "\x01\" " . ($groups[1] > 0 ? $m[$groups[1]] . ' ' : '');
+            }, $text);
+        }
+        if ($blocks !== []) {
+            $text = self::replaceCallback('#\x00([0-9]+)\x00#', static function (array $m) use ($blocks): string {
+                return $blocks[(int)$m[1]] ?? $m[0];
+            }, $text);
+        }
+        if (self::matchAll('~"\x01([0-9]+)\x01"|' . self::LINK . '~iu', $text, $m, PREG_SET_ORDER) === 0) {
             return [];
         }
-        return array_values(array_unique(array_map('strtolower', $m[0])));
+        $links = [];
+        foreach ($m as $match) {
+            $link = isset($match[1]) && $match[1] !== '' ? ($hrefs[(int)$match[1]] ?? null) : $match[0];
+            if ($link !== null) {
+                $links[] = strtolower($link);
+            }
+        }
+        return array_values(array_unique($links));
+    }
+
+    /**
+     * Where MyBB 1.8.41 links a `[url]` (`Postparser::mycode_parse_url`): nowhere for a
+     * `data:` address, which it shows as text (a `javascript:` one its patterns leave as
+     * typed); `http://` in front of one without a scheme (`[a-z0-9]+://`), as MyBB puts it
+     * there.
+     *
+     * @return string|null The address; null for no link.
+     */
+    private static function href(string $address): ?string
+    {
+        if (stripos($address, 'data:') === 0) {
+            return null;
+        }
+        $scheme = strpos($address, '://');
+        return $scheme !== false && $scheme > 0 && ctype_alnum(substr($address, 0, $scheme)) ? $address : 'http://' . $address;
     }
 
     /**

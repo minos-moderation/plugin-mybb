@@ -258,7 +258,17 @@ The text readers SEE, following MyBB's own text renderer
   Both are read from what is sent, as stored (`Text::sourceOf`), without the images MyBB
   shows as images in the message and the poll's options — `[img]` with the image MyCode on
   (outside `[code]`/`[php]`, which show it as written) and `<img>` with HTML on: an
-  image's address is not a link (S2). An `[img]` MyBB shows as a link counts.
+  image's address is not a link (S2). An `[img]` MyBB shows as a link counts. A link is a
+  bare address (`https://…`, `www.…`) or where MyBB's link MyCode points: its four
+  patterns (`url_simple`, `url_simple2`, `url_complex`, `url_complex2`, in MyBB's order,
+  outside `[code]`/`[php]`), with `http://` in front of an address without a scheme, as
+  `mycode_parse_url` puts it — so `[url=spam.example]here[/url]`, `[url]spam.example[/url]`
+  and `[url=ftp://…]` count, in the message and in the poll's options; a `data:` address,
+  which MyBB shows as text, does not (`Text::urls`, `Text::href`). MyBB matches these
+  patterns on the message with `<` escaped; on an HTML forum a `<` ends its address, so
+  there the plugin may count a link MyBB does not make (the safe direction for a spam
+  signal). A subject or a poll question is not parsed by MyBB, but link MyCode typed there
+  counts too.
 
 ## The row's life
 
@@ -431,7 +441,7 @@ left out.
 | `F5d` | optional: re-send what fail-open published unassessed once the limit renews | not implemented: the rule is optional and off by default (nie wdrożono, reguła opcjonalna); not a deviation |
 | `F7` | no text to assess → the failure mode; a bare address and visible punctuation are text | `Text::shows`: an image MyBB shows as an image, an embedded video, an attachment, a link without a label (`alt`/`title` notwithstanding) or only invisible characters → `no_text`, nothing sent. An emoticon (`:)`) is text: MyBB shows its smilie image, but the characters the author typed are sent and assessed; `NoTextTest` |
 | `F7`, `S2` | an image's address is not text and not a link | `[img]` MyBB shows as an image (its image MyCode on) and `<img>` on an HTML forum add only their `alt` beside other text, never the address (`Text::visible`; an `[img]`'s `alt` as `mycode_parse_img` builds it from the address's last part, `Text::imageAlt`), no text alone (`Text::shows`) and no link (`Text::sourceOf` with the forum's options); an `[img]` MyBB shows as a link (image MyCode off) or leaves as typed is text and a link; `LinksAndImagesTest` |
-| `S1` | `tekst` is what the reader sees; never an `href` | `[url=X]Y[/url]` is sent as `Y` alone (a `data:` address, which MyBB shows instead of a link, as the address); an HTML forum's `alt`/`title` next to the text; `LinksAndImagesTest`, `TextTest` |
+| `S1` | `tekst` is what the reader sees; never an `href` | `[url=X]Y[/url]` is sent as `Y` alone (a `data:` address, which MyBB shows instead of a link, as the address), and `X` counts as a link however it is written (MyBB's link patterns, `http://` in front where MyBB puts it: `Text::urls`); an HTML forum's `alt`/`title` next to the text; `LinksAndImagesTest`, `TextTest` |
 | `A7` | `wsparcie`: an active signal in the moderators' queue, whatever the verdict | a report in the ModCP's report centre (`Platform::reportForSupport`), the row on the ACP's support list; never deleted, rejected or hidden automatically. Also after a person's decision (a moderator's approval, deletion or edit, an author's edit: an older revision), with a note saying so and the post left as the person left it; once per post and revision; `SupportTest`, `EndToEndTest`, live `a7_support_after_decision` |
 
 ## Tests

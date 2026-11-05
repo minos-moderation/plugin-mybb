@@ -152,7 +152,9 @@ Wysyłane jest tylko:
     z wyłączonym MyCode), zostaje dosłownie — tak jak widzi go czytelnik;
 - profil oceny;
 - sygnały antyspamowe: liczba linków w poście, domeny tych linków (najwyżej 10, np.
-  `example.com`; adres obrazka nie jest linkiem i nie jest liczony) i — dla zarejestrowanego autora — czy to jego pierwszy post: czy licznik
+  `example.com`; adres obrazka nie jest linkiem i nie jest liczony; link to goły adres
+  albo adres z `[url=ADRES]opis[/url]` i `[url]ADRES[/url]` — także bez `http://`, który
+  MyBB wtedy dopisuje, i z innym schematem, np. `ftp://`) i — dla zarejestrowanego autora — czy to jego pierwszy post: czy licznik
   postów jego konta w MyBB wynosił 0, gdy post był wysyłany pierwszy raz (ponowienie
   wysyła tę samą wartość, a dla gościa ten sygnał nie jest wysyłany).
 
