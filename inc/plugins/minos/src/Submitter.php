@@ -199,8 +199,9 @@ final class Submitter
         // Whether a reply's own subject goes with it is decided now and kept with the row, so
         // a later change of the thread's title does not turn MyBB's default into another text.
         $own = !$thread && Text::sendsOwnSubject($post);
-        $text = Text::ofPost($post, $thread, $this->platform->forumParsing((int)$post['fid']), $own);
-        $signals = $text['error'] ? null : self::linkSignals(Text::sourceOf($post, $thread, $own));
+        $forum = $this->platform->forumParsing((int)$post['fid']);
+        $text = Text::ofPost($post, $thread, $forum, $own);
+        $signals = $text['error'] ? null : self::linkSignals($post, $thread, $own, $forum);
         // Read now, in the author's request: a resubmission (the task) has no author.
         $first = $this->platform->currentUserHasNoPosts();
         $row = [
@@ -454,8 +455,9 @@ final class Submitter
             return null;
         }
         $own = (int)($row['own_subject'] ?? 0) === 1;
-        $text = Text::ofPost($post, (int)$row['is_thread'] === 1, $this->platform->forumParsing($post['fid']), $own);
-        $signals = $text['error'] ? null : self::linkSignals(Text::sourceOf($post, (int)$row['is_thread'] === 1, $own));
+        $forum = $this->platform->forumParsing($post['fid']);
+        $text = Text::ofPost($post, (int)$row['is_thread'] === 1, $forum, $own);
+        $signals = $text['error'] ? null : self::linkSignals($post, (int)$row['is_thread'] === 1, $own, $forum);
         if ($signals === null) {
             $this->unreadable($row, $settings, $now);
             return null;
@@ -542,13 +544,18 @@ final class Submitter
     }
 
     /**
-     * The link signals of a post: `links`, and `link_domains` when it has any.
+     * The link signals of a post: `links`, and `link_domains` when it has any — read from
+     * what it sends as stored, without the images MyBB shows as images (an image's address
+     * is not a link, shared rule S2: {@see Text::sourceOf}).
      *
+     * @param array<string,mixed> $post  The post ({@see Platform::post}).
+     * @param array<string,mixed> $forum Its forum's parsing options.
      * @return array<string,mixed>|null Null when the text could not be read (a PCRE failure).
      */
-    private static function linkSignals(string $text): ?array
+    private static function linkSignals(array $post, bool $thread, bool $own, array $forum): ?array
     {
         try {
+            $text = Text::sourceOf($post, $thread, $own, $forum);
             $signals = ['links' => Text::links($text)];
             $domains = Text::linkDomains($text);
         } catch (TextError $e) {

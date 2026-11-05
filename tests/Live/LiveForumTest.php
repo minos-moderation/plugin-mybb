@@ -515,6 +515,47 @@ final class LiveForumTest extends TestCase
     }
 
     /**
+     * A7 after a person's decision: two replies the failure mode held for their timeout,
+     * which a moderator then approved in the ModCP queue, get a late `zablokowane` — one
+     * with `wsparcie`, delivered twice. The moderators get one report for it, with the note
+     * that the verdict came after the decision; both posts stay published as the moderator
+     * left them, and the one without `wsparcie` gets no report.
+     */
+    public function testSupportAfterAModeratorsApprovalIsReportedOnce(): void
+    {
+        $board = self::$board;
+        $author = $board->login(self::AUTHOR, self::$passwords[self::AUTHOR]);
+        $tid = $board->thread($board->admin(), 'Wątek wsparcia po decyzji', 'Pierwszy post administratora.')['tid'];
+        $supported = $board->reply($author, $tid, 'Prośba o pomoc zatwierdzona po czasie [minos:blokuj] [minos:wsparcie] [minos:dwa-razy].');
+        $plain = $board->reply($author, $tid, 'Odpowiedź zatwierdzona po czasie [minos:blokuj].');
+        $board->exec('UPDATE {p}minos_pending SET accepted_at=? WHERE pid IN (?, ?)', [time() - 21 * 60, $supported, $plain]);
+        $board->task('minos');
+        $this->approveInModcp($supported);
+        $this->approveInModcp($plain);
+
+        $first = $board->deliver();
+        $second = $board->deliver();
+        self::assertMatchesRegularExpression('/mybb:' . $supported . ' dostarczony 200/', $first);
+        self::assertMatchesRegularExpression('/mybb:' . $supported . ' dostarczony 200/', $second, 'delivered again');
+        self::assertMatchesRegularExpression('/mybb:' . $plain . ' dostarczony 200/', $first);
+        $posts = [];
+        foreach (['supported' => $supported, 'plain' => $plain] as $name => $pid) {
+            $posts[$name] = [
+                'visible' => (int)$board->post($pid)['visible'],
+                'status' => $board->pending($pid)['status'],
+                'verdict' => $board->pending($pid)['verdict'],
+                'reports' => (int)$board->value("SELECT COUNT(*) FROM {p}reportedcontent WHERE id=? AND type='post'", [$pid]),
+            ];
+        }
+        $reason = (string)$board->value("SELECT reason FROM {p}reportedcontent WHERE id=? AND type='post'", [$supported]);
+        $answers = ['posts' => $posts, 'report_notes_the_decision' => strpos($reason, 'po decyzji moderatora') !== false];
+        self::$answers['a7_support_after_decision'] = $answers;
+        self::assertSame(['visible' => 1, 'status' => 'held', 'verdict' => 'timeout', 'reports' => 1], $posts['supported']);
+        self::assertSame(['visible' => 1, 'status' => 'held', 'verdict' => 'timeout', 'reports' => 0], $posts['plain']);
+        self::assertTrue($answers['report_notes_the_decision']);
+    }
+
+    /**
      * K-42: the ModCP's moderation queue (`modcp.php?action=modqueue`) as MyBB 1.8.41 renders
      * it, with the plugin's note after each post it holds — a censored reply with MyCode kept
      * in the queue (the verdict, the categories, the gateway's mask), a blocked reply longer

@@ -138,13 +138,23 @@ Wysyłane jest tylko:
     między nimi), więc tak są wysyłane, a komentarzy HTML (`<!-- … -->`) czytelnik nie
     widzi, więc nie są wysyłane;
   - cytat `[quote=NAZWA]` staje się „NAZWA napisał(a):” i cytowanym tekstem;
-    `[url=ADRES]opis[/url]` — „opis (ADRES)”; `[img]ADRES[/img]` i filmy obok innego
-    tekstu — samym adresem;
+    `[url=ADRES]opis[/url]` — samym „opis”, bo adresu czytelnik nie widzi (link jest
+    liczony w sygnałach antyspamowych); obrazek, który MyBB pokazuje jako obrazek
+    (`[img]ADRES[/img]`, na forum z HTML `<img>`), nie jest wysyłany ani on, ani jego adres
+    — zostaje tylko jego tekst zastępczy, widoczny, gdy obrazek się nie wczyta: przy
+    `[img]` ostatni człon adresu (np. `obrazek.png`), skrócony jak w MyBB, a na forum
+    z HTML `alt`/`title`; sam obrazek bez innego tekstu nadal nie jest tekstem do oceny;
+    adres, który czytelnik widzi
+    (goły adres, `[url]ADRES[/url]`, `[img]` przy wyłączonym MyCode obrazków — MyBB
+    pokazuje go wtedy jako link), jest tekstem i linkiem; film obok innego tekstu — samym
+    adresem;
   - MyCode, którego MyBB nie rozpozna (nieznany znacznik, znacznik bez pary, forum
     z wyłączonym MyCode), zostaje dosłownie — tak jak widzi go czytelnik;
 - profil oceny;
 - sygnały antyspamowe: liczba linków w poście, domeny tych linków (najwyżej 10, np.
-  `example.com`) i — dla zarejestrowanego autora — czy to jego pierwszy post: czy licznik
+  `example.com`; adres obrazka nie jest linkiem i nie jest liczony; link to goły adres
+  albo adres z `[url=ADRES]opis[/url]` i `[url]ADRES[/url]` — także bez `http://`, który
+  MyBB wtedy dopisuje, i z innym schematem, np. `ftp://`) i — dla zarejestrowanego autora — czy to jego pierwszy post: czy licznik
   postów jego konta w MyBB wynosił 0, gdy post był wysyłany pierwszy raz (ponowienie
   wysyła tę samą wartość, a dla gościa ten sygnał nie jest wysyłany).
 
@@ -188,7 +198,11 @@ wtyczka porównuje skrót (SHA-256) wysłanego tekstu z tekstem postu w tej chwi
 tekst nie jest przechowywany. Jeśli treść zmieniła się z pominięciem edycji (np. przez inną
 wtyczkę), werdykt nie jest stosowany: post zostaje w kolejce dla człowieka („tekst postu
 inny niż wysłany do oceny”), a post opublikowany wcześniej w trybie fail-open zostaje taki,
-jaki jest.
+jaki jest — opublikowany, także gdy spóźniony werdykt to `zablokowane` — i znika z listy
+postów opublikowanych bez oceny. Tak samo po aktualizacji wtyczki, która zmienia sposób
+odczytu tekstu (np. linków z opisem albo obrazków): post wysłany przed aktualizacją
+i opublikowany w trybie fail-open nie wraca do kolejki po spóźnionym werdykcie; trzeba go
+sprawdzić ręcznie.
 
 Jeśli moderator zdąży zatwierdzić albo usunąć post, zanim nadejdzie werdykt, wtyczka go nie
 rusza — decyzja człowieka wygrywa.
@@ -239,6 +253,19 @@ zostaje w kolejce albo zostaje opublikowany, aż zdecyduje człowiek — werdykt
 `zablokowane` zostawia go w kolejce także przy ustawieniu „usuń (miękko)”, a werdykt,
 który przyjdzie po publikacji bez oceny (fail-open), nie cofa go do kolejki. Wtyczka nigdy
 nie pisze do autora postu. Posty z sygnałem są też na osobnej liście w dzienniku wtyczki.
+
+Zgłoszenie przychodzi także wtedy, gdy człowiek zdecydował pierwszy: moderator zatwierdził,
+usunął albo poprawił post, zanim przyszedł werdykt (również po czasie oczekiwania albo po
+publikacji bez oceny), albo autor poprawił post i werdykt dotyczy jego poprzedniej wersji.
+Komentarz zgłoszenia mówi wtedy, że werdykt przyszedł po decyzji moderatora lub edycji
+postu. Reszty takiego werdyktu wtyczka nie stosuje: post zostaje widoczny, usunięty albo
+w kolejce — tak, jak zostawił go człowiek. Powtórzona dostawa tego samego werdyktu nie
+dodaje drugiego zgłoszenia, także gdy moderator zamknął już pierwsze. Gdy werdykt
+przychodzi akurat wtedy, gdy wtyczka zajmuje się tym postem w inny sposób (zadanie kończy
+jego czas oczekiwania, moderator go właśnie poprawia), webhook odpowiada `503`, a brama
+doręcza werdykt ponownie, gdy ten krok jest już zakończony — werdykt ani zgłoszenie nie
+przepadają. Tak samo, gdy zgłoszenia po decyzji człowieka nie udało się zapisać: webhook
+odpowiada `500`, a ponowiona dostawa je dodaje.
 
 ## Powiadomienia subskrybentów
 
@@ -392,6 +419,16 @@ numer postu — nigdy treść błędu.
 - Powiadomienia subskrybentów o poście zatwierdzonym przez moderatora z kolejki MyBB
   wysyła MyBB — czyli żadne (tak działa MyBB przy każdej ręcznej moderacji); wtyczka wysyła
   je tylko dla postów, które sama publikuje (niżej, „Powiadomienia subskrybentów”).
+- Powiadomienia subskrybentów o poście, który wtyczka publikuje po werdykcie, są
+  przygotowywane w trakcie odpowiedzi na webhook bramy (po jednym wpisie w kolejce poczty
+  albo jednej prywatnej wiadomości na odbiorcę). Przy wątku albo dziale z bardzo wieloma
+  subskrybentami odpowiedź dla bramy trwa przez to dłużej.
+- Emotikona (np. `:)`) jest tekstem: MyBB pokazuje ją jako obrazek, ale wtyczka wysyła do
+  oceny znaki wpisane przez autora — post z samą emotikoną jest oceniany, a nie trafia
+  w tryb awaryjny.
+- Opcjonalna reguła ponownego wysłania postów opublikowanych bez oceny po odnowieniu limitu
+  bramy (F5d) nie jest wdrożona (reguła jest opcjonalna): taki post zostaje opublikowany bez
+  oceny — widać go na liście w dzienniku wtyczki — i nie jest wysyłany ponownie.
 - Zgłoszenie z sygnałem „wsparcie” widać w panelu moderatora (Zgłoszona zawartość) i w
   powiadomieniu MyBB o nieprzeczytanych zgłoszeniach; wtyczka nie wysyła go moderatorom
   e-mailem ani prywatną wiadomością, nawet gdy forum tak ustawiło powiadamianie

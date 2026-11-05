@@ -69,6 +69,10 @@ final class Platform
         // Whether a reply's own subject was sent with it (`Text::ownSubject`), as decided
         // at its first send or by the edit that started its revision.
         'own_subject' => 'flag',
+        // One more than the newest revision whose `wsparcie` the moderators were signalled
+        // about (0: none yet), so a repeated delivery raises nothing twice
+        // ({@see claimSupportSignal}).
+        'support_rev' => 'small',
     ];
 
     /** The log table's columns. */
@@ -645,7 +649,7 @@ final class Platform
             'support' => 0, 'error_code' => '', 'decided_at' => 0, 'auto_published' => 0,
             'claimed_at' => 0, 'claimed_from' => '', 'original_text' => '', 'sent_sha256' => '',
             'masked_text' => '', 'apply_errors' => 0, 'first_post' => '', 'rev' => 0,
-            'answer' => '', 'answered_at' => 0, 'own_subject' => 0,
+            'answer' => '', 'answered_at' => 0, 'own_subject' => 0, 'support_rev' => 0,
         ]));
     }
 
@@ -713,6 +717,44 @@ final class Platform
     }
 
     /**
+     * Takes the `wsparcie` signal of one revision of a post, for a verdict the plugin does
+     * not apply because a person decided first (A7 of client-php's
+     * `docs/plugin-behaviour.md`): one conditional `UPDATE`, so a repeated or concurrent
+     * delivery raises it once. It marks the row `support` (the ACP's list, the ModCP's
+     * report cell) and `support_rev`; it takes nothing while a step applies this same
+     * revision (`applying`) — the webhook then answers `503` and the redelivery meets that
+     * step's outcome ({@see Receiver::handle}) — nor once the signal of this revision or a
+     * newer one was raised.
+     *
+     * @param int $pid The post.
+     * @param int $rev The revision the verdict is about.
+     * @return bool True for the one caller that changed it.
+     */
+    public function claimSupportSignal(int $pid, int $rev): bool
+    {
+        $this->db->update_query(self::PENDING_TABLE, ['support' => 1, 'support_rev' => $rev + 1],
+            "pid='" . $pid . "' AND support_rev<'" . ($rev + 1) . "' AND NOT (status='" . Status::APPLYING
+            . "' AND rev='" . $rev . "')");
+        return (int)$this->db->affected_rows() === 1;
+    }
+
+    /**
+     * Gives back the `wsparcie` signal {@see claimSupportSignal} took, when its report could
+     * not be written: one conditional `UPDATE`, while the row still names this revision as
+     * the newest signalled, back to what it named before. `support` stays set — the ACP's
+     * list still shows the post — and the redelivery takes the signal again.
+     *
+     * @param int $pid      The post.
+     * @param int $rev      The revision whose signal was taken.
+     * @param int $previous `support_rev` before the claim.
+     */
+    public function releaseSupportSignal(int $pid, int $rev, int $previous): void
+    {
+        $this->db->update_query(self::PENDING_TABLE, ['support_rev' => min($previous, $rev)],
+            "pid='" . $pid . "' AND support_rev='" . ($rev + 1) . "'");
+    }
+
+    /**
      * Gives back claims older than a moment: the process that took them died between the
      * claim and the outcome. The row returns to the status it was claimed from.
      *
@@ -771,7 +813,9 @@ final class Platform
      * ({@see Status::REVISED_REASONS}): one conditional `UPDATE`, so a verdict being applied
      * at the same moment and the edit never both win. The row waits again as `retry`, due
      * now, with a fresh receive timeout and nothing of the earlier attempt (its digest, its
-     * outcome); the task sends it under the next revision's id.
+     * outcome); the task sends it under the next revision's id. Only the `wsparcie` mark
+     * (`support`, `support_rev`) stays: a verdict on the earlier text may still raise it
+     * ({@see claimSupportSignal}), and the moderators' report stays about this post.
      *
      * @param int      $pid        The post.
      * @param int      $now        Unix seconds.
@@ -784,7 +828,7 @@ final class Platform
         $this->db->write_query('UPDATE ' . $this->prefix . self::PENDING_TABLE
             . " SET rev=rev+1, status='" . Status::RETRY . "', submitted_at='" . $now . "', accepted_at='0',"
             . ($ownSubject !== null ? " own_subject='" . ($ownSubject === 1 ? 1 : 0) . "'," : '')
-            . " retry_at='" . $now . "', attempts='0', error_code='', verdict='', categories='', support='0',"
+            . " retry_at='" . $now . "', attempts='0', error_code='', verdict='', categories='',"
             . " decided_at='0', auto_published='0', claimed_at='0', claimed_from='', sent_sha256='',"
             . " masked_text='', apply_errors='0', truncated='0', prefix_len='0', text_len='0'"
             . " WHERE pid='" . $pid . "' AND (status IN ('" . implode("','", Status::OPEN) . "')"
@@ -986,6 +1030,11 @@ final class Platform
             foreach ($columns as $name => $type) {
                 if ($type !== 'serial' && !$this->db->field_exists($name, $table)) {
                     $this->db->add_column($table, $name, self::columnSql($engine, $type));
+                    if ($name === 'support_rev') {
+                        // A row an earlier version already reported: its signal was raised.
+                        $this->db->write_query('UPDATE ' . $this->prefix . $table
+                            . " SET support_rev=rev+1 WHERE support='1'");
+                    }
                 }
             }
         }

@@ -21,8 +21,13 @@ namespace Minos\MyBB;
  *   text, and so are they sent; an HTML comment is hidden from readers, and so is it from
  *   the gateway (verified on MyBB 1.8.41: `tests/fixtures/mybb-1.8.41/reader-view.json`).
  * - MyCode (when the forum parses it): `[quote=NAME]` becomes "NAME napisał(a):" before the
- *   quoted text; `[url=X]Y[/url]` becomes "Y (X)"; `[img]X[/img]` and `[video=…]X[/video]`
- *   become the address X; `[code]` and `[php]` keep their content as written; formatting
+ *   quoted text; `[url=X]Y[/url]` becomes its label "Y" alone — the reader does not see the
+ *   address, which is counted in `links` (shared rules S1, S2) — unless MyBB shows the
+ *   address instead of a link (a `data:` address); an image MyBB shows as an image (`[img]`
+ *   with its image MyCode on, as its own patterns match) is left out with its address (an
+ *   image's address is neither text nor a link, F7/S2), while an `[img]` it shows as a link
+ *   (its image MyCode off) or leaves as typed, and `[video=…]X[/video]`, become the address
+ *   X; `[code]` and `[php]` keep their content as written; formatting
  *   tags go and their text stays. MyCode MyBB would not parse — an unknown tag, a tag
  *   without its pair, a `[size]`, `[align]`, `[color]` or `[font]` whose value MyBB's
  *   patterns refuse (`[size=OBELGA]`), any tag in a forum with MyCode off — stays
@@ -37,7 +42,8 @@ namespace Minos\MyBB;
  * video or a link whose label shows nothing (F7): a body that shows only `[img]` (with
  * MyBB's image MyCode on), a `[video]` MyBB embeds, `[url=X] [/url]` or an `<img>`, even
  * with its `alt` or `title`, shows no text ({@see shows}); a bare address the reader sees is
- * text. Beside other text, an image's address or hint is still sent as before.
+ * text. Beside other text, an image's hint (an HTML `alt` or `title`) is sent; its address
+ * never is.
  *
  * Only the FIRST 3000 characters are sent; {@see Applier} does not publish a cut post on a
  * verdict about its beginning. Works without mbstring (PCRE with `/u`).
@@ -83,8 +89,35 @@ final class Text
     /** A forum's parsing options when MyBB does not say (its defaults for a new forum). */
     public const DEFAULT_FORUM = ['allowhtml' => 0, 'allowmycode' => 1, 'allowimgcode' => 1, 'allowvideocode' => 1];
 
-    /** A link, for the spam signals. */
-    private const LINK = '~(?:https?://|www\.)[^\s\[\]<>"\'()]+~iu';
+    /** A bare address, for the spam signals (the body of a pattern). */
+    private const LINK = '(?:https?://|www\.)[^\s\[\]<>"\'()]+';
+
+    /**
+     * MyBB 1.8.41's link MyCode (`cache_mycode`: `url_simple`, `url_simple2`, `url_complex`,
+     * `url_complex2`), in the order MyBB applies them: the groups that make the address, and
+     * the label's group (0 for none). MyBB matches them on the message with `<` escaped
+     * (`parse_html`), so a `<` does not end an address here either.
+     */
+    private const LINK_MYCODE = [
+        '#\[url\]((?!javascript)[a-z]+?://)([^\r\n"]+?)\[/url\]#si'       => [[1, 2], 0],
+        '#\[url\]((?!javascript:)[^\r\n"]+?)\[/url\]#i'                   => [[1], 0],
+        '#\[url=((?!javascript)[a-z]+?://)([^\r\n"]+?)\](.+?)\[/url\]#si' => [[1, 2], 3],
+        '#\[url=((?!javascript:)[^\r\n"]+?)\](.+?)\[/url\]#si'            => [[1], 2],
+    ];
+
+    /**
+     * An image MyBB 1.8.41 shows as an image when its image MyCode is on: its own four
+     * patterns (`parse_mycode`) in one — at most one line break before the address, nothing
+     * else; the address is the first group. Any other `[img]` stays on the page as typed.
+     */
+    private const IMAGE = '#\[img(?:=[1-9][0-9]*x[1-9][0-9]*)?(?: align=(?:left|right))?\](?:\r\n?|\n?)(https?://[^<>"\']+?)\[/img\]#is';
+
+    /** What MyBB 1.8.41's `Postparser::encode_url` replaces in an image's `alt`. */
+    private const URL_ENTITIES = ['$' => '%24', '&#36;' => '%24', '^' => '%5E', '`' => '%60', '[' => '%5B', ']' => '%5D',
+        '{' => '%7B', '}' => '%7D', '"' => '%22', '<' => '%3C', '>' => '%3E', ' ' => '%20'];
+
+    /** `[code]` and `[php]`, whose content MyBB shows as written. */
+    private const CODE_BLOCK = '#\[(code|php)\](.*?)\[/\1\]#is';
 
     /**
      * Two-label public suffixes common on Polish forums and elsewhere: a registrable domain
@@ -164,24 +197,65 @@ final class Text
 
     /**
      * The raw text the link signals of a post are read from: what {@see ofPost} sends, as
-     * stored (subject, poll, message).
+     * stored (subject, poll, message). With the forum's parsing options, the images MyBB
+     * shows as images are left out of the message and the poll's options, which MyBB
+     * parses: an image's address is not a link (shared rule S2).
      *
-     * @param array<string,mixed> $post        As for {@see ofPost}.
-     * @param bool                $opensThread The post opens its thread.
-     * @param bool|null           $ownSubject  As for {@see ofPost}.
+     * @param array<string,mixed>      $post        As for {@see ofPost}.
+     * @param bool                     $opensThread The post opens its thread.
+     * @param bool|null                $ownSubject  As for {@see ofPost}.
+     * @param array<string,mixed>|null $forum       The forum's parsing options; null keeps
+     *     every part as stored.
      * @return string The parts, one per line.
+     * @throws TextError When PCRE fails on it.
      */
-    public static function sourceOf(array $post, bool $opensThread, ?bool $ownSubject = null): string
+    public static function sourceOf(array $post, bool $opensThread, ?bool $ownSubject = null, ?array $forum = null): string
     {
+        $parsed = static function (string $part) use ($forum): string {
+            return $forum === null ? $part : self::withoutImages($part, $forum);
+        };
         $parts = [$opensThread ? (string)$post['subject'] : self::replySubject($post, $ownSubject)];
         if ($opensThread && is_array($post['poll'] ?? null)) {
             $parts[] = (string)$post['poll']['question'];
             foreach ((array)$post['poll']['options'] as $option) {
-                $parts[] = (string)$option;
+                $parts[] = $parsed((string)$option);
             }
         }
-        $parts[] = (string)$post['message'];
+        $parts[] = $parsed((string)$post['message']);
         return implode("\n", $parts);
+    }
+
+    /**
+     * A message without what its readers see as an image: `[img]` MyBB shows as one (its
+     * MyCode and image MyCode on, outside `[code]`/`[php]`, which show it as written), and
+     * `<img>` in a forum with HTML on. What is left is still the message as stored.
+     *
+     * @param array<string,mixed> $forum The forum's parsing options.
+     * @throws TextError When PCRE fails on it.
+     */
+    private static function withoutImages(string $message, array $forum): string
+    {
+        $forum += self::DEFAULT_FORUM;
+        $text = self::valid($message);
+        $blocks = [];
+        if (!empty($forum['allowmycode'])) {
+            $text = self::replaceCallback(self::CODE_BLOCK, static function (array $m) use (&$blocks): string {
+                $blocks[] = $m[0];
+                return "\x00" . (count($blocks) - 1) . "\x00";
+            }, $text);
+            if (!empty($forum['allowimgcode'])) {
+                $text = self::replace(self::IMAGE, ' ', $text);
+            }
+        }
+        if (!empty($forum['allowhtml'])) {
+            $text = self::replace('#<img\b' . self::ATTRIBUTES . '>#i', ' ', $text);
+        }
+        if ($blocks === []) {
+            return $text;
+        }
+        return self::replaceCallback('#\x00([0-9]+)\x00#', static function (array $m) use ($blocks): string {
+            return $blocks[(int)$m[1]] ?? $m[0];
+        }, $text);
     }
 
     /**
@@ -509,13 +583,14 @@ final class Text
     {
         // [code] and [php] show their content as written, MyCode included.
         $blocks = [];
-        $text = self::replaceCallback('#\[(code|php)\](.*?)\[/\1\]#is', static function (array $m) use (&$blocks): string {
+        $text = self::replaceCallback(self::CODE_BLOCK, static function (array $m) use (&$blocks): string {
             $blocks[] = $m[2];
             return "\x00" . (count($blocks) - 1) . "\x00";
         }, $text);
 
         $text = self::quotes($text);
-        $text = $textOnly ? self::shownMyCode($text, $forum) : self::inline($text, !empty($forum['allowvideocode']));
+        $text = $textOnly ? self::shownMyCode($text, $forum)
+            : self::inline($text, !empty($forum['allowvideocode']), !empty($forum['allowimgcode']));
 
         // PCRE's own `\x00` escape: PHP before 8.2 refuses a literal NUL byte in a pattern.
         return self::replaceCallback('#\x00([0-9]+)\x00#', static function (array $m) use ($blocks): string {
@@ -525,10 +600,14 @@ final class Text
 
     /**
      * The MyCode after quotes and code blocks, rendered as text the way MyBB's text renderer
-     * does (`text_parse_message`): an image or a video becomes its address, a link its label
-     * and its address.
+     * does (`text_parse_message`), but for what the reader does not see (shared rule S1): a
+     * link is its label alone ({@see linkLabels}), and an image MyBB shows as an image is
+     * its `alt` — the text the reader sees when it does not load, which its author can
+     * choose — without its address ({@see imageAlt}; `$images`, the forum's image MyCode).
+     * An image tag MyBB shows as a link or leaves as typed, and a video, become their
+     * address.
      */
-    private static function inline(string $text, bool $video): string
+    private static function inline(string $text, bool $video, bool $images = false): string
     {
         $find = [
             '#\[(b|u|i|s|url|email)\](.*?)\[/\1\]#is'                                                  => '$2',
@@ -541,8 +620,6 @@ final class Text
             '#\[align=(left|center|right|justify)\](.*?)\[/align\]#si'                                   => '$2',
             '#\[font=\s*("?)([a-z0-9 ,\-_\'"]+)\1\s*\](.*?)\[/font\]#si'                                => '$3',
             '#\[img(?:=[1-9][0-9]*x[1-9][0-9]*)?(?: align=(?:left|right))?\]\s*(https?://[^<>"\']+?)\[/img\]#is' => '$1',
-            '#\[url=((?!javascript)[a-z]+?://)([^\r\n"<]+?)\](.+?)\[/url\]#si'                         => '$3 ($1$2)',
-            '#\[url=((?!javascript:)[^\r\n"<&\(\)]+?)\](.+?)\[/url\]#si'                               => '$2 ($1)',
             '#\[attachment=[0-9]+\]#i'                                                                 => '',
             '#\[hr\]#i'                                                                                => "\n",
         ];
@@ -551,6 +628,12 @@ final class Text
         }
         for ($pass = 0; $pass < 20; $pass++) {
             $before = $text;
+            if ($images) {
+                $text = self::replaceCallback(self::IMAGE, static function (array $m): string {
+                    return ' ' . self::imageAlt($m[1]) . ' ';
+                }, $text);
+            }
+            $text = self::linkLabels($text);
             $text = self::replace(array_keys($find), array_values($find), $text);
             // Lists, innermost first: each `[*]` starts a line.
             $text = self::replaceCallback('#\[list(?:=(?:a|A|i|I|1))?\]((?:(?!\[list(?:=[aAiI1])?\]).)*?)\[/list\]#is',
@@ -580,18 +663,12 @@ final class Text
             $before = $text;
             // A link first, by its label, before the images: `[url=X][img]…[/img][/url]` is an
             // image link, not the text "[url=X][/url]" that removing the image first would
-            // leave. MyBB shows a `data:` address instead of the link (`mycode_parse_url`).
-            foreach (['#\[url=((?!javascript)[a-z]+?://)([^\r\n"<]+?)\](.+?)\[/url\]#si' => [3, 1, 2],
-                '#\[url=((?!javascript:)[^\r\n"<&\(\)]+?)\](.+?)\[/url\]#si' => [2, 1, 1]] as $pattern => $parts) {
-                $text = self::replaceCallback($pattern, static function (array $m) use ($parts): string {
-                    $address = $parts[1] === $parts[2] ? $m[$parts[1]] : $m[$parts[1]] . $m[$parts[2]];
-                    return ' ' . (stripos($address, 'data:') === 0 ? $address : $m[$parts[0]]) . ' ';
-                }, $text);
-            }
-            // MyBB 1.8.41's own image patterns (`parse_mycode`): at most one line break before
-            // the address, nothing else; any other `[img]` stays on the page as typed.
+            // leave.
+            $text = self::linkLabels($text, ' ');
+            // MyBB 1.8.41's own image patterns ({@see IMAGE}); any other `[img]` stays on
+            // the page as typed.
             if ($images) {
-                $text = self::replace('#\[img(?:=[1-9][0-9]*x[1-9][0-9]*)?(?: align=(?:left|right))?\](?:\r\n?|\n?)https?://[^<>"\']+?\[/img\]#is', ' ', $text);
+                $text = self::replace(self::IMAGE, ' ', $text);
             }
             // MyBB's video pattern (no line breaks), and only a video it embeds goes; one it
             // leaves as typed stays text — and is kept as typed, not read again below.
@@ -604,6 +681,43 @@ final class Text
             if ($text === $before) {
                 break;
             }
+        }
+        return $text;
+    }
+
+    /**
+     * What MyBB 1.8.41 puts in an image's `alt` (`Postparser::mycode_parse_img`), without
+     * the board language's frame ("[Image: …]"): the last part of its address, cut to its
+     * first 40 characters, "..." and its last 10 when longer than 55, with the characters
+     * `encode_url` encodes encoded. Never the address itself.
+     *
+     * @param string $url The image's address, as in the message.
+     */
+    private static function imageAlt(string $url): string
+    {
+        $alt = basename(str_replace(["\n", "\r"], '', trim($url)));
+        if (mb_strlen($alt, 'UTF-8') > 55) {
+            $alt = mb_substr($alt, 0, 40, 'UTF-8') . '...' . mb_substr($alt, -10, null, 'UTF-8');
+        }
+        return strtr($alt, self::URL_ENTITIES);
+    }
+
+    /**
+     * `[url=X]Y[/url]` as its reader sees it: the label Y alone — the address is not on the
+     * page (shared rule S1; it is counted in `links`, S2) — except where MyBB shows the
+     * address instead of a link (a `data:` address, `mycode_parse_url`).
+     *
+     * @param string $pad Around each label: '' for the text as read, ' ' where only whether
+     *     something shows matters ({@see shownMyCode}).
+     */
+    private static function linkLabels(string $text, string $pad = ''): string
+    {
+        foreach (['#\[url=((?!javascript)[a-z]+?://)([^\r\n"<]+?)\](.+?)\[/url\]#si' => [3, 1, 2],
+            '#\[url=((?!javascript:)[^\r\n"<&\(\)]+?)\](.+?)\[/url\]#si' => [2, 1, 1]] as $pattern => $parts) {
+            $text = self::replaceCallback($pattern, static function (array $m) use ($parts, $pad): string {
+                $address = $parts[1] === $parts[2] ? $m[$parts[1]] : $m[$parts[1]] . $m[$parts[2]];
+                return $pad . (stripos($address, 'data:') === 0 ? $address : $m[$parts[0]]) . $pad;
+            }, $text);
         }
         return $text;
     }
@@ -793,16 +907,68 @@ final class Text
     }
 
     /**
-     * The distinct links of a message, lower-cased, in order.
+     * The distinct links of a message, lower-cased, in order: where MyBB's link MyCode
+     * points ({@see LINK_MYCODE}, {@see href}; outside `[code]`/`[php]`, which show it as
+     * written), and every bare address ({@see LINK}) — in a label too.
      *
      * @return array<int,string>
+     * @throws TextError When PCRE fails on it.
      */
     private static function urls(string $message): array
     {
-        if (self::matchAll(self::LINK, self::valid($message), $m) === 0) {
+        $text = self::valid($message);
+        $blocks = [];
+        $text = self::replaceCallback(self::CODE_BLOCK, static function (array $m) use (&$blocks): string {
+            $blocks[] = $m[0];
+            return "\x00" . (count($blocks) - 1) . "\x00";
+        }, $text);
+        // Each link MyCode becomes a numbered mark, then its label: the marks keep the order
+        // of appearance, and — quoted, as MyBB's `<a href="…">` is — end any address around
+        // them.
+        $hrefs = [];
+        foreach (self::LINK_MYCODE as $pattern => $groups) {
+            $text = self::replaceCallback($pattern, static function (array $m) use (&$hrefs, $groups): string {
+                $address = '';
+                foreach ($groups[0] as $group) {
+                    $address .= $m[$group];
+                }
+                $hrefs[] = self::href($address);
+                return " \"\x01" . (count($hrefs) - 1) . "\x01\" " . ($groups[1] > 0 ? $m[$groups[1]] . ' ' : '');
+            }, $text);
+        }
+        if ($blocks !== []) {
+            $text = self::replaceCallback('#\x00([0-9]+)\x00#', static function (array $m) use ($blocks): string {
+                return $blocks[(int)$m[1]] ?? $m[0];
+            }, $text);
+        }
+        if (self::matchAll('~"\x01([0-9]+)\x01"|' . self::LINK . '~iu', $text, $m, PREG_SET_ORDER) === 0) {
             return [];
         }
-        return array_values(array_unique(array_map('strtolower', $m[0])));
+        $links = [];
+        foreach ($m as $match) {
+            $link = isset($match[1]) && $match[1] !== '' ? ($hrefs[(int)$match[1]] ?? null) : $match[0];
+            if ($link !== null) {
+                $links[] = strtolower($link);
+            }
+        }
+        return array_values(array_unique($links));
+    }
+
+    /**
+     * Where MyBB 1.8.41 links a `[url]` (`Postparser::mycode_parse_url`): nowhere for a
+     * `data:` address, which it shows as text (a `javascript:` one its patterns leave as
+     * typed); `http://` in front of one without a scheme (`[a-z0-9]+://`), as MyBB puts it
+     * there.
+     *
+     * @return string|null The address; null for no link.
+     */
+    private static function href(string $address): ?string
+    {
+        if (stripos($address, 'data:') === 0) {
+            return null;
+        }
+        $scheme = strpos($address, '://');
+        return $scheme !== false && $scheme > 0 && ctype_alnum(substr($address, 0, $scheme)) ? $address : 'http://' . $address;
     }
 
     /**

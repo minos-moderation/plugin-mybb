@@ -88,7 +88,12 @@ again, and a moderator's approval in the ModCP is MyBB's own (nothing sent). Not
 `datahandler_post_insert_subscribed` hook, which passes a post datahandler the plugin does
 not have. A notification that throws is logged as `error`/`notify` with the post id; the
 post stays published. The copied block needs upkeep with every 1.8.x; the live run
-compares the counts with a post visible at once (`k31_notifications`).
+compares the counts with a post visible at once (`k31_notifications`). Known limitation:
+the notifications of a post a verdict publishes are built inside the webhook's request
+(one mail-queue row or one PM per recipient), so on a thread or forum with many
+subscribers the answer to the gateway takes longer — against the receiving checklist's
+"answer 2xx fast", well inside the gateway's 10 seconds for an ordinary board, but not
+bounded by the plugin. Not changed in this version.
 
 **`wsparcie`** (shared rule D9.9, A7). Whatever the verdict, an applied delivery with
 `wsparcie` adds a report to MyBB's report centre (`Platform::reportForSupport`): the
@@ -115,6 +120,37 @@ a fail-open publication published. Nothing is sent to the author. The ACP page l
 `wsparcie` rows on their own list (`Platform::supportRows`), which the other rows never
 push out. (`nieocenione` carries no `wsparcie`: `WebhookPayload::parse` reads none from a
 payload without a verdict.) Verified on a live forum: `k41_support`.
+
+The signal comes even when a person decided first (A7, the owner's decision of
+2026-11-01): a verdict the plugin does not apply — a moderator approved, soft-deleted or
+edited the post while it waited, or after the failure mode held it for its timeout or
+published it; its author edited it since, so the verdict is about an older revision — still
+adds the report, with the comment `minos_support_report_after_decision` ("the verdict came
+after a moderator's decision or an edit of the post: the plugin did not change the post"),
+and nothing else of the verdict is applied: the post stays visible, deleted or held as the
+person left it (`Applier::supportAfterDecision`, from `Receiver::handle`). A post a moderator
+dealt with before its verdict's claim (the row still waiting) is `superseded` by that
+verdict and gets the same comment (`Applier::signalSupport`). Once per post and revision:
+`Platform::claimSupportSignal` is one conditional `UPDATE` that sets `support` (the ACP's
+list, the report list's "last report" cell) and `support_rev` (one more than the newest
+revision signalled), and takes nothing once that revision or a newer one was signalled, nor
+while a step applies the same revision (`applying`); a normal signal records `support_rev`
+too, in the same `UPDATE` as the verdict's outcome (`Applier::signalMark`), so a repeat
+that comes before the report is written raises no second one with the note, and a repeat
+the late path claims again (a cut text's `bezpieczne` keeps `auto_published`) finds the
+revision signalled. A repeated delivery therefore adds no second report even after a
+moderator closed the first. A delivery that finds the row `applying` and takes no signal —
+the task timing the post out, a moderator's edit or another delivery holds it — answers
+`503`: that step's outcome is not known yet, and the gateway's redelivery meets it (the
+verdict applied late or as on time, or the signal raised after the decision); a `200` there
+would lose the verdict and its `wsparcie` for good. A report after a decision that cannot
+be written is logged as `error`/`support`, its claim is given back
+(`Platform::releaseSupportSignal`, `support` stays set) and the webhook answers `500`, so the
+redelivery raises it. `support` is only ever set — neither
+the next revision's verdict nor `Platform::revise` clears it. Activation of an upgraded
+table sets `support_rev` for rows an earlier version already reported. Verified on a live
+forum: `a7_support_after_decision`, and end to end (`EndToEndTest`: an author's edit and a
+moderator's approval after the timeout, each verdict delivered twice).
 
 **The ModCP's moderation queue** (K-42). `modcp.php?action=modqueue` builds the list of
 queued posts (threads) from MyBB's templates into its global `$posts` (`$threads`), runs
@@ -147,9 +183,24 @@ The text readers SEE, following MyBB's own text renderer
   and the content of `<textarea>`, `<title>`, `<xmp>`, `<plaintext>`, `<iframe>`,
   `<noembed>`, `<noframes>` and `<noscript>` stays — as the live run shows
   (`reader-view.json`).
-- MyCode: `[quote=NAME]` → "NAME napisał(a):"; `[url=X]Y[/url]` → "Y (X)"; `[img]X[/img]`,
-  `[video=…]X[/video]` → X beside other text; `[code]`/`[php]` keep their content; formatting tags go; MyCode
-  MyBB would not parse stays literally.
+- MyCode: `[quote=NAME]` → "NAME napisał(a):"; `[url=X]Y[/url]` → "Y" alone (shared rule
+  S1: the reader does not see the address; it is counted in `links`, S2), except a `data:`
+  address, which MyBB shows instead of a link (`mycode_parse_url`); an image MyBB shows as
+  an image (`Text::IMAGE`, MyBB's own patterns, with the forum's image MyCode on) is its
+  `alt` without its address (F7/S2): the text a reader sees when the image does not load,
+  which its author chooses — the address's last part, cut as `mycode_parse_img` cuts it
+  (40 characters, "...", the last 10, when longer than 55) and encoded as `encode_url`
+  encodes it, without the board language's "[Image: …]" frame (`Text::imageAlt`); an image
+  with nothing else that shows is still no text (F7); an `[img]` MyBB shows as a link (image MyCode off) or
+  leaves as typed, and `[video=…]X[/video]`, → X beside other text; `[code]`/`[php]` keep
+  their content; formatting tags go; MyCode MyBB would not parse stays literally. (A post
+  with a labelled link or an image sent by a version that still sent "Y (X)" or the
+  image's address, whose verdict comes after the upgrade, renders to another text than its
+  digest. On time it is held for a human as `text_changed`, the safe direction. Late —
+  after the failure mode published it (fail-open) — nothing is applied: it stays public
+  even when the verdict is `zablokowane`, and it leaves the ACP's list of posts published
+  unassessed (`auto_published` is cleared). That is not the safe direction; only a person
+  who looks at it takes it down.)
 - What heads the post goes in front, a blank line between the parts (`Text::ofPost`): a
   new thread's subject (always escaped, never parsed), then its poll — the question
   escaped like a subject, each option on its own line through the post rules above, as
@@ -180,8 +231,9 @@ The text readers SEE, following MyBB's own text renderer
   characters — U+200B, U+2060, U+FEFF, `&#173;`… —, `\p{Cc}` controls, `\p{M}` marks
   without a base such as U+034F or U+FE0F, the Hangul fillers and the blank Braille
   pattern). A bare address the reader sees is text (`https://…`, `[url]X[/url]`, an image
-  or video tag MyBB leaves as a link or as typed); beside other text, an image's address
-  and a hint are sent as before. The cases are MyBB 1.8.41's reader view as the live run
+  or video tag MyBB leaves as a link or as typed); beside other text, an image's `alt` (an
+  `[img]`'s as MyBB builds it, an HTML image's `alt`/`title`) is sent, an image's address
+  never. The cases are MyBB 1.8.41's reader view as the live run
   recorded it (`reader-view.json`, checked by `ReaderViewTest`). The reading is linear (a
   link is replaced by its label, no recursion), and when PCRE gives up on it the body
   counts as text: in doubt, the post is sent. When what comes before the first `[`, `<`,
@@ -206,6 +258,20 @@ The text readers SEE, following MyBB's own text renderer
 - `meta`: `links` (distinct links), `link_domains` (up to 10 registrable domains — the last
   two host labels, or three under a two-label public suffix from a short list; an
   approximation of the Public Suffix List), `author_first_post` for registered authors.
+  Both are read from what is sent, as stored (`Text::sourceOf`), without the images MyBB
+  shows as images in the message and the poll's options — `[img]` with the image MyCode on
+  (outside `[code]`/`[php]`, which show it as written) and `<img>` with HTML on: an
+  image's address is not a link (S2). An `[img]` MyBB shows as a link counts. A link is a
+  bare address (`https://…`, `www.…`) or where MyBB's link MyCode points: its four
+  patterns (`url_simple`, `url_simple2`, `url_complex`, `url_complex2`, in MyBB's order,
+  outside `[code]`/`[php]`), with `http://` in front of an address without a scheme, as
+  `mycode_parse_url` puts it — so `[url=spam.example]here[/url]`, `[url]spam.example[/url]`
+  and `[url=ftp://…]` count, in the message and in the poll's options; a `data:` address,
+  which MyBB shows as text, does not (`Text::urls`, `Text::href`). MyBB matches these
+  patterns on the message with `<` escaped; on an HTML forum a `<` ends its address, so
+  there the plugin may count a link MyBB does not make (the safe direction for a spam
+  signal). A subject or a poll question is not parsed by MyBB, but link MyCode typed there
+  counts too.
 
 ## The row's life
 
@@ -255,7 +321,9 @@ applying for more than 5 min ─► back to claimed_from (the task)
   an `auto_published` `published`) to `applying` with a conditional `UPDATE`, recording
   `claimed_from` and `claimed_at`; only the caller that changed it applies anything.
   Repeated and concurrent deliveries, and the task beside the webhook, apply nothing twice.
-  The task gives back claims older than 5 minutes (their holder died).
+  A delivery that meets a row another step has claimed answers `503`, so the gateway
+  delivers it again after that step. The task gives back claims older than 5 minutes
+  (their holder died).
 - The receive timeout is at least 20 minutes (the gateway's 15-minute TTL plus grace). A
   post the failure mode published (`fail-open`) is marked `auto_published`; a verdict that
   still arrives is applied by `Applier::late` while the post is public and untouched
@@ -313,7 +381,7 @@ applying for more than 5 min ─► back to claimed_from (the task)
   receiver accepts `mybb:<pid>` and `mybb:<pid>.<n>` (n ≥ 1, no leading zero) and applies a
   verdict only to the row's current revision: its claim names the revision, so an edit
   between the receiver's read and its claim wins. A verdict for another revision gets `200`
-  and nothing else. A moderator's edit of a waiting post, or of one held for its timeout,
+  and nothing else but its `wsparcie` signal (below). A moderator's edit of a waiting post, or of one held for its timeout,
   leaves it to humans: `superseded` with `edited`, nothing sent, no late verdict applied,
   listed on the ACP page. Edits of published posts are not
   assessed again (shared rule D9.2, not adopted yet).
@@ -335,7 +403,8 @@ applying for more than 5 min ─► back to claimed_from (the task)
   `tekst` in `sent_sha256` (never the text); before any verdict, on time or late, the post
   is rendered again (`Text::forPost` with the forum's current options) and compared. No
   match (a change past the edit hook, another rendering, a row without a digest) → on time
-  `held` with `text_changed`, late nothing (the late window closes).
+  `held` with `text_changed`, late nothing (the late window closes): a post the failure
+  mode published stays public whatever the late verdict says, `zablokowane` included.
 - The masked text replaces the message only when it stands for the whole post (see
   `Applier`): not when the text sent was cut, not unless every character of the mask is
   the one sent or `█` (`Text::maskFits`), not when a mask falls in a new thread's subject,
@@ -363,6 +432,21 @@ with two counts.
 secret. Log entries are kept 30 days; decided rows — with the verdict, the original text
 of a censored post and the mask of a held one — 30 days after their decision (shared rule
 D9.11, `Task::DECIDED_RETENTION_S`).
+
+## The shared rules
+
+The rules every Minos plugin shares are client-php's `docs/plugin-behaviour.md`; the
+entries above say how this plugin carries them out. This table names, for the rules whose
+form differs between the plugins, this plugin's mechanism, a deviation, or an optional rule
+left out.
+
+| Id | In short | MyBB: mechanism, or deviation |
+|---|---|---|
+| `F5d` | optional: re-send what fail-open published unassessed once the limit renews | not implemented: the rule is optional and off by default (nie wdrożono, reguła opcjonalna); not a deviation |
+| `F7` | no text to assess → the failure mode; a bare address and visible punctuation are text | `Text::shows`: an image MyBB shows as an image, an embedded video, an attachment, a link without a label (`alt`/`title` notwithstanding) or only invisible characters → `no_text`, nothing sent. An emoticon (`:)`) is text: MyBB shows its smilie image, but the characters the author typed are sent and assessed; `NoTextTest` |
+| `F7`, `S2` | an image's address is not text and not a link | `[img]` MyBB shows as an image (its image MyCode on) and `<img>` on an HTML forum add only their `alt` beside other text, never the address (`Text::visible`; an `[img]`'s `alt` as `mycode_parse_img` builds it from the address's last part, `Text::imageAlt`), no text alone (`Text::shows`) and no link (`Text::sourceOf` with the forum's options); an `[img]` MyBB shows as a link (image MyCode off) or leaves as typed is text and a link; `LinksAndImagesTest` |
+| `S1` | `tekst` is what the reader sees; never an `href` | `[url=X]Y[/url]` is sent as `Y` alone (a `data:` address, which MyBB shows instead of a link, as the address), and `X` counts as a link however it is written (MyBB's link patterns, `http://` in front where MyBB puts it: `Text::urls`); an HTML forum's `alt`/`title` next to the text; `LinksAndImagesTest`, `TextTest` |
+| `A7` | `wsparcie`: an active signal in the moderators' queue, whatever the verdict | a report in the ModCP's report centre (`Platform::reportForSupport`), the row on the ACP's support list; never deleted, rejected or hidden automatically. Also after a person's decision (a moderator's approval, deletion or edit, an author's edit: an older revision), with a note saying so and the post left as the person left it; once per post and revision; `SupportTest`, `EndToEndTest`, live `a7_support_after_decision` |
 
 ## Tests
 
@@ -567,7 +651,9 @@ saved through the plugin's fields (the page shows prefixes only); an author's re
 and sent once to the gateway; the signed verdict publishes it (`visible = 1`); a censored
 reply published with its mask; a late verdict for a reply MyBB's `task.php` held after the
 fail-closed timeout applied as on time, and one for a reply a moderator approved in the
-ModCP meanwhile changing nothing (`k43_late_after_timeout`); a reply with `wsparcie`
+ModCP meanwhile changing nothing (`k43_late_after_timeout`) — and, with `wsparcie`,
+delivered twice, one report noting the decision, the post left published
+(`a7_support_after_decision`); a reply with `wsparcie`
 published and reported in the ModCP's report list and the header, and a blocked one held,
 not deleted, with "usuń (miękko)", nothing to the author (`k41_support`); the ModCP's
 moderation queue with the plugin's note after a held censored reply (verdict, categories,

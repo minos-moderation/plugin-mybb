@@ -141,16 +141,15 @@ final class NoTextTest extends PluginTestCase
         return [
             'a bare address'              => ['https://example.com/strona', [], 'https://example.com/strona'],
             'an address in [url]'         => ['[url]https://example.com/strona[/url]', [], 'https://example.com/strona'],
-            'a link with a label'         => ['[url=https://example.com/]opis[/url]', [], 'opis (https://example.com/)'],
-            'an image beside text'        => ['Patrz: [img]https://example.com/a.png[/img]', [], 'Patrz: https://example.com/a.png'],
+            'a link with a label'         => ['[url=https://example.com/]opis[/url]', [], 'opis'],
+            'an image beside text: its alt' => ['Patrz: [img]https://example.com/a.png[/img]', [], 'Patrz: a.png'],
             'an image MyBB shows as a link' => ['[img]https://example.com/a.png[/img]', ['allowimgcode' => 0], 'https://example.com/a.png'],
             'a video of an unknown site'  => ['[video=nieznany]https://example.com/film[/video]', [], 'https://example.com/film'],
             'a video tag MyBB leaves'     => ['[video=youtube]to nie adres[/video]', [], 'to nie adres'],
             'an empty link MyBB leaves'   => ['[url=https://example.com/][/url]', [], '[url=https://example.com/][/url]'],
             'a quote of an image'         => ['[quote=Ktoś][img]https://example.com/a.png[/img][/quote]', [],
-                "Ktoś napisał(a):\nhttps://example.com/a.png"],
-            'an image and &shy; MyBB shows as typed' => ['[img]https://example.com/a.png[/img]&shy;', [],
-                'https://example.com/a.png&shy;'],
+                "Ktoś napisał(a):\na.png"],
+            'an image and &shy; MyBB shows as typed' => ['[img]https://example.com/a.png[/img]&shy;', [], 'a.png &shy;'],
             'an image tag with a space before its address' => ['[img] https://example.com/ obelga obelga[/img]', [],
                 'https://example.com/ obelga obelga'],
             'an image tag with two line breaks' => ["[img]\n\nhttps://example.com/a.png[/img]", [], 'https://example.com/a.png'],
@@ -161,6 +160,7 @@ final class NoTextTest extends PluginTestCase
             'a site name MyBB does not know' => ['[video=YouTube]https://www.youtube.com/watch?v=x[/video]', [],
                 'https://www.youtube.com/watch?v=x'],
             'a word and U+200B'           => ["obelga\u{200B}", [], "obelga\u{200B}"],
+            'an emoticon MyBB shows as its smilie' => [':)', [], ':)'],
             'a letter and its combining mark' => ["e\u{0301}", [], "e\u{0301}"],
             'HTML: a comment start inside a title' => ['Miły tekst <b title="<!--">obelga</b><b title="-->">',
                 ['allowhtml' => 1], 'Miły tekst <!-- obelga -->'],
@@ -296,7 +296,7 @@ final class NoTextTest extends PluginTestCase
         $this->forum->edit($pid, 'Opis: [img]https://example.com/a.png[/img]', 'RE: Wątek');
         task_minos(['tid' => 1]);
         self::assertCount(1, $this->forum->transport->requests);
-        self::assertSame(['mybb:' . $pid . '.1', 'Opis: https://example.com/a.png'],
+        self::assertSame(['mybb:' . $pid . '.1', 'Opis: a.png'],
             [$this->forum->transport->lastBody()['elementy'][0]['id'], $this->forum->transport->lastBody()['elementy'][0]['tekst']]);
     }
 }

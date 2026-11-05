@@ -88,10 +88,10 @@ final class TextTest extends TestCase
 
     public function testMyCodeIsRenderedAsItsReadersSeeIt(): void
     {
-        self::assertSame("Pogrubione i opis linku (https://example.com/a)\nkolor duże",
+        self::assertSame("Pogrubione i opis linku\nkolor duże",
             Text::visible("[b]Pogrubione[/b] i [url=https://example.com/a]opis linku[/url]\r\n[color=red]kolor[/color] [size=large]duże[/size]"));
-        self::assertSame('Zdjęcie: https://example.com/a.png koniec', Text::visible('Zdjęcie: [img]https://example.com/a.png[/img] [attachment=12] koniec'));
-        self::assertSame('https://example.com/b.png', Text::visible('[img=100x50 align=left]https://example.com/b.png[/img]'));
+        self::assertSame('Zdjęcie: a.png koniec', Text::visible('Zdjęcie: [img]https://example.com/a.png[/img] [attachment=12] koniec'));
+        self::assertSame('b.png', Text::visible('[img=100x50 align=left]https://example.com/b.png[/img]'));
         self::assertSame('https://youtu.be/x', Text::visible('[video=youtube]https://youtu.be/x[/video]'));
         self::assertSame("a\nb", Text::visible('[list][*]a[*]b[/list]'));
         self::assertSame("[b]\ni nie [i]zamknięte", Text::visible('[code][b][/code] i nie [i]zamknięte'), 'a code block is shown as written');
@@ -252,7 +252,7 @@ final class TextTest extends TestCase
         self::assertFalse($sent['error']);
         self::assertSame(self::bomb(10), $sent['tekst']);
         $closed = Text::forPost('Widoczne SLOWO [url=http://a.pl]x[/url]');
-        self::assertSame([false, 'Widoczne SLOWO x (http://a.pl)'], [$closed['error'], $closed['tekst']]);
+        self::assertSame([false, 'Widoczne SLOWO x'], [$closed['error'], $closed['tekst']]);
     }
 
     public function testAMaskFitsOnlyWhereItReplacesCharactersOneForOne(): void
