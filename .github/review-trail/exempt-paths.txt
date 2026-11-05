@@ -1,0 +1,16 @@
+# The paths a pull request may change without a `Review:` line for its head (CLAUDE.md;
+# the rule is "Reviews" in minos-moderation/minos, docs/claude/sessions.md): what
+# programista-prosty may change (.claude/agents/programista-prosty.md, "You may change"),
+# narrowed where its list is a judgement. Every other path is on the risk list, so a new
+# folder starts there. Not here: the language files (MyBB runs them, and a key or a `{1}`
+# placeholder is never the Sonnet agent's), the test fixtures (the tests prove the plugin
+# with them) and mechanical refactors (told by their diff, not by their path). CI reads
+# this list from the pull request's base.
+#
+# One pattern a line: `dir/` matches everything below dir, `**/name` a file of that name in
+# any folder, anything else one exact path. A `!` line is a risk path inside an exempt one
+# and wins over it. tests/Repo/ReviewTrailTest.php pins the risk markers of
+# tests/Repo/ClaudeRulesTest.php against this list.
+README.md
+docs/development.md
+!**/CLAUDE.md
