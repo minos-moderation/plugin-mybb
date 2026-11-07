@@ -120,6 +120,10 @@ final class ReceiverTest extends PluginTestCase
         $this->forum->set(['minos_webhook_secret' => '   ']);
         self::assertSame(401, $this->forum->deliver(self::payload($pid), '   '), 'a blank secret verifies nothing');
         self::assertSame(401, $this->forum->deliver(self::payload($pid), ''));
+        // Shared rule F4: a secret shorter than 16 characters is not usable, even when the
+        // delivery's signature matches it.
+        $this->forum->set(['minos_webhook_secret' => 'krotki-sekret']);
+        self::assertSame(401, $this->forum->deliver(self::payload($pid), 'krotki-sekret'), 'a short secret verifies nothing');
         $this->assertStillWaiting($pid);
     }
 

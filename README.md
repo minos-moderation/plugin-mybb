@@ -94,7 +94,7 @@ dezaktywacji, wtyczka wysyła ponownie przy pierwszym przebiegu zadania.
 | Włączona | Wyłączona wtyczka nic nie robi: nie zatrzymuje nowych postów, nie stosuje werdyktów ani trybu awaryjnego. Posty już zatrzymane zostają w kolejce moderacji dla ludzi, a werdykty doręczone w tym czasie przepadają. | nie |
 | Adres bramy | Adres bramy Wergiliusza. Musi zaczynać się od `https://` (`http://` tylko dla atrapy bramy na tym samym komputerze). | `https://gateway.wergiliusz.app` |
 | Klucz API | Klucz B2B `wgb2b_…`. Po zapisaniu panel pokazuje tylko jego początek. Puste pole przy zapisie zostawia zapisany klucz; pole „Usuń zapisaną wartość” go kasuje. | — |
-| Sekret webhooka | Sekret do sprawdzania podpisu werdyktów. Zapisywany i pokazywany jak klucz. | — |
+| Sekret webhooka | Sekret do sprawdzania podpisu werdyktów: 16–256 widocznych znaków ASCII, bez spacji (sekret w innej postaci wtyczka traktuje jak brak sekretu: webhook odpowiada `401`, a komunikat w panelu mówi o złym formacie). Zapisywany i pokazywany jak klucz. | — |
 | Profil oceny | `forum_adult` (forum dla dorosłych) albo `forum_teen` (forum dla dzieci i młodzieży). Musi być na liście profili klucza. | `forum_adult` |
 | Tryb awaryjny | Co zrobić z postem bez werdyktu: **zostawić w kolejce moderacji** (fail-closed) albo **opublikować bez oceny** (fail-open). | fail-closed |
 | Czas oczekiwania na werdykt | Minuty, po których post bez werdyktu dostaje tryb awaryjny. **Najmniej 20** = 15 minut, przez które brama próbuje doręczyć werdykt, i 5 minut zapasu; mniejsza wartość jest traktowana jak 20. **Najwięcej 1440** (doba); większa jest traktowana jak 1440. | 20 |

@@ -14,7 +14,7 @@ final class SettingsTest extends TestCase
 {
     private const WORKING = [
         'minos_enabled' => '1', 'minos_gateway_url' => 'https://gateway.wergiliusz.app',
-        'minos_api_key' => 'wgb2b_abcdefgh12345678', 'minos_webhook_secret' => 'sekret', 'minos_profile' => 'forum_adult',
+        'minos_api_key' => 'wgb2b_abcdefgh12345678', 'minos_webhook_secret' => 'sekret-tylko-do-testow', 'minos_profile' => 'forum_adult',
     ];
 
     public function testAWorkingConfigurationIsActive(): void
@@ -44,8 +44,28 @@ final class SettingsTest extends TestCase
             'a key without its prefix'   => ['minos_api_key', 'abcdefgh'],
             'a key with a line break'    => ['minos_api_key', "wgb2b_abc\r\nX-Evil: 1"],
             'no secret'                  => ['minos_webhook_secret', '  '],
+            'a secret too short'         => ['minos_webhook_secret', 'sekret-15-znakw'],
+            'a secret too long'          => ['minos_webhook_secret', str_repeat('s', 257)],
+            'a space inside the secret'  => ['minos_webhook_secret', 'sekret tylko do testow'],
+            'a secret beyond ASCII'      => ['minos_webhook_secret', 'sekret-tylko-do-testów'],
             'an unknown profile'         => ['minos_profile', 'demo_all'],
         ];
+    }
+
+    /**
+     * Shared rule F4's usable secret, as plugin-wordpress and plugin-phpbb read it: 16 to
+     * 256 visible ASCII characters, surrounding white space trimmed.
+     */
+    public function testAUsableSecretIsSixteenToTwoHundredFiftySixVisibleAsciiCharacters(): void
+    {
+        foreach ([str_repeat('a', 16), str_repeat('~', 256), "  !sekret-tylko-do\x7e  "] as $secret) {
+            $settings = new Settings(['minos_webhook_secret' => $secret] + self::WORKING);
+            self::assertSame(trim($secret), $settings->webhookSecret());
+            self::assertSame([], $settings->problems());
+        }
+        self::assertNull((new Settings(['minos_webhook_secret' => "sekret-tylko\r\ndo-testow"] + self::WORKING))->webhookSecret(),
+            'a line break inside is not trimmed into a secret');
+        self::assertNull((new Settings(['minos_webhook_secret' => "sekret-tylko\x00-do-testow"] + self::WORKING))->webhookSecret());
     }
 
     public function testTheMockGatewayOnThisMachineIsAllowedOverHttp(): void

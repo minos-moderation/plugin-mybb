@@ -57,6 +57,9 @@ final class Settings
     public const MAX_TIMEOUT_MIN = 1440;
 
     /** A B2B key: `wgb2b_` and a token with no whitespace (it goes into a header). */
+    /** A usable webhook secret: 16–256 visible ASCII characters (`\z`: no trailing newline). */
+    private const SECRET_PATTERN = '/^[\x21-\x7e]{16,256}\z/';
+
     private const KEY_PATTERN = '/^wgb2b_[A-Za-z0-9._~-]{1,200}\z/';
 
     /** @var array<string,mixed> */
@@ -149,12 +152,15 @@ final class Settings
     /**
      * The key's webhook secret.
      *
-     * @return string|null Null when it is missing: an empty secret would let anyone sign.
+     * @return string|null Null when it is not usable (shared rule F4): missing — an empty
+     *     secret would let anyone sign — or not 16–256 visible ASCII characters, as
+     *     plugin-wordpress and plugin-phpbb read it (a secret pasted with a space inside, cut
+     *     short or with a character from outside ASCII is a typing error, not the gateway's).
      */
     public function webhookSecret(): ?string
     {
         $secret = trim((string)($this->raw[self::WEBHOOK_SECRET] ?? ''));
-        return $secret === '' ? null : $secret;
+        return preg_match(self::SECRET_PATTERN, $secret) ? $secret : null;
     }
 
     /**
