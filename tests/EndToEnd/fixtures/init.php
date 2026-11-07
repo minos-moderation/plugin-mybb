@@ -16,6 +16,12 @@ if (!defined('IN_MYBB')) {
     die('Direct initialization of this file is not allowed.');
 }
 
+// A database that fails while MyBB starts, as `mysqli_sql_exception` (a RuntimeException)
+// does on PHP 8.1+ with mysqli: EndToEndTest's F10 case.
+if (getenv('MINOS_TEST_INIT_THROWS') === '1') {
+    throw new RuntimeException('test-only failure while MyBB starts');
+}
+
 $minosRepo = (string)getenv('MINOS_TEST_REPO');
 spl_autoload_register(static function (string $class) use ($minosRepo): void {
     $prefix = 'Minos\\MyBB\\Tests\\Support\\';

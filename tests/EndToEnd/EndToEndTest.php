@@ -262,6 +262,43 @@ final class EndToEndTest extends TestCase
     }
 
     /**
+     * Shared rule F10 at the entry: whatever throws before the receiver answers — here
+     * MyBB's start (`inc/init.php`), as a database failure does on PHP 8.1+ with mysqli —
+     * answers `500` from the real `minos-webhook.php`, which the gateway delivers again.
+     * PHP's own page for an uncaught exception is a `200` with `display_errors` on, which
+     * the server here has, and would show the error; the answer shows nothing.
+     */
+    public function testAFailureWhileMyBBStartsAnswers500(): void
+    {
+        [$forumRoot, $forumEnv] = $this->stage();
+        $body = '{"id":"mybb:1","status":"ocenione","kwalifikacja":"bezpieczne","kategorie":[]}';
+        $header = \Minos\Client\Signature::sign(Config::DEFAULT_SECRET, $body, time());
+        $healthy = $this->post((int)parse_url($forumEnv['MINOS_TEST_BBURL'], PHP_URL_PORT), $body, $header);
+        self::assertSame(404, $healthy[0], 'the guard: the same entry answers when MyBB starts (not installed: 404)');
+
+        $failingPort = $this->serve($forumRoot, ['MINOS_TEST_INIT_THROWS' => '1'] + $forumEnv, null, ['display_errors=1']);
+        [$status, $answer] = $this->post($failingPort, $body, $header);
+
+        self::assertSame(500, $status, 'not a 2xx: the gateway delivers again');
+        self::assertStringNotContainsString('test-only failure', $answer, 'nothing of the error is shown');
+    }
+
+    /**
+     * A POST to the staged webhook.
+     *
+     * @return array{0:int,1:string} The status and the body.
+     */
+    private function post(int $port, string $body, string $signature): array
+    {
+        $answer = @file_get_contents("http://127.0.0.1:{$port}/minos-webhook.php", false, stream_context_create(['http' => [
+            'method' => 'POST', 'content' => $body, 'ignore_errors' => true, 'timeout' => 10,
+            'header' => "Content-Type: application/json\r\nX-Wergiliusz-Podpis: {$signature}\r\n",
+        ]]));
+        $status = isset($http_response_header[0]) && preg_match('#^HTTP/\S+ ([0-9]{3})#', $http_response_header[0], $m) ? (int)$m[1] : 0;
+        return [$status, (string)$answer];
+    }
+
+    /**
      * The staged forum served over HTTP next to the mock gateway.
      *
      * @return array{0:string,1:array<string,string>,2:array<string,string>,3:int} The forum
@@ -340,15 +377,21 @@ final class EndToEndTest extends TestCase
      *
      * @param array<string,string> $env
      * @param int|null             $port A port to try first.
+     * @param array<int,string>    $ini  `php -d` settings for the server.
      * @return int The port.
      */
-    private function serve(string $docroot, array $env, ?int $port = null): int
+    private function serve(string $docroot, array $env, ?int $port = null, array $ini = []): int
     {
+        $options = [];
+        foreach ($ini as $setting) {
+            $options[] = '-d';
+            $options[] = $setting;
+        }
         for ($try = 0; $try < 5; $try++) {
             $port = $port !== null && $try === 0 ? $port : random_int(20000, 40000);
             // An array, not a string: a string runs through `sh -c`, and terminating the
             // shell would leave PHP's server running.
-            $server = proc_open([PHP_BINARY, '-S', "127.0.0.1:{$port}", '-t', $docroot],
+            $server = proc_open(array_merge([PHP_BINARY], $options, ['-S', "127.0.0.1:{$port}", '-t', $docroot]),
                 [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes, null, $env + getenv());
             self::assertIsResource($server);
             for ($wait = 0; $wait < 50; $wait++) {

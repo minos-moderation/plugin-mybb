@@ -81,6 +81,14 @@ final class Receiver
     /**
      * Handles one delivery.
      *
+     * Anything that throws on the way — a query of MyBB's `$db` raises
+     * `mysqli_sql_exception` on PHP 8.1+ with mysqli, and MyBB sets no exception handler —
+     * answers `500`, never PHP's own page, which with `display_errors` on is a `200`: the
+     * gateway would count the verdict as delivered and drop it (shared rule F10). The
+     * gateway delivers a `500` again. A step that threw inside the applier has given its
+     * claim back already ({@see Applier::failedStep}); one that threw before a claim
+     * changed nothing.
+     *
      * @param string      $method    The HTTP method.
      * @param string|null $signature The `X-Wergiliusz-Podpis` header, or null.
      * @param string      $body      The exact bytes of the body.
@@ -88,6 +96,18 @@ final class Receiver
      * @return int The HTTP status to answer with.
      */
     public function handle(string $method, ?string $signature, string $body, int $now): int
+    {
+        try {
+            return $this->answer($method, $signature, $body, $now);
+        } catch (\Throwable $e) {
+            return 500; // nothing stored: the gateway delivers again
+        }
+    }
+
+    /**
+     * {@see handle}, which answers for what throws here.
+     */
+    private function answer(string $method, ?string $signature, string $body, int $now): int
     {
         if (strtoupper($method) !== 'POST') {
             return 405;
