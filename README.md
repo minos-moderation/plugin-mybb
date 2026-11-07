@@ -97,7 +97,7 @@ dezaktywacji, wtyczka wysyła ponownie przy pierwszym przebiegu zadania.
 | Sekret webhooka | Sekret do sprawdzania podpisu werdyktów: 16–256 widocznych znaków ASCII, bez spacji (sekret w innej postaci wtyczka traktuje jak brak sekretu: webhook odpowiada `401`, a komunikat w panelu mówi o złym formacie). Zapisywany i pokazywany jak klucz. | — |
 | Profil oceny | `forum_adult` (forum dla dorosłych) albo `forum_teen` (forum dla dzieci i młodzieży). Musi być na liście profili klucza. | `forum_adult` |
 | Tryb awaryjny | Co zrobić z postem bez werdyktu: **zostawić w kolejce moderacji** (fail-closed) albo **opublikować bez oceny** (fail-open). | fail-closed |
-| Czas oczekiwania na werdykt | Minuty, po których post bez werdyktu dostaje tryb awaryjny. **Najmniej 20** = 15 minut, przez które brama próbuje doręczyć werdykt, i 5 minut zapasu; mniejsza wartość jest traktowana jak 20. **Najwięcej 1440** (doba); większa jest traktowana jak 1440. | 20 |
+| Czas oczekiwania na werdykt | Minuty, po których post bez werdyktu dostaje tryb awaryjny. **Najmniej 20**: brama próbuje doręczyć werdykt do chwili krótko przed upływem 15 minut od przyjęcia postu (przy domyślnych ustawieniach bramy około 12 minut), a reszta to zapas; mniejsza wartość jest traktowana jak 20. **Najwięcej 1440** (doba); większa jest traktowana jak 1440. | 20 |
 | Post ocenzurowany | **Opublikuj zamaskowany tekst** albo **zostaw w kolejce moderacji**. | opublikuj |
 | Post zablokowany | **Zostaw w kolejce moderacji** albo **usuń (miękko)** — moderator może go przywrócić. Post z sygnałem „wsparcie” nigdy nie jest usuwany — zostaje w kolejce albo opublikowany. | zostaw w kolejce |
 | Fora | Fora, w których wtyczka moderuje nowe posty. | wszystkie |
@@ -188,7 +188,7 @@ białymi znakami — podwójnymi spacjami, tabulatorami, twardymi spacjami, spac
 początku lub końcu wiersza albo więcej niż jednym pustym wierszem z rzędu: wtyczka wysyła
 go z takimi odstępami ściśniętymi, więc maska nie odpowiada zapisanej treści znak w znak
 (różnica samych końców wiersza CR/LF nie przeszkadza). Oryginał opublikowanego postu zostaje w tabeli wtyczki
-(przez 30 dni). Post ocenzurowany zawsze zostaje w kolejce, gdy: był dłuższy niż 3000
+przez 30 dni od decyzji, tak samo jak zamaskowany tekst postu, który został w kolejce. Post ocenzurowany zawsze zostaje w kolejce, gdy: był dłuższy niż 3000
 znaków, brama zamaskowała coś w tytule wątku, w temacie odpowiedzi albo w ankiecie (wtyczka
 nigdy ich nie zmienia), zamaskowany tekst różni się od wysłanego
 czymś innym niż znaki `█` (inna długość, inne litery), brama nie przysłała zamaskowanego
@@ -394,14 +394,19 @@ numer postu — nigdy treść błędu.
   wtyczka zapisała chwilę przyjęcia (werdykt potrafi wyprzedzić odpowiedź `202`). Liczby
   pochodzą z tabeli wtyczki: bez treści postów i bez zapytań do bramy.
 - **Jak długo wtyczka przechowuje dane postu**: wiersz rozstrzygniętego postu — z werdyktem,
-  kategoriami, oryginałem opublikowanego postu ocenzurowanego i zamaskowanym tekstem
-  postu zatrzymanego w kolejce — jest usuwany 30 dni po rozstrzygnięciu. Sam wysłany
-  tekst nie jest przechowywany (tylko jego skrót SHA-256). Po tym czasie w rejestrach MyBB
-  nie zostaje nic z pracy wtyczki poza samym postem: zatwierdzenia, przywrócenia do kolejki
-  i miękkie usunięcia, które wykonuje wtyczka, nie trafiają do dziennika moderatorów (MyBB
-  zapisuje tam działania wykonane na stronach moderatorów, nie wywołania, których używa
-  wtyczka), MyBB 1.8 nie prowadzi historii edycji (zamaskowany tekst zastępuje treść postu
-  bez śladu), a dziennik zadań MyBB dostaje z każdego przebiegu tylko dwie liczby.
+  kategoriami, oryginałem opublikowanego postu ocenzurowanego i zamaskowaną wersją postu
+  ocenzurowanego, który został w kolejce — jest usuwany 30 dni po rozstrzygnięciu. Sam
+  wysłany tekst nie jest przechowywany (tylko jego skrót SHA-256). Opublikowana zamaskowana
+  wersja jest treścią postu i zostaje razem z nim. Po tych 30 dniach z pracy wtyczki
+  zostają w rejestrach MyBB tylko **zgłoszenia z sygnałem „wsparcie”** w panelu moderatora
+  (Zgłoszona zawartość): numer postu, jego wątku i forum, chwila i komentarz wtyczki
+  z werdyktem — bez treści postu. Wtyczka ich nie usuwa; podlegają zasadom forum, jak
+  każde zgłoszenie, i usuwa je administrator albo moderator. Poza tym nic: zatwierdzenia,
+  przywrócenia do kolejki i miękkie usunięcia, które wykonuje wtyczka, nie trafiają do
+  dziennika moderatorów (MyBB zapisuje tam działania wykonane na stronach moderatorów, nie
+  wywołania, których używa wtyczka), MyBB 1.8 nie prowadzi historii edycji (zamaskowany
+  tekst zastępuje treść postu bez śladu), a dziennik zadań MyBB dostaje z każdego przebiegu
+  tylko dwie liczby. Informacja o prywatności forum powinna wymienić te zgłoszenia.
 
 ## Ograniczenia
 
@@ -442,7 +447,8 @@ numer postu — nigdy treść błędu.
 - Gdy wtyczka jest dezaktywowana albo wyłączona („Włączona = nie”), webhook odpowiada
   `404` i nie stosuje werdyktów, a zadanie nie stosuje trybu awaryjnego ani nie ponawia
   wysyłki; posty już zatrzymane zostają w kolejce moderacji dla ludzi. Brama ponawia
-  doręczenie werdyktu najwyżej przez kilkanaście minut, potem go porzuca. Po ponownym
+  doręczenie werdyktu do chwili krótko przed upływem 15 minut od przyjęcia postu (przy
+  domyślnych ustawieniach bramy około 12 minut), potem go porzuca. Po ponownym
   włączeniu (albo aktywacji) pierwszy przebieg zadania wysyła jeszcze raz posty, które
   wciąż czekały na werdykt, z nowym czasem oczekiwania — zamiast hurtem stosować do nich
   tryb awaryjny.
