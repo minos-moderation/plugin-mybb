@@ -6,8 +6,9 @@ bezpieczny post publikuje, ocenzurowany publikuje z zamaskowanymi fragmentami,
 zablokowany zostawia w kolejce albo usuwa — tak, jak ustawi administrator. Część projektu
 Minos.
 
-> Trasa B2B bramy nie jest jeszcze otwarta produkcyjnie. Do czasu otwarcia wtyczkę można
-> sprawdzić z atrapą bramy (opis dla programistów: `docs/development.md`).
+> **Stan:** trasa B2B bramy jest otwarta produkcyjnie od 25 października 2026 r. Klucz i
+> sekret webhooka wydaje operator bramy. Bez klucza wtyczkę można wypróbować z atrapą
+> bramy (opis dla programistów: `docs/development.md`).
 
 ## Jak to działa
 
