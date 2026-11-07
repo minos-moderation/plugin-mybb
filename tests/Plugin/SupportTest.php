@@ -10,7 +10,7 @@ use Minos\MyBB\Tests\Support\PageEnded;
 use Minos\MyBB\Tests\Support\PluginTestCase;
 
 /**
- * Shared rule D9.9 (A7 of client-php's `docs/plugin-behaviour.md`): `wsparcie` gives the
+ * Shared rule A7 (client-php's `docs/plugin-behaviour.md`): `wsparcie` gives the
  * forum's moderators an active signal in their own queue, whatever the verdict — here a
  * report in MyBB's report centre (ModCP → reported content), announced by MyBB's header.
  * A post with `wsparcie` is never deleted, rejected or hidden automatically: it stays held,
@@ -185,7 +185,7 @@ final class SupportTest extends PluginTestCase
 
     /**
      * @return array<string,array{0:string,1:int}> The failure mode, and the post's
-     *     visibility after the late `zablokowane` with `wsparcie` (never hidden: D9.9).
+     *     visibility after the late `zablokowane` with `wsparcie` (never hidden: A7).
      */
     public function failureModes(): array
     {
@@ -319,7 +319,7 @@ final class SupportTest extends PluginTestCase
     }
 
     /**
-     * A late verdict for a post held after its timeout (D9.10) follows the same rule: with
+     * A late verdict for a post held after its timeout (A6) follows the same rule: with
      * `wsparcie`, `zablokowane` keeps it held even with "usuń (miękko)".
      */
     public function testALateVerdictAfterATimeoutWithSupportKeepsThePostHeld(): void
@@ -364,24 +364,76 @@ final class SupportTest extends PluginTestCase
     }
 
     /**
-     * A report that cannot be written is logged by step and post id — never the error's
-     * text — and the verdict stands.
+     * A report of a verdict this delivery applies that cannot be written (the report centre
+     * refuses the insert): the verdict stands, the error is logged by step and post id —
+     * never its text — and the delivery is not acknowledged (`500`), because nothing else
+     * would raise the signal. The redelivery finds the outcome recorded and raises the
+     * report, once, without the note of a person's decision. On time, late after a fail-open
+     * publication, and late after a fail-closed hold for the timeout.
+     *
+     * @dataProvider appliedVerdicts
      */
-    public function testAReportThatFailsLeavesTheVerdictApplied(): void
+    public function testAReportOfAnAppliedVerdictThatFailsIsRaisedByTheRedelivery(string $case): void
     {
-        $GLOBALS['minos_test']['report_throws'] = true;
-        $pid = $this->heldReply('Zgłoszenie z błędem.');
+        $verdict = 'bezpieczne';
+        if ($case === 'on time') {
+            $pid = $this->heldReply('Zgłoszenie z błędem, na czas.');
+            $expected = [1, Status::PUBLISHED];
+        } elseif ($case === 'after a fail-open publication') {
+            $this->forum->set(['minos_failure_mode' => 'fail-open']);
+            $pid = $this->autoPublished('Zgłoszenie z błędem, po publikacji bez oceny.');
+            $verdict = 'zablokowane';
+            $expected = [1, Status::PUBLISHED];
+        } else {
+            $pid = $this->heldReply('Zgłoszenie z błędem, po czasie oczekiwania.');
+            $this->forum->platform()->updatePending($pid, ['accepted_at' => TIME_NOW - 21 * 60]);
+            task_minos(['tid' => 1]);
+            self::assertSame([Status::HELD, Status::REASON_TIMEOUT], [$this->forum->row($pid)['status'], $this->forum->row($pid)['verdict']],
+                'the guard: held for its timeout');
+            $verdict = 'zablokowane';
+            $expected = [0, Status::HELD];
+        }
+        $payload = self::support($pid, ['kwalifikacja' => $verdict]);
+        $this->forum->pdo->exec('CREATE TRIGGER minos_test_no_report BEFORE INSERT ON mybb_reportedcontent'
+            . " BEGIN SELECT RAISE(ABORT, '" . \Moderation::SECRET_TEXT . "'); END");
 
-        self::assertSame(200, $this->forum->deliver(self::support($pid)));
+        self::assertSame(500, $this->forum->deliver($payload), 'not acknowledged: the gateway delivers again');
 
-        self::assertSame([1, Status::PUBLISHED], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
-        $errors = array_values(array_filter($this->logEntries(), static function (array $entry): bool {
-            return $entry['event'] === 'error';
-        }));
+        $state = function () use ($pid): array {
+            return [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']];
+        };
+        self::assertSame($expected, $state(), 'the verdict stands');
+        self::assertSame($verdict, $this->forum->row($pid)['verdict']);
+        self::assertSame([], $this->forum->reports());
         self::assertSame([['support', $pid]], array_map(static function (array $entry): array {
             return [$entry['code'], (int)$entry['pid']];
-        }, $errors));
+        }, array_values(array_filter($this->logEntries(), static function (array $entry): bool {
+            return $entry['event'] === 'error';
+        }))), 'logged as the signal\'s failure, not as a failed verdict');
+        self::assertSame('0', (string)$this->forum->row($pid)['apply_errors']);
         self::assertStringNotContainsString(\Moderation::SECRET_TEXT, (string)json_encode($this->logEntries()));
+
+        $this->forum->pdo->exec('DROP TRIGGER minos_test_no_report');
+        self::assertSame(200, $this->forum->deliver($payload));
+        self::assertSame(200, $this->forum->deliver($payload), 'a repeat');
+
+        self::assertSame($expected, $state(), 'applied once');
+        $reports = $this->forum->reports();
+        self::assertSame([$pid], array_map('intval', array_column($reports, 'id')));
+        self::assertSame($this->forum->platform()->lang('minos_support_report', $verdict), $reports[0]['reason'],
+            'no person decided: the plain note');
+    }
+
+    /**
+     * @return array<string,array{0:string}>
+     */
+    public function appliedVerdicts(): array
+    {
+        return [
+            'on time'                       => ['on time'],
+            'after a fail-open publication' => ['after a fail-open publication'],
+            'after a timeout hold'          => ['after a timeout hold'],
+        ];
     }
 
     /**

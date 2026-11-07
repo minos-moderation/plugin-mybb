@@ -51,7 +51,7 @@ final class Status
 
     /**
      * Recorded in `verdict` when the gateway refused the post (a limit, an overload) until
-     * after its receive timeout (shared rule D9.3a): the failure mode at once.
+     * after its receive timeout (shared rule F5c): the failure mode at once.
      */
     public const REASON_GATEWAY_LIMIT = 'gateway_limit';
     public const REASON_CONFIG_ERROR = 'config_error';

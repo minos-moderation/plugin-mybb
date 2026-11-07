@@ -504,7 +504,7 @@ final class Platform
      * post the plugin has just published: MyBB 1.8.41 sends them only from `insert_post` and
      * `insert_thread` (`inc/datahandlers/post.php`, the blocks after "Fetch any users
      * subscribed to this thread" and "Queue up any forum subscription notices", only when
-     * `$visible == 1`), never from `Moderation::approve_*` (shared rule D9.8, A4 of
+     * `$visible == 1`), never from `Moderation::approve_*` (shared rule A4 of
      * client-php's `docs/plugin-behaviour.md`). The conditions are MyBB's, copied:
      *
      * - a reply, in a thread that is visible: the thread's subscribers with instant
@@ -698,7 +698,7 @@ final class Platform
 
     /**
      * Takes a row the failure mode held because its verdict did not come in time (`held`
-     * with `timeout`), for a verdict that comes late after all (shared rule D9.10, A6 of
+     * with `timeout`), for a verdict that comes late after all (shared rule A6 of
      * client-php's `docs/plugin-behaviour.md`): one conditional `UPDATE`, as
      * {@see claimPending}, recording `held` as the status it was claimed from.
      *

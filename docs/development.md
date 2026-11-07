@@ -30,6 +30,7 @@ The classes:
 | `Settings` | Reads and checks the settings; everything that decides publish or hold is read fail-closed. |
 | `Text` | Post → `tekst`: what readers see (MyBB's rendering rules, per forum), the first 3000 characters; the link signals. |
 | `TextError` | A PCRE failure inside `Text`: the text could not be read (`error: true`, never `''`). |
+| `SignalError` | The `wsparcie` report of an applied verdict could not be written: the verdict stands, the webhook answers `500`, the redelivery raises the report. |
 | `Gateway` | `POST /api/v1/b2b/oceny` over cURL; reads answers into accepted (`202` only, for the items its `przyjete` names) / retry (429, 408, 5xx, no answer, a 2xx other than 202) / config error. |
 | `Submitter` | The hold (validate hooks), the submission (insert-end hooks), resubmission, edits. |
 | `Receiver` | The webhook's checklist: method, signature (`Signature::check`; a refusal counted with its reason only), payload, id, claim, apply. |
@@ -61,14 +62,14 @@ whose validation already failed (`get_errors()`) raises no flag, and `newreply_s
 `newthread_start` (the form shown again after a later validate hook refused the post) put
 it back.
 
-**Subscription notifications** (shared rule D9.8, A4). `insert_post` and `insert_thread`
+**Subscription notifications** (shared rule A4). `insert_post` and `insert_thread`
 build them inline (`inc/datahandlers/post.php`, the thread-subscription block of
 `insert_post` and the forum-subscription block of `insert_thread`, only when
 `visible == 1`); MyBB 1.8.41 has no function that sends them, and neither
 `Moderation::approve_*` nor `modcp.php`/`moderation.php` send any on approval — verified on
 a live forum (question 2 below). So a post the plugin publishes from the queue — a
 `bezpieczne` verdict, a censored post published with its mask, the failure mode in
-`fail-open`, on time or after the timeout (D9.10) — notifies its subscribers itself, with
+`fail-open`, on time or after the timeout (A6) — notifies its subscribers itself, with
 the setting "Powiadamiaj subskrybentów o postach opublikowanych przez wtyczkę"
 (`minos_notify_subscribers`, on by default; off when another plugin sends them):
 `Applier::publish` reads the thread's and the forum's last post before the approval
@@ -95,7 +96,7 @@ subscribers the answer to the gateway takes longer — against the receiving che
 "answer 2xx fast", well inside the gateway's 10 seconds for an ordinary board, but not
 bounded by the plugin. Not changed in this version.
 
-**`wsparcie`** (shared rule D9.9, A7). Whatever the verdict, an applied delivery with
+**`wsparcie`** (shared rule A7). Whatever the verdict, an applied delivery with
 `wsparcie` adds a report to MyBB's report centre (`Platform::reportForSupport`): the
 `reportedcontent` row `add_report($report, 'post')` stores (`id`/`id2`/`id3` the post, its
 thread and forum, reporter uid 0, the board's "Other" reason with the plugin's comment —
@@ -113,7 +114,10 @@ empty while the list renders. A report of the plugin's still unread for the post
 report of the same post is not looked at, so the post then has two open reports (known
 behaviour: MyBB's `report.php` would add the plugin to the user's report as a second
 reporter, which a uid-0 reporter cannot be). One that fails is
-logged as `error`/`support` and the verdict stands. Such a post is never deleted,
+logged as `error`/`support`, the verdict stands, the revision's signal is given back
+(`Platform::releaseSupportSignal`) and the webhook answers `500` (`SignalError`): the
+redelivery finds the outcome recorded and raises the report, with the plain note, since no
+person decided (`Applier::personDecided`). Such a post is never deleted,
 rejected or hidden automatically: `zablokowane` keeps it held even with "usuń (miękko)",
 and a late `zablokowane` (or a late `ocenzurowane` whose mask cannot be published) leaves
 a fail-open publication published. Nothing is sent to the author. The ACP page lists
@@ -330,7 +334,7 @@ applying for more than 5 min ─► back to claimed_from (the task)
   (`zablokowane` → `unapprove`, `ocenzurowane` → by setting). A moderator's action (the
   post's visibility changed) or an edit (the update hook clears the mark) makes the human
   decision final.
-- Shared rule D9.10 (A6): a post the failure mode held for its timeout (`fail-closed`:
+- Shared rule A6: a post the failure mode held for its timeout (`fail-closed`:
   `held` with `timeout`) still takes a verdict that comes late, applied by
   `Applier::verdict` as if it had come in time (`bezpieczne` publishes, `zablokowane` and
   `ocenzurowane` by setting, `nieocenione` the failure mode again, a post cut at 3000
@@ -344,7 +348,7 @@ applying for more than 5 min ─► back to claimed_from (the task)
   configuration error, a limit) takes no later verdict; no verdict can come for those.
 - A publishing verdict (`bezpieczne`) for a post cut at 3000 characters goes to the failure
   mode (`truncated`): the verdict judged the beginning only.
-- Rule D9.3(a): a refusal whose `ponow_za_s` (as the gateway gave it) ends after the row's
+- Rule F5c: a refusal whose `ponow_za_s` (as the gateway gave it) ends after the row's
   `submitted_at` + timeout gets the failure mode at once (`gateway_limit`). A
   `limit_dobowy_klucza`, `limit_globalny_b2b` or `kolejka_pelna` refusal is kept in the
   datacache entry `minos_refusal` (code, until) for the ACP notice "the gateway does not accept
@@ -384,7 +388,7 @@ applying for more than 5 min ─► back to claimed_from (the task)
   and nothing else but its `wsparcie` signal (below). A moderator's edit of a waiting post, or of one held for its timeout,
   leaves it to humans: `superseded` with `edited`, nothing sent, no late verdict applied,
   listed on the ACP page. Edits of published posts are not
-  assessed again (shared rule D9.2, not adopted yet).
+  assessed again (shared rule S6: adopted, implemented after the gateway's capacity decision).
 - Who can edit a post in the moderation queue, in MyBB 1.8.41: its forum's moderators, and
   its author only while the board setting `showownunapproved` ("Access Own Unapproved
   Threads / Posts", off by default) is on — `editpost.php` and the quick edit
@@ -431,23 +435,49 @@ with two counts.
 `PREFIX_minos_log` holds events with a code and a post id — never content, a key or a
 secret. Log entries are kept 30 days; decided rows — with the verdict, the original text
 of a censored post and the mask of a held one — 30 days after their decision (shared rule
-D9.11, `Task::DECIDED_RETENTION_S`).
+A8, `Task::DECIDED_RETENTION_S`).
 
 ## The shared rules
 
 The rules every Minos plugin shares are client-php's `docs/plugin-behaviour.md`; the
-entries above say how this plugin carries them out. This table names, for the rules whose
-form differs between the plugins, this plugin's mechanism, a deviation, or an optional rule
-left out.
+entries above say how this plugin carries them out. As its rule D1 asks, this table maps
+every identifier to the code and the tests that implement it, to `odstępstwo: …` with the
+issue that closes or accepted it, or, for an optional rule, to `nie wdrożono`.
 
 | Id | In short | MyBB: mechanism, or deviation |
 |---|---|---|
+| `F1` | fail-closed by default; `nieocenione`, a time-out, a verdict it cannot apply → the failure mode | `Settings::failOpen` is true only for exactly `fail-open` (the default and anything else hold); `Applier::failure` for `nieocenione`, `timeout`, `config_error`, `no_text`, `text_error`, `truncated`; a verdict it cannot apply holds (`text_changed`, `apply_error`); `SettingsTest::testSettingsThatDecidePublishingAreReadFailClosed`, `ReceiverTest::testNoVerdictFollowsTheFailureMode`, `TaskTest` |
+| `F2` | a time-out of at least 20 minutes | `Settings::timeoutS` raises less than 20 to 20 (at most 1440); the ACP field refuses less (`Installer`); counted from the `202` (`accepted_at`); `SettingsTest::testTheTimeoutIsAtLeastTwentyMinutes`, `TaskTest::testATimeoutBelowTwentyMinutesIsRaisedToTwenty`, `InstallerTest::testTheTimeoutFieldRefusesLessThanTwentyMinutes` |
+| `F3` | switched off: 404, and nothing happens | deactivated or "Włączona = nie": `Receiver::handle` answers `404` before the signature; `Submitter` holds and sends nothing; `Task::run` neither times out nor retries; nothing held is released. Only the 30-day deletion runs (A8, which the privacy notice names without a condition); `ReceiverTest::testADeactivatedPluginAnswers404AndChangesNothing`, `testASwitchedOffPluginAnswers404AndChangesNothing`, `testSwitchedOffNeitherAVerdictNorTheTaskPublishesHeldPosts`, `TaskTest::testASwitchedOffPluginSweepsNothing` |
+| `F4` | 401 without a usable secret | `Settings::webhookSecret`: 16–256 visible ASCII characters after trimming, as plugin-wordpress and plugin-phpbb read it, else none, and `Receiver::handle` answers `401` before `Signature::check`; the ACP notice names it (`minos_problem_webhook_secret`); `ReceiverTest::testWithoutAUsableSecretADeliveryIs401`, `SettingsTest::testAUsableSecretIsSixteenToTwoHundredFiftySixVisibleAsciiCharacters`, `SignatureTraceTest` |
+| `F5a` | retry 429, 5xx, 408, network failures and a 2xx that accepts nothing; only `202` accepts | `Gateway::send` reads `202` (for the items its `przyjete` names) as acceptance, 429/408/5xx/no answer/another 2xx as retry; `Submitter` keeps the row `retry` with the backoff or `ponow_za_s`; `GatewayTest`, `SubmissionTest::testA2xxOtherThan202IsRetriedNotAConfigurationError`, `testA202AcceptsOnlyTheItemsItNames`, `testA408IsRetriedAsANetworkFailure`, `testA503OrNoAnswerRetriesAfterABackoff`, `EndToEndTest::testOnlyTheGatewaysAcceptanceAcceptsAPostOverHttp` |
+| `F5b` | any other 4xx is a configuration error | `Gateway` reads it as a configuration error; `Applier::failure` with `config_error`, the code logged and shown in the ACP notice (never the key or the body); `SubmissionTest::testAConfigurationErrorAppliesTheFailureModeAndIsShownToTheAdministrator`, `testASuccessAfterAConfigurationErrorClearsTheNotice` |
+| `F5c` | a `ponow_za_s` past the time-out: the failure mode at once | `Submitter` compares the gateway's `ponow_za_s` as given with the row's time-out before its own cap: past it, the failure mode at once (`gateway_limit`); `PauseTest::testAFarPonowZaSWritesNoRetryPastTheTimeout`, `testDuringTheDailyLimitANewPostIsNotSentAndGetsTheFailureModeAtOnce`, `SubmissionTest::testAnOverloadLongerThanTheTimeoutAppliesTheFailureModeAtOnce` |
 | `F5d` | optional: re-send what fail-open published unassessed once the limit renews | not implemented: the rule is optional and off by default (nie wdrożono, reguła opcjonalna); not a deviation |
+| `F6` | a failing row never stops a loop | `Task::run` and `Submitter::resubmit` handle each row in its own `try`; `Applier::failedStep` logs the step and the post id only and gives the claim back, and after `MAX_FAILURES` leaves the row to a human; `FailureIsolationTest` |
 | `F7` | no text to assess → the failure mode; a bare address and visible punctuation are text | `Text::shows`: an image MyBB shows as an image, an embedded video, an attachment, a link without a label (`alt`/`title` notwithstanding) or only invisible characters → `no_text`, nothing sent. An emoticon (`:)`) is text: MyBB shows its smilie image, but the characters the author typed are sent and assessed; so is a line of punctuation such as `\|---\|` (MyCode has no tables); `NoTextTest` |
-| `F10` | `2xx` only for a stored verdict; a platform page in its place must be a non-`2xx` | `Receiver::handle` answers `200` after the verdict's outcome is written to the row (`Applier::verdict`, `late`, the signal after a decision), or for nothing to store: an id that is not the plugin's, no row, an older revision, a delivery already applied. A step that throws gives its claim back and answers `500`; a row another step holds, `503`; a failed query, on PHP 7.4 or pgsql, halts in MyBB's error handler, which answers `503` (`inc/class_error.php`); on PHP 8.1+ with mysqli (MyBB never calls `mysqli_report`, so the default mode throws) it raises `mysqli_sql_exception`: inside `Applier`'s `catch` that is a `500`, but outside a try (`Receiver::handle`: `settings`, `isPluginActive`, `pending`, `claimPending`, `inFlight`) nothing catches it and MyBB sets no exception handler, so the status is PHP's: `500` with `display_errors` off, `200` with it on (PHP's default without a php.ini). After `Applier::MAX_FAILURES` failed steps the row is left to a human (`held`, `apply_error`), recorded, and a redelivery gets `200`. A closed board and the load limit are `global.php`'s and their page is a `200`, but `minos-webhook.php` starts MyBB with `inc/init.php` only, so the receiver runs there; odstępstwo: on PHP 8.1+ with mysqli and display_errors on, a database failure outside Applier's try answers 200 (fix: catch Throwable around Receiver::handle and the webhook entry → 500) (minos-moderation/minos#78); `ReceiverTest` (applied, unknown, repeated), `FailureIsolationTest` (`500`, the hand-over after three), `SupportTest` (`503` while another step holds the row, `500` for an unwritten signal), `EndToEndTest`, live `f10_board_closed` |
+| `F8` | switched on without a usable configuration: the failure mode; a fresh install is off | `Settings::active` and `problems`: switched on but unable to submit, every new post gets the failure mode (`not_configured`) and every ACP page says why (`Admin::notice`); `Installer` installs switched off; `SubmissionTest::testSwitchedOnButUnableToSubmitEveryNewPostGetsTheFailureMode`, `InstallerTest::testAFreshInstallStartsSwitchedOffAndHoldsNothing`, `AdminTest::testTheNoticeNamesWhatIsMissing` |
+| `F9` | switched on again: what waited is re-sent with a fresh time-out | the task's first run after switching on or activating re-sends every row still waiting (`Platform::rearmWaiting`: `retry` due now, a fresh `submitted_at`), under the same id (the gateway refuses a repeated id only within one request); `TaskTest::testSwitchingBackOnSendsAgainWhatWasWaitingWithAFreshTimeout`, `testActivationAfterADeactivationSendsAgainWhatWasWaiting` |
+| `F10` | `2xx` only for a stored verdict; a platform page in its place must be a non-`2xx` | `Receiver::handle` answers `200` after the verdict's outcome is written to the row (`Applier::verdict`, `late`, the signal after a decision), or for nothing to store: an id that is not the plugin's, no row, an older revision, a delivery already applied. A step that throws gives its claim back and answers `500`; a row another step holds, `503`; a failed query on PHP 7.4 or pgsql halts in MyBB's error handler, which answers `503` (`inc/class_error.php`). On PHP 8.1+ with mysqli (MyBB never calls `mysqli_report`, so the default mode throws) a failed query raises `mysqli_sql_exception`, and MyBB sets no exception handler: `Receiver::handle` catches any `Throwable` of its own steps, and `minos-webhook.php` any of MyBB's start (`inc/init.php`) and of the receiver, and both answer `500` — never PHP's page for an uncaught exception, a `200` with `display_errors` on. After `Applier::MAX_FAILURES` failed steps the row is left to a human (`held`, `apply_error`), recorded, and a redelivery gets `200`. A closed board and the load limit are `global.php`'s and their page is a `200`, but `minos-webhook.php` starts MyBB with `inc/init.php` only, so the receiver runs there; `ReceiverTest` (applied, unknown, repeated), `FailureIsolationTest` (`500`, the hand-over after three, a query that throws outside the applier), `SupportTest` (`503` while another step holds the row, `500` for an unwritten signal), `EndToEndTest` (a `500` when MyBB's start throws, `display_errors` on), live `f10_board_closed` |
+| `S1` | `tekst` is what the reader sees; never an `href` | `[url=X]Y[/url]` is sent as `Y` alone (a `data:` address, which MyBB shows instead of a link, as the address), and `X` counts as a link however it is written (MyBB's link patterns, `http://` in front where MyBB puts it: `Text::urls`); in a forum with MyCode off MyBB shows a `[url]` as typed and links nothing, so only an address the reader sees in it counts, as a bare one; an HTML forum's `alt`/`title` next to the text; `LinksAndImagesTest`, `TextTest` |
 | `F7`, `S2` | an image's address is not text and not a link | `[img]` MyBB shows as an image (its image MyCode on) and `<img>` on an HTML forum add only their `alt` beside other text, never the address (`Text::visible`; an `[img]`'s `alt` as `mycode_parse_img` builds it from the address's last part, `Text::imageAlt`), no text alone (`Text::shows`) and no link (`Text::sourceOf` with the forum's options); an `[img]` MyBB shows as a link (image MyCode off) or leaves as typed is text and a link; `LinksAndImagesTest` |
-| `S1` | `tekst` is what the reader sees; never an `href` | `[url=X]Y[/url]` is sent as `Y` alone (a `data:` address, which MyBB shows instead of a link, as the address), and `X` counts as a link however it is written (MyBB's link patterns, `http://` in front where MyBB puts it: `Text::urls`); an HTML forum's `alt`/`title` next to the text; `LinksAndImagesTest`, `TextTest` |
+| `S2` | links, domains, first post; never account data | `meta.links`, `meta.link_domains` (at most 10 registrable domains, `Text::linkDomains`) and `meta.author_first_post` from `postnum` (not sent for a guest); never an e-mail, IP, uid or login; `SubmissionTest::testTheBodyCarriesTheItemAndNothingAboutTheAuthor`, `testAuthorFirstPostComesFromPostnumAndIsOmittedForGuests`, `TextTest::testLinksAndTheirRegistrableDomains`, `LinksAndImagesTest` |
+| `S3` | an edit of a waiting post is `<id>.<n>`; an older revision's verdict is ignored | `mybb:<pid>` and `mybb:<pid>.<n>` (`Submitter::ID_PREFIX`, `REVISION_SEPARATOR`); an author's edit of a waiting post, or of one the failure mode held without a verdict for its text (`Status::REVISED_REASONS`), starts the next revision (`Platform::revise`), sent by the task; a verdict for an older revision gets `200` and only its `wsparcie` (A7); `RevisionTest`. odstępstwo: S3 — a moderator's edit of a waiting post (or of one held for its timeout) is not reassessed: the row becomes `superseded` (`edited`), nothing is sent and the post stays in the queue for the moderator, who has it in front of them; in MyBB the queue is edited almost only by moderators (`showownunapproved` off by default), while WP and phpBB reassess any edit; kept for 0.1.0, README says so (minos-moderation/minos#136); `RevisionTest::testAModeratorsEditOfAWaitingPostIsLeftToThemAndListed` |
+| `S4a`, `S4b`, `S4c` | above 3000 characters: the beginning is assessed, the decision is `nieocenione`; the note; `ocenzurowane` never applied automatically | `Text::forPost` cuts at 3000 characters (`truncated`); a `bezpieczne` on a cut post goes to the failure mode (`truncated`, noted "wpis dłuższy niż 3000 znaków — oceniono początek" in the queue and the ACP; fail-open publishes it marked `auto_published`); a mask on a cut post is never published (`Applier::censor`); `zablokowane` still holds; `TextTest::testTheCutIsAtThreeThousandCharactersNotBytes`, `ReceiverTest::testASafeVerdictOnACutPostFollowsTheFailureMode`, `testABlockedCutPostIsStillBlocked`, `testCensoredStaysInTheQueueWhenTheMaskCannotStandForThePost` |
+| `S5` | a topic's title (a visible reply subject, a poll) is part of `tekst`; a title is never changed | `Text::ofPost`: a thread's subject and its poll in front of its first post, a reply's own subject when its author changed MyBB's default (`Text::ownSubject`, decided at the first send); a mask in a title, subject or poll holds the post; `PollAndSubjectTest`, `TextTest::testANewThreadsSubjectIsAssessedInFrontOfItsPost` |
+| `S6` | an edit of a published post is reassessed (after the capacity decision) | not implemented yet, as the rule allows until the gateway's capacity decision: an edit of a published post is not sent again (README, "Ograniczenia"); `PollAndSubjectTest::testAPollAddedAfterPublicationIsNotSent` |
+| `S7` | a post the platform holds is sent and annotated (after the capacity decision) | not implemented yet, as the rule allows until the gateway's capacity decision: a post MyBB holds anyway (its forum or group moderated, the user under moderation) is left to humans and not sent; `SubmissionTest::testPostsThePluginLeavesAlone` |
+| `A1` | the digest of the sent text is checked before applying | the row keeps the SHA-256 of the sent `tekst` (`sent_sha256`); `Applier::sentText` renders the post again with its forum's current options and compares before any verdict: a mismatch or no digest applies nothing (`text_changed` on time, nothing late); `ReceiverTest::testAVerdictForATextThatChangedSinceItWasSentIsNotApplied`, `testAForumThatChangedHowItRendersPostsGetsNoVerdictApplied`, `testARowWithoutADigestGetsNoVerdictApplied`, `testALateVerdictForATextThatChangedSinceItWasSentDoesNothing` |
+| `A2a`–`A2e` | a mask of the sent length differing only in `█`; what was sent is what is stored; the write checked and read back; the mask shown; never the original | `Text::maskFits` (A2a); `Applier::censor` publishes only when the sent body IS the stored message (A2b), checks the update and reads the message back (A2c); otherwise the post stays held with `masked_text` shown in the ModCP queue and the ACP (A2d, `ModQueue`), never published with its original (A2e); `TextTest::testAMaskFitsOnlyWhereItReplacesCharactersOneForOne`, `ReceiverTest::testCensoredIsPublishedWithTheMaskedTextAndTheOriginalKept`, `testACensoredPostWithFormattingStaysHeldWithItsMaskKept`, `testAMaskThatWouldReviveMyCodeIsNotPublished`, `testACensoredTextThatCannotBeStoredKeepsThePostHeld`, `ModQueueTest` |
+| `A3` | fail-open is marked; a late verdict applies | `auto_published = 1`; `Applier::late` applies a late verdict while the post is public and untouched (back to the queue, masked, confirmed); a moderator's action or an edit ends it; `ReceiverTest::testALateVerdictIsAppliedToAPostTheFailureModePublished`, `testALateCensoredVerdictFollowsTheSetting`, `testAModeratorsDecisionOnAnAutoPublishedPostStaysFinal` |
+| `A4` | notifications once, sent by the plugin where approval sends none | MyBB sends subscription notifications only for a post visible at once and none on approval: `Applier::publish` sends them itself (`Platform::notifySubscribers`, setting `minos_notify_subscribers`), never again for a late verdict, never for a moderator's approval; `NotificationTest`, live `k31_notifications` |
+| `A5` | a hold is the platform's own state | MyBB's own moderation path: `moderateposts` raised for the request (`Submitter::onValidate`), the post `visible = 0` in MyBB's queue; approvals and soft deletions through `Moderation` (`Platform`); `SubmissionTest::testANewReplyIsHeldAndSentOnce`, `testTheUsersModerationFlagIsRestoredAfterTheInsert` |
+| `A6` | a late verdict also applies to a post the failure mode held | `Receiver::heldOnlyForTime` and `Platform::claimTimedOut`: a post held for its timeout (`fail-closed`, `timeout`) and still in the queue gets the verdict as on time (`Applier::verdict`); a moderator's approval, deletion or edit, or an author's edit (a new revision), ends it; `ReceiverTest::testALateVerdictIsAppliedToAPostTheFailureModeHeldForItsTimeout`, `testEveryLateVerdictAfterATimeoutIsAppliedAsOnTime`, `testALateVerdictAfterATimeoutLeavesAPostAModeratorActedOn`, `testOnlyAHoldForTheTimeoutTakesALateVerdict` |
 | `A7` | `wsparcie`: an active signal in the moderators' queue, whatever the verdict | a report in the ModCP's report centre (`Platform::reportForSupport`), the row on the ACP's support list; never deleted, rejected or hidden automatically. Also after a person's decision (a moderator's approval, deletion or edit, an author's edit: an older revision), with a note saying so and the post left as the person left it; once per post and revision; `SupportTest`, `EndToEndTest`, live `a7_support_after_decision` |
+| `A8` | the plugin's own data is kept 30 days; the platform's records follow the forum's rules | `Task::forget` (also while switched off): decided rows — the verdict, the categories, the original of a published censored post, the mask of a held one — 30 days after their decision (`Task::DECIDED_RETENTION_S`), log entries after 30 days; the sent text is never stored (its digest only). What outlives them, the `wsparcie` reports in MyBB's report centre, is named in the README; `TaskTest::testOldLogEntriesAndDecisionsAreForgottenAfterThirtyDays`, `testASwitchedOffPluginStillForgetsOldData` |
+| `P1` | the archive carries no lock file, tests or mock, and pins the client | `bin/build-zip.sh` ships `Upload/`, `README.md`, `LICENSE` and the client's `src/` only; `.github/scripts/check-release-archive.sh` refuses `composer.lock`, `tests/` and the mock gateway, on every PR (`tests.yml`, `release-archive`) and before a release (`release.yml`); the client pinned at `^0.2` with the lock at `v0.2.0`; `EndToEndTest` (the staged tree has no mock) |
+| `D1` | this file maps every identifier | this table, every identifier of client-php's `docs/plugin-behaviour.md` (the version the pin carries). odstępstwo: D1 — `CLAUDE.md` does not yet carry the one line that the shared rules are in `docs/plugin-behaviour.md` of `minos-moderation/client-php` and that a change to one is a decision for every plugin; it is the owner's file to change (minos-moderation/minos#136) |
+| `D2` | shared compliance scenarios in `scenarios/` | nothing to run yet: client-php ships no scenarios at the pinned version (the rule is adopted, the first scenarios come in changes of their own); the harness gets them with the tag that brings them |
 
 ## Tests
 

@@ -70,13 +70,7 @@ final class EndToEndTest extends TestCase
 
         $database = $this->dir . '/forum.sqlite';
         Forum::create($database); // the schema, in this process; the forum itself runs staged
-        $receiverPort = $this->freePort();
-        $forumEnv = [
-            'MINOS_TEST_DB'     => $database,
-            'MINOS_TEST_REPO'   => (string)realpath(self::ROOT),
-            'MINOS_TEST_BBURL'  => "http://127.0.0.1:{$receiverPort}",
-        ];
-        $this->serve($forumRoot, $forumEnv, $receiverPort);
+        [$receiverPort, $forumEnv] = $this->serveForum($forumRoot, $database);
         $mockEnv = [
             'MINOS_MOCK_WEBHOOK_URL' => "http://127.0.0.1:{$receiverPort}/minos-webhook.php",
             'MINOS_MOCK_DATA_DIR'    => $this->dir . '/mock',
@@ -262,6 +256,43 @@ final class EndToEndTest extends TestCase
     }
 
     /**
+     * Shared rule F10 at the entry: whatever throws before the receiver answers — here
+     * MyBB's start (`inc/init.php`), as a database failure does on PHP 8.1+ with mysqli —
+     * answers `500` from the real `minos-webhook.php`, which the gateway delivers again.
+     * PHP's own page for an uncaught exception is a `200` with `display_errors` on, which
+     * the server here has, and would show the error; the answer shows nothing.
+     */
+    public function testAFailureWhileMyBBStartsAnswers500(): void
+    {
+        [$forumRoot, $forumEnv] = $this->stage();
+        $body = '{"id":"mybb:1","status":"ocenione","kwalifikacja":"bezpieczne","kategorie":[]}';
+        $header = \Minos\Client\Signature::sign(Config::DEFAULT_SECRET, $body, time());
+        $healthy = $this->post((int)parse_url($forumEnv['MINOS_TEST_BBURL'], PHP_URL_PORT), $body, $header);
+        self::assertSame(404, $healthy[0], 'the guard: the same entry answers when MyBB starts (not installed: 404)');
+
+        $failingPort = $this->serve($forumRoot, ['MINOS_TEST_INIT_THROWS' => '1'] + $forumEnv, ['display_errors=1']);
+        [$status, $answer] = $this->post($failingPort, $body, $header);
+
+        self::assertSame(500, $status, 'not a 2xx: the gateway delivers again');
+        self::assertStringNotContainsString('test-only failure', $answer, 'nothing of the error is shown');
+    }
+
+    /**
+     * A POST to the staged webhook.
+     *
+     * @return array{0:int,1:string} The status and the body.
+     */
+    private function post(int $port, string $body, string $signature): array
+    {
+        $answer = @file_get_contents("http://127.0.0.1:{$port}/minos-webhook.php", false, stream_context_create(['http' => [
+            'method' => 'POST', 'content' => $body, 'ignore_errors' => true, 'timeout' => 10,
+            'header' => "Content-Type: application/json\r\nX-Wergiliusz-Podpis: {$signature}\r\n",
+        ]]));
+        $status = isset($http_response_header[0]) && preg_match('#^HTTP/\S+ ([0-9]{3})#', $http_response_header[0], $m) ? (int)$m[1] : 0;
+        return [$status, (string)$answer];
+    }
+
+    /**
      * The staged forum served over HTTP next to the mock gateway.
      *
      * @return array{0:string,1:array<string,string>,2:array<string,string>,3:int} The forum
@@ -276,13 +307,7 @@ final class EndToEndTest extends TestCase
         copy(__DIR__ . '/fixtures/forum-cli.php', $forumRoot . '/forum-cli.php');
         $database = $this->dir . '/forum.sqlite';
         Forum::create($database);
-        $receiverPort = $this->freePort();
-        $forumEnv = [
-            'MINOS_TEST_DB'     => $database,
-            'MINOS_TEST_REPO'   => (string)realpath(self::ROOT),
-            'MINOS_TEST_BBURL'  => "http://127.0.0.1:{$receiverPort}",
-        ];
-        $this->serve($forumRoot, $forumEnv, $receiverPort);
+        [$receiverPort, $forumEnv] = $this->serveForum($forumRoot, $database);
         $mockEnv = [
             'MINOS_MOCK_WEBHOOK_URL' => "http://127.0.0.1:{$receiverPort}/minos-webhook.php",
             'MINOS_MOCK_DATA_DIR'    => $this->dir . '/mock',
@@ -320,6 +345,30 @@ final class EndToEndTest extends TestCase
     }
 
     /**
+     * The staged forum served over HTTP. Its environment names its own address
+     * (`MINOS_TEST_BBURL`, the webhook address the mock delivers to), so a port that turns
+     * out taken is retried with the environment built again, never served under another
+     * port than the one it names.
+     *
+     * @return array{0:int,1:array<string,string>} The port and the forum's environment.
+     */
+    private function serveForum(string $forumRoot, string $database): array
+    {
+        for ($try = 0; $try < 5; $try++) {
+            $port = $this->freePort();
+            $env = [
+                'MINOS_TEST_DB'     => $database,
+                'MINOS_TEST_REPO'   => (string)realpath(self::ROOT),
+                'MINOS_TEST_BBURL'  => "http://127.0.0.1:{$port}",
+            ];
+            if ($this->start($forumRoot, $env, $port, [])) {
+                return [$port, $env];
+            }
+        }
+        self::fail('the forum\'s built-in server did not start');
+    }
+
+    /**
      * A port nothing listens on now.
      */
     private function freePort(): int
@@ -336,34 +385,59 @@ final class EndToEndTest extends TestCase
     }
 
     /**
-     * Starts PHP's built-in server and waits until it answers.
+     * Starts PHP's built-in server on a free port and waits until it answers.
      *
      * @param array<string,string> $env
-     * @param int|null             $port A port to try first.
+     * @param array<int,string>    $ini `php -d` settings for the server.
      * @return int The port.
      */
-    private function serve(string $docroot, array $env, ?int $port = null): int
+    private function serve(string $docroot, array $env, array $ini = []): int
     {
         for ($try = 0; $try < 5; $try++) {
-            $port = $port !== null && $try === 0 ? $port : random_int(20000, 40000);
-            // An array, not a string: a string runs through `sh -c`, and terminating the
-            // shell would leave PHP's server running.
-            $server = proc_open([PHP_BINARY, '-S', "127.0.0.1:{$port}", '-t', $docroot],
-                [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes, null, $env + getenv());
-            self::assertIsResource($server);
-            for ($wait = 0; $wait < 50; $wait++) {
-                $socket = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.1);
-                if ($socket !== false) {
-                    fclose($socket);
-                    $this->servers[] = [$server, $port];
-                    return $port;
-                }
-                usleep(100000);
+            $port = $this->freePort();
+            if ($this->start($docroot, $env, $port, $ini)) {
+                return $port;
             }
-            proc_terminate($server);
-            proc_close($server);
         }
         self::fail('the built-in server did not start');
+    }
+
+    /**
+     * Starts PHP's built-in server on one port and waits until it answers there.
+     *
+     * @param array<string,string> $env
+     * @param array<int,string>    $ini `php -d` settings for the server.
+     * @return bool False when it did not start (the port was taken meanwhile): nothing is
+     *     left running.
+     */
+    private function start(string $docroot, array $env, int $port, array $ini): bool
+    {
+        $options = [];
+        foreach ($ini as $setting) {
+            $options[] = '-d';
+            $options[] = $setting;
+        }
+        // An array, not a string: a string runs through `sh -c`, and terminating the
+        // shell would leave PHP's server running.
+        $server = proc_open(array_merge([PHP_BINARY], $options, ['-S', "127.0.0.1:{$port}", '-t', $docroot]),
+            [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes, null, $env + getenv());
+        self::assertIsResource($server);
+        for ($wait = 0; $wait < 50; $wait++) {
+            $status = proc_get_status($server);
+            if (!$status['running']) {
+                break; // it could not bind: another process took the port meanwhile
+            }
+            $socket = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.1);
+            if ($socket !== false) {
+                fclose($socket);
+                $this->servers[] = [$server, $port];
+                return true;
+            }
+            usleep(100000);
+        }
+        proc_terminate($server);
+        proc_close($server);
+        return false;
     }
 
     /**

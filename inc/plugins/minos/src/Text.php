@@ -449,27 +449,29 @@ final class Text
     /**
      * How many distinct links a post carries (the `links` spam signal).
      *
-     * @param string $message The message as stored.
+     * @param string              $message The message as stored.
+     * @param array<string,mixed> $forum   The forum's parsing options ({@see urls}).
      * @return int The count, capped at the contract's 100000.
      * @throws TextError When PCRE fails on it.
      */
-    public static function links(string $message): int
+    public static function links(string $message, array $forum = []): int
     {
-        return min(100000, count(self::urls($message)));
+        return min(100000, count(self::urls($message, $forum)));
     }
 
     /**
      * The registrable domains a post links to (the `link_domains` spam signal).
      *
-     * @param string $message The message as stored.
+     * @param string              $message The message as stored.
+     * @param array<string,mixed> $forum   The forum's parsing options ({@see urls}).
      * @return array<int,string> At most {@see MAX_DOMAINS}, lower case, in order of
      *     appearance; IP addresses are left out.
      * @throws TextError When PCRE fails on it.
      */
-    public static function linkDomains(string $message): array
+    public static function linkDomains(string $message, array $forum = []): array
     {
         $domains = [];
-        foreach (self::urls($message) as $url) {
+        foreach (self::urls($message, $forum) as $url) {
             $domain = self::registrableDomain($url);
             if ($domain !== null) {
                 $domains[$domain] = true;
@@ -909,14 +911,24 @@ final class Text
     /**
      * The distinct links of a message, lower-cased, in order: where MyBB's link MyCode
      * points ({@see LINK_MYCODE}, {@see href}; outside `[code]`/`[php]`, which show it as
-     * written), and every bare address ({@see LINK}) — in a label too.
+     * written), and every bare address ({@see LINK}) — in a label too. In a forum with
+     * MyCode off MyBB shows a `[url]` as typed, a link to nowhere: only the addresses a
+     * reader sees in it count, as bare addresses (`[url=spam.example]Y[/url]` none).
      *
+     * @param array<string,mixed> $forum The forum's parsing options; MyCode on by default.
      * @return array<int,string>
      * @throws TextError When PCRE fails on it.
      */
-    private static function urls(string $message): array
+    private static function urls(string $message, array $forum = []): array
     {
+        $forum += self::DEFAULT_FORUM;
         $text = self::valid($message);
+        if (empty($forum['allowmycode'])) {
+            if (self::matchAll('~' . self::LINK . '~iu', $text, $m) === 0) {
+                return [];
+            }
+            return array_values(array_unique(array_map('strtolower', $m[0])));
+        }
         $blocks = [];
         $text = self::replaceCallback(self::CODE_BLOCK, static function (array $m) use (&$blocks): string {
             $blocks[] = $m[0];

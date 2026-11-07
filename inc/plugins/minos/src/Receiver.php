@@ -34,7 +34,7 @@ use Minos\Client\WebhookPayload;
  *    already published (`fail-open`) is applied late while nobody touched the post
  *    ({@see Applier::late}); a moderator's decision stays final. A verdict for a post the
  *    failure mode held after its timeout (`fail-closed`, `timeout`) is applied as if it
- *    had come in time ({@see Applier::verdict}: shared rule D9.10), while the post is still
+ *    had come in time ({@see Applier::verdict}: shared rule A6), while the post is still
  *    in the queue — a moderator who approved or deleted it, or edited it, decided; an
  *    author's edit started a new revision, which this verdict is not about. When applying throws, the
  *    claim is given back and the answer is `500`, so the gateway delivers again and the
@@ -44,7 +44,9 @@ use Minos\Client\WebhookPayload;
  *    since (an older revision) — still brings its `wsparcie` to the moderators, once per
  *    revision, and changes nothing else ({@see Applier::supportAfterDecision}, A7).
  *    When that report cannot be written, the signal's claim is given back and the answer
- *    is `500`, so the redelivery raises it.
+ *    is `500`, so the redelivery raises it. The same for the report of a verdict this
+ *    delivery applied ({@see SignalError}): the verdict stands, the answer is `500`, and
+ *    the redelivery, finding the outcome recorded, raises the report.
  *    A delivery that finds its revision's row claimed by another step — the task timing it
  *    out, a moderator's edit, another delivery — gets `503`: what that step decides is not
  *    known yet, and the redelivery meets it (applies the verdict late or as on time, or
@@ -81,6 +83,14 @@ final class Receiver
     /**
      * Handles one delivery.
      *
+     * Anything that throws on the way — a query of MyBB's `$db` raises
+     * `mysqli_sql_exception` on PHP 8.1+ with mysqli, and MyBB sets no exception handler —
+     * answers `500`, never PHP's own page, which with `display_errors` on is a `200`: the
+     * gateway would count the verdict as delivered and drop it (shared rule F10). The
+     * gateway delivers a `500` again. A step that threw inside the applier has given its
+     * claim back already ({@see Applier::failedStep}); one that threw before a claim
+     * changed nothing.
+     *
      * @param string      $method    The HTTP method.
      * @param string|null $signature The `X-Wergiliusz-Podpis` header, or null.
      * @param string      $body      The exact bytes of the body.
@@ -88,6 +98,18 @@ final class Receiver
      * @return int The HTTP status to answer with.
      */
     public function handle(string $method, ?string $signature, string $body, int $now): int
+    {
+        try {
+            return $this->answer($method, $signature, $body, $now);
+        } catch (\Throwable $e) {
+            return 500; // nothing stored: the gateway delivers again
+        }
+    }
+
+    /**
+     * {@see handle}, which answers for what throws here.
+     */
+    private function answer(string $method, ?string $signature, string $body, int $now): int
     {
         if (strtoupper($method) !== 'POST') {
             return 405;
@@ -137,6 +159,8 @@ final class Receiver
         if ($this->platform->claimPending($pid, $now, Status::OPEN, false, $rev)) {
             try {
                 $this->applier->verdict($row, $payload, $settings, $now);
+            } catch (SignalError $e) {
+                return 500; // applied, its report not raised: the redelivery raises it
             } catch (\Throwable $e) {
                 $this->applier->failedStep($pid, 'verdict', $now);
                 return 500; // the gateway delivers again
@@ -146,6 +170,8 @@ final class Receiver
             // Published by the failure mode before this verdict came: still applied.
             try {
                 $this->applier->late($row, $payload, $settings, $now);
+            } catch (SignalError $e) {
+                return 500;
             } catch (\Throwable $e) {
                 $this->applier->failedStep($pid, 'late', $now);
                 return 500;
@@ -154,6 +180,8 @@ final class Receiver
             // Held by the failure mode because this verdict was late: applied as on time.
             try {
                 $this->applier->verdict($row, $payload, $settings, $now);
+            } catch (SignalError $e) {
+                return 500;
             } catch (\Throwable $e) {
                 $this->applier->failedStep($pid, 'verdict', $now);
                 return 500;

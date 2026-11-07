@@ -120,6 +120,10 @@ final class ReceiverTest extends PluginTestCase
         $this->forum->set(['minos_webhook_secret' => '   ']);
         self::assertSame(401, $this->forum->deliver(self::payload($pid), '   '), 'a blank secret verifies nothing');
         self::assertSame(401, $this->forum->deliver(self::payload($pid), ''));
+        // Shared rule F4: a secret shorter than 16 characters is not usable, even when the
+        // delivery's signature matches it.
+        $this->forum->set(['minos_webhook_secret' => 'krotki-sekret']);
+        self::assertSame(401, $this->forum->deliver(self::payload($pid), 'krotki-sekret'), 'a short secret verifies nothing');
         $this->assertStillWaiting($pid);
     }
 
@@ -502,7 +506,7 @@ final class ReceiverTest extends PluginTestCase
     }
 
     /**
-     * The audit's probe M11 the other way round (shared rule D9.10): fail-closed, the post's
+     * The audit's probe M11 the other way round (shared rule A6): fail-closed, the post's
      * verdict did not come in time and the failure mode held it (`timeout`); the verdict
      * that then comes is applied as if it had come in time — `bezpieczne` publishes it.
      */

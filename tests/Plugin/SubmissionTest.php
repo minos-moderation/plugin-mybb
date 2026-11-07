@@ -345,7 +345,7 @@ final class SubmissionTest extends PluginTestCase
 
     /**
      * The audit's probe M4: the key's daily limit, `ponow_za_s` = 10 hours. The post cannot
-     * be assessed within its 20 minutes, so it gets the failure mode at once (rule D9.3a)
+     * be assessed within its 20 minutes, so it gets the failure mode at once (rule F5c)
      * instead of waiting, and every ACP page says until when the gateway refuses.
      *
      * @dataProvider failureModes

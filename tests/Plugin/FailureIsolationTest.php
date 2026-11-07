@@ -77,6 +77,41 @@ final class FailureIsolationTest extends PluginTestCase
         self::assertSame([1, Status::PUBLISHED], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
     }
 
+    /**
+     * Shared rule F10: a query that throws outside the applier — reading the row, claiming
+     * it — as MyBB's `$db` does on PHP 8.1+ with mysqli (here PDO's exception) answers `500`,
+     * never an uncaught exception, which PHP turns into a `200` with `display_errors` on.
+     * Nothing changed; the redelivery applies the verdict.
+     *
+     * @dataProvider databaseFailures
+     */
+    public function testADatabaseFailureOutsideTheApplierAnswers500(string $sql, string $undo): void
+    {
+        $pid = $this->heldReply('Odpowiedź, której wiersza baza nie odda.');
+        $this->forum->pdo->exec($sql);
+
+        self::assertSame(500, $this->forum->deliver(self::payload($pid)), 'the gateway delivers again');
+
+        $this->forum->pdo->exec($undo);
+        self::assertSame([0, Status::PENDING], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']],
+            'nothing changed, nothing left claimed');
+        self::assertSame(200, $this->forum->deliver(self::payload($pid)));
+        self::assertSame([1, Status::PUBLISHED], [(int)$this->forum->post($pid)['visible'], $this->forum->row($pid)['status']]);
+    }
+
+    /**
+     * @return array<string,array{0:string,1:string}>
+     */
+    public function databaseFailures(): array
+    {
+        return [
+            'reading the row' => ['ALTER TABLE mybb_minos_pending RENAME TO mybb_minos_pending_away',
+                'ALTER TABLE mybb_minos_pending_away RENAME TO mybb_minos_pending'],
+            'claiming the row' => ['CREATE TRIGGER minos_test_no_claim BEFORE UPDATE ON mybb_minos_pending'
+                . " BEGIN SELECT RAISE(ABORT, 'test-only failure'); END", 'DROP TRIGGER minos_test_no_claim'],
+        ];
+    }
+
     public function testAHalfAppliedVerdictIsNeverAppliedTwice(): void
     {
         // The approval changed the post, then threw (another plugin's hook after the update).
@@ -109,7 +144,7 @@ final class FailureIsolationTest extends PluginTestCase
     }
 
     /**
-     * A late verdict for a post held after its timeout (D9.10) whose approval keeps throwing:
+     * A late verdict for a post held after its timeout (A6) whose approval keeps throwing:
      * `500` and the hold given back each time, then — after three tries — left to a human
      * (`apply_error`), so a further delivery applies nothing.
      */

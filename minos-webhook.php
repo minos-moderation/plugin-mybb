@@ -17,15 +17,24 @@ define('THIS_SCRIPT', 'minos-webhook.php');
 
 $minosBody = (string)file_get_contents('php://input');
 
-require_once __DIR__ . '/inc/init.php';
-require_once MYBB_ROOT . 'inc/plugins/minos/autoload.php';
+// Shared rule F10: a `2xx` only for a stored verdict. Whatever throws before the receiver
+// answers — MyBB's start included, whose queries raise `mysqli_sql_exception` on PHP 8.1+
+// with mysqli, and MyBB sets no exception handler — answers `500`, which the gateway
+// delivers again; PHP's own page for an uncaught exception would be a `200` with
+// `display_errors` on. Nothing of the error is shown or logged here.
+try {
+    require_once __DIR__ . '/inc/init.php';
+    require_once MYBB_ROOT . 'inc/plugins/minos/autoload.php';
 
-$minosStatus = \Minos\MyBB\Plugin::instance()->receiver->handle(
-    (string)($_SERVER['REQUEST_METHOD'] ?? 'GET'),
-    isset($_SERVER['HTTP_X_WERGILIUSZ_PODPIS']) ? (string)$_SERVER['HTTP_X_WERGILIUSZ_PODPIS'] : null,
-    $minosBody,
-    time()
-);
+    $minosStatus = \Minos\MyBB\Plugin::instance()->receiver->handle(
+        (string)($_SERVER['REQUEST_METHOD'] ?? 'GET'),
+        isset($_SERVER['HTTP_X_WERGILIUSZ_PODPIS']) ? (string)$_SERVER['HTTP_X_WERGILIUSZ_PODPIS'] : null,
+        $minosBody,
+        time()
+    );
+} catch (\Throwable $minosError) {
+    $minosStatus = 500;
+}
 
 http_response_code($minosStatus);
 header('Content-Type: text/plain; charset=utf-8');

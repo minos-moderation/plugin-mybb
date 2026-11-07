@@ -29,20 +29,20 @@ use Minos\Client\WebhookPayload;
  * - `wsparcie` → whatever the verdict, the moderators get a report in the ModCP's report
  *   centre and the row is listed on the ACP page; such a post is never deleted, rejected or
  *   hidden automatically — `zablokowane` keeps it held even with the soft-delete setting, a
- *   late `zablokowane` leaves it published (shared rule D9.9). Nothing goes to its author.
+ *   late `zablokowane` leaves it published (shared rule A7). Nothing goes to its author.
  *   The report comes even when a person decided first — a moderator approved, deleted or
  *   edited the post, or its author edited it since — with a note that the verdict came
  *   after that decision, and the post stays as the person left it ({@see supportAfterDecision}).
  *
  * A post the plugin publishes from the queue (a verdict, the failure mode in `fail-open`)
  * notifies its subscribers as MyBB notifies them of a post visible at once, by setting and
- * once ({@see publish}, shared rule D9.8).
+ * once ({@see publish}, shared rule A4).
  *
  * A verdict that arrives AFTER the failure mode published a post ({@see late}) is still
  * applied while the post is public and untouched: `zablokowane` sends it back to the
  * queue, `ocenzurowane` follows the setting. One that arrives after the failure mode held
  * the post for its timeout (`fail-closed`) is applied by {@see verdict} as if it had come in
- * time, while the post is still in the queue and untouched (shared rule D9.10).
+ * time, while the post is still in the queue and untouched (shared rule A6).
  *
  * A verdict applies only to the text that was sent. Before any verdict is applied, the
  * post is rendered again ({@see Text::forPost}, with its forum's current options) and its
@@ -88,11 +88,13 @@ final class Applier
      * @param Settings                                                                           $settings The settings.
      * @param int                                                                                $now      Unix seconds.
      * @return string The row's new status.
+     * @throws SignalError When the outcome is recorded but its `wsparcie` report could not
+     *     be written ({@see signalSupport}).
      */
     public function verdict(array $row, array $payload, Settings $settings, int $now): string
     {
         $status = $this->onTime($row, $payload, $settings, $now);
-        $this->signalSupport($row, $payload, $status, $now);
+        $this->signalSupport($row, $payload, $status, $now, (int)($row['support_rev'] ?? 0));
         return $status;
     }
 
@@ -135,7 +137,7 @@ final class Applier
                         }
                         break;
                     default: // 'zablokowane' — parse() admits nothing else
-                        // A post with `wsparcie` is never deleted automatically (D9.9): it
+                        // A post with `wsparcie` is never deleted automatically (A7): it
                         // stays held until a person decides.
                         if ($settings->softDeleteBlocked() && !$payload['wsparcie']) {
                             $this->platform->softDelete($post);
@@ -187,7 +189,7 @@ final class Applier
      * public and nobody touched it — an edit clears `auto_published`, a moderator's action
      * changes its visibility — the verdict is applied:
      * - `zablokowane` → back to the moderation queue — with `wsparcie`, it stays published
-     *   (never hidden automatically, D9.9);
+     *   (never hidden automatically, A7);
      * - `ocenzurowane` → the masked text, by setting and when it stands for the whole post;
      *   otherwise back to the queue (with `wsparcie`, published as it is);
      * - `bezpieczne` → it stays published (a cut post stays marked as published unassessed);
@@ -198,6 +200,7 @@ final class Applier
      * @param Settings                                                                           $settings The settings.
      * @param int                                                                                $now      Unix seconds.
      * @return string The row's new status.
+     * @throws SignalError As {@see verdict}.
      */
     public function late(array $row, array $payload, Settings $settings, int $now): string
     {
@@ -205,10 +208,11 @@ final class Applier
         // left it so (`bezpieczne` on a cut text keeps `auto_published`): the claimed row
         // tells whether this revision's signal was raised already.
         $claimed = $this->platform->pending((int)$row['pid']);
-        $signalled = $claimed !== null && (int)$claimed['support_rev'] > (int)$row['rev'];
+        $previous = $claimed !== null ? (int)$claimed['support_rev'] : 0;
+        $signalled = $previous > (int)$row['rev'];
         $status = $this->afterPublication($row, $payload, $settings, $now);
         if (!$signalled) {
-            $this->signalSupport($row, $payload, $status, $now);
+            $this->signalSupport($row, $payload, $status, $now, $previous);
         }
         return $status;
     }
@@ -248,7 +252,7 @@ final class Applier
         } elseif ($qualification === 'ocenzurowane' && $this->censor($row, $post, $payload['ocenzurowany'], $sent, $settings)) {
             $status = Status::CENSORED;
         } elseif ($payload['wsparcie']) {
-            // Never hidden automatically (D9.9): it stays published until a person decides;
+            // Never hidden automatically (A7): it stays published until a person decides;
             // the moderators get the signal.
             $status = Status::PUBLISHED;
         } else {
@@ -260,7 +264,7 @@ final class Applier
     }
 
     /**
-     * `wsparcie` (shared rule D9.9, A7 of client-php's `docs/plugin-behaviour.md`): whatever
+     * `wsparcie` (shared rule A7 of client-php's `docs/plugin-behaviour.md`): whatever
      * the verdict, the forum's moderators get an active signal in their own queue — a report
      * in the ModCP's report centre ({@see Platform::reportForSupport}), which MyBB also
      * announces to them at the top of every page. Never a message to the author. Raised once
@@ -268,22 +272,38 @@ final class Applier
      * doubled, and the row remembers the revision in the same write that records the
      * outcome ({@see signalMark}), so a repeated delivery raises nothing — not even one that
      * comes before this report is written ({@see Platform::claimSupportSignal}). A post a moderator dealt with before the verdict
-     * came (`superseded`) gets the note that the verdict came after that decision. One that
-     * fails is logged (`error`/`support`, the post id) and changes nothing of the verdict.
+     * came (`superseded`) gets the note that the verdict came after that decision.
      *
-     * @param array<string,mixed>                       $row     The claimed row.
-     * @param array{kwalifikacja:?string,wsparcie:bool} $payload The payload.
-     * @param string                                    $status  The row's new status.
+     * A report that fails changes nothing of the verdict, which stands: it is logged
+     * (`error`/`support`, the post id, never the error's message), the revision's signal
+     * the outcome recorded is given back ({@see Platform::releaseSupportSignal}) and
+     * {@see SignalError} goes to the receiver, which answers `500`. The redelivery finds the
+     * outcome recorded and the signal not taken, and raises the report
+     * ({@see supportAfterDecision}); nothing else would.
+     *
+     * @param array<string,mixed>                       $row      The claimed row.
+     * @param array{kwalifikacja:?string,wsparcie:bool} $payload  The payload.
+     * @param string                                    $status   The row's new status.
+     * @param int                                       $previous `support_rev` before the
+     *     outcome recorded this revision's signal.
+     * @throws SignalError When the report could not be written.
      */
-    private function signalSupport(array $row, array $payload, string $status, int $now): void
+    private function signalSupport(array $row, array $payload, string $status, int $now, int $previous): void
     {
         if (!$payload['wsparcie'] || $status === Status::GONE) {
             return;
         }
+        $pid = (int)$row['pid'];
         try {
-            $this->report((int)$row['pid'], $payload, $status === Status::SUPERSEDED, $now);
+            $this->report($pid, $payload, $status === Status::SUPERSEDED, $now);
         } catch (\Throwable $e) {
-            $this->platform->log('error', 'support', (int)$row['pid'], $now);
+            try {
+                $this->platform->log('error', 'support', $pid, $now);
+                $this->platform->releaseSupportSignal($pid, (int)$row['rev'], $previous);
+            } catch (\Throwable $ignored) {
+                // The database refuses even this: the redelivery meets the row as it is.
+            }
+            throw new SignalError('the support report could not be written');
         }
     }
 
@@ -320,7 +340,7 @@ final class Applier
         try {
             $claimed = $this->platform->claimSupportSignal($pid, $rev);
             if ($claimed) {
-                $this->report($pid, $payload, true, $now);
+                $this->report($pid, $payload, $this->personDecided($row, $rev), $now);
             }
         } catch (\Throwable $e) {
             try {
@@ -334,6 +354,28 @@ final class Applier
             throw $e;
         }
         return $claimed;
+    }
+
+    /**
+     * Whether a person decided about a post before this verdict could act on it — what the
+     * report of {@see supportAfterDecision} notes. Yes for an older revision (its author
+     * edited the post since), a post a moderator edited (`superseded`), deleted or whose
+     * visibility differs from what the row's outcome left. No when the plugin's own
+     * outcome still stands: the verdict was applied, and only its report failed and was
+     * given back ({@see signalSupport}), or the row was left to a human (`apply_error`).
+     *
+     * @param array<string,mixed> $row The post's row, as read.
+     * @param int                 $rev The revision the verdict is about.
+     */
+    private function personDecided(array $row, int $rev): bool
+    {
+        $visible = [Status::PUBLISHED => 1, Status::CENSORED => 1, Status::HELD => 0, Status::DELETED => -1];
+        $status = (string)$row['status'];
+        if ($rev !== (int)$row['rev'] || !isset($visible[$status])) {
+            return true;
+        }
+        $post = $this->platform->post((int)$row['pid']);
+        return $post === null || (int)$post['visible'] !== $visible[$status];
     }
 
     /**
@@ -483,7 +525,7 @@ final class Applier
     /**
      * Publishes a held post: approves it the way a moderator does, then — by setting — sends
      * its thread's or forum's subscribers what MyBB sends for a post visible at once (shared
-     * rule D9.8: MyBB sends nothing on an approval). Once: only the plugin's own publication
+     * rule A4: MyBB sends nothing on an approval). Once: only the plugin's own publication
      * of a post from the queue gets here — a late verdict on a post the failure mode
      * published ({@see late}) never does, and a moderator's approval is MyBB's own.
      *
