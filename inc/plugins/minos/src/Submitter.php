@@ -556,8 +556,8 @@ final class Submitter
     {
         try {
             $text = Text::sourceOf($post, $thread, $own, $forum);
-            $signals = ['links' => Text::links($text)];
-            $domains = Text::linkDomains($text);
+            $signals = ['links' => Text::links($text, $forum)];
+            $domains = Text::linkDomains($text, $forum);
         } catch (TextError $e) {
             return null;
         }

@@ -37,6 +37,15 @@ final class LinksAndImagesTest extends PluginTestCase
     public function posts(): array
     {
         return [
+            // MyCode off: MyBB shows a `[url]` as typed, linking nothing; only an address the
+            // reader sees in it counts, as a bare address does.
+            'MyCode off: a labelled link without a scheme is no link' => [
+                'Zobacz [url=spam.example]Kliknij[/url]', ['allowmycode' => 0], 'Zobacz [url=spam.example]Kliknij[/url]', 0, []],
+            'MyCode off: a link MyCode without a scheme is no link' => [
+                'Zobacz [url]sklep.example.org/a[/url]', ['allowmycode' => 0], 'Zobacz [url]sklep.example.org/a[/url]', 0, []],
+            'MyCode off: an address the reader sees in it counts' => [
+                'Zobacz [url=https://strona.example.com/a]opis[/url] i www.inna.example.net', ['allowmycode' => 0],
+                'Zobacz [url=https://strona.example.com/a]opis[/url] i www.inna.example.net', 2, ['example.com', 'example.net']],
             'a labelled link: its label, its address a link' => [
                 'Zobacz [url=https://strona.przyklad.example.com/a]ten opis[/url].', [],
                 'Zobacz ten opis.', 1, ['example.com']],
