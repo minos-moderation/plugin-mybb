@@ -281,7 +281,7 @@ final class LiveForumTest extends TestCase
 
     /**
      * A late verdict for a post the failure mode held after its timeout (K-43, shared rule
-     * D9.10): fail-closed, the gateway accepted the reply, its verdict did not come in time
+     * A6): fail-closed, the gateway accepted the reply, its verdict did not come in time
      * and MyBB's task (`task.php`) held it; the mock then delivers it through the real
      * webhook and it is applied as on time. A reply a moderator approved in the ModCP queue
      * meanwhile is left as the moderator decided.
@@ -382,7 +382,7 @@ final class LiveForumTest extends TestCase
     }
 
     /**
-     * K-31 (shared rule D9.8): with "Powiadamiaj subskrybentów…" on (the default), a reply
+     * K-31 (shared rule A4): with "Powiadamiaj subskrybentów…" on (the default), a reply
      * and a thread the plugin publishes through the webhook queue what MyBB queues for posts
      * visible at once — the e-mails and the private message, once; the failure mode's
      * publication (fail-open, MyBB's `task.php`) too, and the late verdict after it nothing
@@ -454,7 +454,7 @@ final class LiveForumTest extends TestCase
     }
 
     /**
-     * K-41 (shared rule D9.9): a reply the gateway flags with `wsparcie` is published and
+     * K-41 (shared rule A7): a reply the gateway flags with `wsparcie` is published and
      * reported to the moderators in MyBB's report centre — the ModCP's report list shows it
      * with the plugin's comment, and MyBB's header announces the unread report; nothing goes
      * to its author. With the setting "usuń (miękko)", a blocked reply with `wsparcie` stays

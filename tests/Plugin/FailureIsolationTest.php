@@ -144,7 +144,7 @@ final class FailureIsolationTest extends PluginTestCase
     }
 
     /**
-     * A late verdict for a post held after its timeout (D9.10) whose approval keeps throwing:
+     * A late verdict for a post held after its timeout (A6) whose approval keeps throwing:
      * `500` and the hold given back each time, then — after three tries — left to a human
      * (`apply_error`), so a further delivery applies nothing.
      */

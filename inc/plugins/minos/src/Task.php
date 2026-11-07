@@ -17,7 +17,7 @@ namespace Minos\MyBB;
  *    otherwise they wait for step 1.
  * 3. Old log entries (30 days) and rows decided long ago (30 days, with the original text
  *    of a censored post, the mask of a held one and the verdict) are forgotten — the
- *    shared retention rule D9.11.
+ *    shared retention rule A8.
  *
  * While the plugin is switched off ("Włączona = nie") the run does none of steps 0–2: no
  * claim is given back, no failure mode applied, nothing sent — switching it off releases
@@ -42,7 +42,7 @@ final class Task
     /** How long log entries are kept. */
     public const LOG_RETENTION_S = 30 * 86400;
 
-    /** How long decided rows are kept: the original, the mask and the verdict (rule D9.11). */
+    /** How long decided rows are kept: the original, the mask and the verdict (rule A8). */
     public const DECIDED_RETENTION_S = 30 * 86400;
 
     /** The state key ({@see Platform::state}) set while the plugin is switched off. */

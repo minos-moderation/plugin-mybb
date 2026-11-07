@@ -11,7 +11,7 @@ use Minos\MyBB\Tests\Support\PluginTestCase;
 use Minos\MyBB\Tests\Support\RecordingTransport;
 
 /**
- * What heads a post for its readers is assessed with it (shared rule D9.1): a thread's poll
+ * What heads a post for its readers is assessed with it (shared rule S5): a thread's poll
  * — question and options — and a reply's own subject, when its author changed MyBB's
  * default "RE: <thread title>". The plugin never rewrites either: a mask there holds the post.
  */
@@ -95,7 +95,7 @@ final class PollAndSubjectTest extends PluginTestCase
 
     /**
      * A poll added after the thread was published changes a published post: not assessed
-     * again (shared rule D9.2 is not adopted yet).
+     * again (shared rule S6 waits for the gateway's capacity decision).
      */
     public function testAPollAddedAfterPublicationIsNotSent(): void
     {

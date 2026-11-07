@@ -291,7 +291,7 @@ final class Admin
             'minos_acp_col_categories', 'minos_acp_col_masked', 'minos_acp_col_support', 'minos_acp_col_time',
         ], $rows, $this->platform->lang('minos_acp_attention_desc'), $this->platform);
 
-        // `wsparcie` on its own list, which the rows above never push out (D9.9).
+        // `wsparcie` on its own list, which the rows above never push out (A7).
         $rows = [];
         foreach ($this->platform->supportRows(self::ROWS) as $row) {
             $rows[] = [

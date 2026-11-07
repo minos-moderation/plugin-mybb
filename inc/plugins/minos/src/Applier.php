@@ -29,20 +29,20 @@ use Minos\Client\WebhookPayload;
  * - `wsparcie` → whatever the verdict, the moderators get a report in the ModCP's report
  *   centre and the row is listed on the ACP page; such a post is never deleted, rejected or
  *   hidden automatically — `zablokowane` keeps it held even with the soft-delete setting, a
- *   late `zablokowane` leaves it published (shared rule D9.9). Nothing goes to its author.
+ *   late `zablokowane` leaves it published (shared rule A7). Nothing goes to its author.
  *   The report comes even when a person decided first — a moderator approved, deleted or
  *   edited the post, or its author edited it since — with a note that the verdict came
  *   after that decision, and the post stays as the person left it ({@see supportAfterDecision}).
  *
  * A post the plugin publishes from the queue (a verdict, the failure mode in `fail-open`)
  * notifies its subscribers as MyBB notifies them of a post visible at once, by setting and
- * once ({@see publish}, shared rule D9.8).
+ * once ({@see publish}, shared rule A4).
  *
  * A verdict that arrives AFTER the failure mode published a post ({@see late}) is still
  * applied while the post is public and untouched: `zablokowane` sends it back to the
  * queue, `ocenzurowane` follows the setting. One that arrives after the failure mode held
  * the post for its timeout (`fail-closed`) is applied by {@see verdict} as if it had come in
- * time, while the post is still in the queue and untouched (shared rule D9.10).
+ * time, while the post is still in the queue and untouched (shared rule A6).
  *
  * A verdict applies only to the text that was sent. Before any verdict is applied, the
  * post is rendered again ({@see Text::forPost}, with its forum's current options) and its
@@ -137,7 +137,7 @@ final class Applier
                         }
                         break;
                     default: // 'zablokowane' — parse() admits nothing else
-                        // A post with `wsparcie` is never deleted automatically (D9.9): it
+                        // A post with `wsparcie` is never deleted automatically (A7): it
                         // stays held until a person decides.
                         if ($settings->softDeleteBlocked() && !$payload['wsparcie']) {
                             $this->platform->softDelete($post);
@@ -189,7 +189,7 @@ final class Applier
      * public and nobody touched it — an edit clears `auto_published`, a moderator's action
      * changes its visibility — the verdict is applied:
      * - `zablokowane` → back to the moderation queue — with `wsparcie`, it stays published
-     *   (never hidden automatically, D9.9);
+     *   (never hidden automatically, A7);
      * - `ocenzurowane` → the masked text, by setting and when it stands for the whole post;
      *   otherwise back to the queue (with `wsparcie`, published as it is);
      * - `bezpieczne` → it stays published (a cut post stays marked as published unassessed);
@@ -252,7 +252,7 @@ final class Applier
         } elseif ($qualification === 'ocenzurowane' && $this->censor($row, $post, $payload['ocenzurowany'], $sent, $settings)) {
             $status = Status::CENSORED;
         } elseif ($payload['wsparcie']) {
-            // Never hidden automatically (D9.9): it stays published until a person decides;
+            // Never hidden automatically (A7): it stays published until a person decides;
             // the moderators get the signal.
             $status = Status::PUBLISHED;
         } else {
@@ -264,7 +264,7 @@ final class Applier
     }
 
     /**
-     * `wsparcie` (shared rule D9.9, A7 of client-php's `docs/plugin-behaviour.md`): whatever
+     * `wsparcie` (shared rule A7 of client-php's `docs/plugin-behaviour.md`): whatever
      * the verdict, the forum's moderators get an active signal in their own queue — a report
      * in the ModCP's report centre ({@see Platform::reportForSupport}), which MyBB also
      * announces to them at the top of every page. Never a message to the author. Raised once
@@ -525,7 +525,7 @@ final class Applier
     /**
      * Publishes a held post: approves it the way a moderator does, then — by setting — sends
      * its thread's or forum's subscribers what MyBB sends for a post visible at once (shared
-     * rule D9.8: MyBB sends nothing on an approval). Once: only the plugin's own publication
+     * rule A4: MyBB sends nothing on an approval). Once: only the plugin's own publication
      * of a post from the queue gets here — a late verdict on a post the failure mode
      * published ({@see late}) never does, and a moderator's approval is MyBB's own.
      *

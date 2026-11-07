@@ -10,7 +10,7 @@ use Minos\MyBB\Tests\Support\PageEnded;
 use Minos\MyBB\Tests\Support\PluginTestCase;
 
 /**
- * Shared rule D9.9 (A7 of client-php's `docs/plugin-behaviour.md`): `wsparcie` gives the
+ * Shared rule A7 (client-php's `docs/plugin-behaviour.md`): `wsparcie` gives the
  * forum's moderators an active signal in their own queue, whatever the verdict — here a
  * report in MyBB's report centre (ModCP → reported content), announced by MyBB's header.
  * A post with `wsparcie` is never deleted, rejected or hidden automatically: it stays held,
@@ -185,7 +185,7 @@ final class SupportTest extends PluginTestCase
 
     /**
      * @return array<string,array{0:string,1:int}> The failure mode, and the post's
-     *     visibility after the late `zablokowane` with `wsparcie` (never hidden: D9.9).
+     *     visibility after the late `zablokowane` with `wsparcie` (never hidden: A7).
      */
     public function failureModes(): array
     {
@@ -319,7 +319,7 @@ final class SupportTest extends PluginTestCase
     }
 
     /**
-     * A late verdict for a post held after its timeout (D9.10) follows the same rule: with
+     * A late verdict for a post held after its timeout (A6) follows the same rule: with
      * `wsparcie`, `zablokowane` keeps it held even with "usuń (miękko)".
      */
     public function testALateVerdictAfterATimeoutWithSupportKeepsThePostHeld(): void

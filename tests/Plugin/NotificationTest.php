@@ -10,7 +10,7 @@ use Minos\MyBB\Tests\Support\Forum;
 use Minos\MyBB\Tests\Support\PluginTestCase;
 
 /**
- * Shared rule D9.8 (A4 of client-php's `docs/plugin-behaviour.md`): MyBB 1.8.41 notifies a
+ * Shared rule A4 (client-php's `docs/plugin-behaviour.md`): MyBB 1.8.41 notifies a
  * thread's and a forum's subscribers only when a post is inserted visible at once, never on
  * an approval from its queue (the live check's question 2). A post the plugin publishes
  * sends them what MyBB sends for a post visible at once, by the setting "Powiadamiaj

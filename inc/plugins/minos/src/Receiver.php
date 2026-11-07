@@ -34,7 +34,7 @@ use Minos\Client\WebhookPayload;
  *    already published (`fail-open`) is applied late while nobody touched the post
  *    ({@see Applier::late}); a moderator's decision stays final. A verdict for a post the
  *    failure mode held after its timeout (`fail-closed`, `timeout`) is applied as if it
- *    had come in time ({@see Applier::verdict}: shared rule D9.10), while the post is still
+ *    had come in time ({@see Applier::verdict}: shared rule A6), while the post is still
  *    in the queue — a moderator who approved or deleted it, or edited it, decided; an
  *    author's edit started a new revision, which this verdict is not about. When applying throws, the
  *    claim is given back and the answer is `500`, so the gateway delivers again and the

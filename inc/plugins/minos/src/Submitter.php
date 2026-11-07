@@ -19,7 +19,7 @@ use SplObjectStorage;
  *    `429`/`503`/`408`/no answer/a `2xx` other than `202` → the task sends it again after
  *    `ponow_za_s`, or after a backoff doubling from 60 s — unless `ponow_za_s` (as the
  *    gateway gave it) ends after the post's receive timeout: then the failure mode applies
- *    at once (shared rule D9.3a), since the post could not be assessed in time anyway; any
+ *    at once (shared rule F5c), since the post could not be assessed in time anyway; any
  *    other refusal → a configuration error: the failure mode is applied, the code (never
  *    the content) is logged, and the ACP shows a notice. A daily-limit or overload refusal
  *    is kept with the moment it ends, for the ACP notice ("the gateway does not accept
@@ -31,7 +31,7 @@ use SplObjectStorage;
  * `ponow_za_s` as the gateway gave it, or {@see BACKOFF_S} without one ({@see PAUSE}).
  * Until T a new post is not sent in its author's request (the author does not wait for a
  * gateway that has just refused): it waits as `retry` until T, or gets the failure mode at
- * once when T falls after its timeout (D9.3a). The task sends nothing before T either, and
+ * once when T falls after its timeout (F5c). The task sends nothing before T either, and
  * a run stops at the first batch the gateway asks to retry.
  *
  * An edit of a post still waiting for its verdict ({@see onUpdated}): by its author (anyone
@@ -257,7 +257,7 @@ final class Submitter
      *   because no verdict came ({@see Status::REVISED_REASONS}): a new revision
      *   ({@see Platform::revise}). The task sends it, not the editor's request.
      * - By a moderator, while the plugin waits or after the failure mode held the post for its
-     *   timeout (a verdict may still come late, D9.10): a human is dealing with the post, so
+     *   timeout (a verdict may still come late, A6): a human is dealing with the post, so
      *   it is left to them (`superseded`, listed on the ACP page), nothing is sent and no
      *   verdict is applied any more.
      * - A post the failure mode published (`fail-open`): a late verdict would judge text that
@@ -646,7 +646,7 @@ final class Submitter
     /**
      * Rows the gateway did not accept, sent again later: after `ponow_za_s` as the gateway
      * gave it, or after a backoff doubling from {@see BACKOFF_S} per attempt — never later
-     * than the row's timeout. Rule D9.3(a) first: when `ponow_za_s` ends after the timeout,
+     * than the row's timeout. Rule F5c first: when `ponow_za_s` ends after the timeout,
      * the failure mode now (`gateway_limit`).
      *
      * @param array<int,array{row:array<string,mixed>,item:array<string,mixed>}> $batch
@@ -697,7 +697,7 @@ final class Submitter
     /**
      * Rows that may not be sent before T: each waits as `retry` until T, or — when T falls
      * after its receive timeout, so no verdict could come in time — gets the failure mode
-     * now (`gateway_limit`, rule D9.3a), as a refusal that long would have given it. A row
+     * now (`gateway_limit`, rule F5c), as a refusal that long would have given it. A row
      * that throws is that row's problem ({@see Applier::failedStep}); the others go on.
      *
      * @param array<int,array<string,mixed>> $rows     Rows waiting as `retry`.

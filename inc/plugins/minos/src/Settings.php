@@ -244,7 +244,7 @@ final class Settings
 
     /**
      * Whether a post the plugin publishes notifies the thread's and the forum's subscribers
-     * as MyBB notifies them of a post visible at once (shared rule D9.8): MyBB itself sends
+     * as MyBB notifies them of a post visible at once (shared rule A4): MyBB itself sends
      * nothing when a post leaves its moderation queue.
      *
      * @return bool The `minos_notify_subscribers` setting; on unless set to 0 (off only to

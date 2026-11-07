@@ -506,7 +506,7 @@ final class ReceiverTest extends PluginTestCase
     }
 
     /**
-     * The audit's probe M11 the other way round (shared rule D9.10): fail-closed, the post's
+     * The audit's probe M11 the other way round (shared rule A6): fail-closed, the post's
      * verdict did not come in time and the failure mode held it (`timeout`); the verdict
      * that then comes is applied as if it had come in time — `bezpieczne` publishes it.
      */
