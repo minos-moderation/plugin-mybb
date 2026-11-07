@@ -852,6 +852,38 @@ final class LiveForumTest extends TestCase
     }
 
     /**
+     * Shared rule F10: a page MyBB serves in place of the plugin's answer would lose the
+     * verdict, since the gateway counts any `2xx` as delivered. A closed board is such a page
+     * for a guest (the gateway is one); MyBB checks it in `global.php`, like its load limit,
+     * and the webhook starts MyBB with `inc/init.php` only, so a verdict delivered while the
+     * board is closed is applied and answered `200`. The closed page's own status is
+     * recorded.
+     */
+    public function testAClosedBoardStillTakesAVerdict(): void
+    {
+        $board = self::$board;
+        $pid = $board->reply($board->login(self::AUTHOR, self::$passwords[self::AUTHOR]), self::$tid,
+            'Odpowiedź, której werdykt przyjdzie przy zamkniętym forum.');
+        self::assertSame(0, (int)$board->post($pid)['visible'], 'held');
+        $reason = 'Przerwa techniczna forum testowego Minos.';
+        $board->settings(['boardclosed' => '1', 'boardclosed_reason' => $reason]);
+        try {
+            $guest = $board->guest();
+            $page = $guest->get('index.php');
+            self::assertStringContainsString($reason, $page, 'the guard: a guest gets the closed board\'s page');
+            $closedStatus = $guest->status;
+
+            $lines = $board->deliver();
+            self::assertMatchesRegularExpression('/mybb:' . $pid . ' dostarczony 200/', $lines);
+            $after = [$board->pending($pid)['status'], $board->pending($pid)['verdict'], (int)$board->post($pid)['visible']];
+        } finally {
+            $board->settings(['boardclosed' => '0', 'boardclosed_reason' => '']);
+        }
+        self::$answers['f10_board_closed'] = ['closed_page_status' => $closedStatus, 'after_the_verdict' => $after];
+        self::assertSame(['published', 'bezpieczne', 1], $after, 'applied while the board was closed');
+    }
+
+    /**
      * Switched off ("Włączona = nie") and deactivated: the webhook answers `404` and applies
      * nothing; deactivated, a new post is not held and nothing is sent.
      */

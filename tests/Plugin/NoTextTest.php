@@ -161,6 +161,7 @@ final class NoTextTest extends PluginTestCase
                 'https://www.youtube.com/watch?v=x'],
             'a word and U+200B'           => ["obelga\u{200B}", [], "obelga\u{200B}"],
             'an emoticon MyBB shows as its smilie' => [':)', [], ':)'],
+            'a line of punctuation (MyCode has no tables)' => ['|---|', [], '|---|'],
             'a letter and its combining mark' => ["e\u{0301}", [], "e\u{0301}"],
             'HTML: a comment start inside a title' => ['Miły tekst <b title="<!--">obelga</b><b title="-->">',
                 ['allowhtml' => 1], 'Miły tekst <!-- obelga -->'],

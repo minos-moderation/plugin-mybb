@@ -443,7 +443,8 @@ left out.
 | Id | In short | MyBB: mechanism, or deviation |
 |---|---|---|
 | `F5d` | optional: re-send what fail-open published unassessed once the limit renews | not implemented: the rule is optional and off by default (nie wdrożono, reguła opcjonalna); not a deviation |
-| `F7` | no text to assess → the failure mode; a bare address and visible punctuation are text | `Text::shows`: an image MyBB shows as an image, an embedded video, an attachment, a link without a label (`alt`/`title` notwithstanding) or only invisible characters → `no_text`, nothing sent. An emoticon (`:)`) is text: MyBB shows its smilie image, but the characters the author typed are sent and assessed; `NoTextTest` |
+| `F7` | no text to assess → the failure mode; a bare address and visible punctuation are text | `Text::shows`: an image MyBB shows as an image, an embedded video, an attachment, a link without a label (`alt`/`title` notwithstanding) or only invisible characters → `no_text`, nothing sent. An emoticon (`:)`) is text: MyBB shows its smilie image, but the characters the author typed are sent and assessed; so is a line of punctuation such as `\|---\|` (MyCode has no tables); `NoTextTest` |
+| `F10` | `2xx` only for a stored verdict; a platform page in its place must be a non-`2xx` | `Receiver::handle` answers `200` after the verdict's outcome is written to the row (`Applier::verdict`, `late`, the signal after a decision), or for nothing to store: an id that is not the plugin's, no row, an older revision, a delivery already applied. A step that throws gives its claim back and answers `500`; a row another step holds, `503`; a failed query, on PHP 7.4 or pgsql, halts in MyBB's error handler, which answers `503` (`inc/class_error.php`); on PHP 8.1+ with mysqli (MyBB never calls `mysqli_report`, so the default mode throws) it raises `mysqli_sql_exception`: inside `Applier`'s `catch` that is a `500`, but outside a try (`Receiver::handle`: `settings`, `isPluginActive`, `pending`, `claimPending`, `inFlight`) nothing catches it and MyBB sets no exception handler, so the status is PHP's: `500` with `display_errors` off, `200` with it on (PHP's default without a php.ini). After `Applier::MAX_FAILURES` failed steps the row is left to a human (`held`, `apply_error`), recorded, and a redelivery gets `200`. A closed board and the load limit are `global.php`'s and their page is a `200`, but `minos-webhook.php` starts MyBB with `inc/init.php` only, so the receiver runs there; odstępstwo: on PHP 8.1+ with mysqli and display_errors on, a database failure outside Applier's try answers 200 (fix: catch Throwable around Receiver::handle and the webhook entry → 500) (minos-moderation/minos#78); `ReceiverTest` (applied, unknown, repeated), `FailureIsolationTest` (`500`, the hand-over after three), `SupportTest` (`503` while another step holds the row, `500` for an unwritten signal), `EndToEndTest`, live `f10_board_closed` |
 | `F7`, `S2` | an image's address is not text and not a link | `[img]` MyBB shows as an image (its image MyCode on) and `<img>` on an HTML forum add only their `alt` beside other text, never the address (`Text::visible`; an `[img]`'s `alt` as `mycode_parse_img` builds it from the address's last part, `Text::imageAlt`), no text alone (`Text::shows`) and no link (`Text::sourceOf` with the forum's options); an `[img]` MyBB shows as a link (image MyCode off) or leaves as typed is text and a link; `LinksAndImagesTest` |
 | `S1` | `tekst` is what the reader sees; never an `href` | `[url=X]Y[/url]` is sent as `Y` alone (a `data:` address, which MyBB shows instead of a link, as the address), and `X` counts as a link however it is written (MyBB's link patterns, `http://` in front where MyBB puts it: `Text::urls`); an HTML forum's `alt`/`title` next to the text; `LinksAndImagesTest`, `TextTest` |
 | `A7` | `wsparcie`: an active signal in the moderators' queue, whatever the verdict | a report in the ModCP's report centre (`Platform::reportForSupport`), the row on the ACP's support list; never deleted, rejected or hidden automatically. Also after a person's decision (a moderator's approval, deletion or edit, an author's edit: an older revision), with a note saying so and the post left as the person left it; once per post and revision; `SupportTest`, `EndToEndTest`, live `a7_support_after_decision` |
@@ -566,11 +567,12 @@ a `release` environment with a required reviewer on the `publish` job.
 
 ## Composer
 
-`composer.json` requires `minos-moderation/client-php` at `dev-main` from its GitHub
-repository (a `vcs` repository entry); `composer.lock` pins the commit: `e5df7d6d`, the
-commit the client's `v0.2.0` tag is to name (`Signature::check`). When the tag exists,
-`dev-main` will be replaced by `^0.2`, and the `repositories` entry by Packagist if it is
-published there. The plugin never forks the client's verification.
+`composer.json` requires `minos-moderation/client-php` at `^0.2` from its GitHub
+repository (a `vcs` repository entry: the client is not on Packagist); `composer.lock`
+pins the tag `v0.2.0`, commit `e5df7d6d` (`Signature::check`). Moving to a newer client
+is a pull request of its own with a reviewed `composer update minos-moderation/client-php`
+to a tag, never to a branch; the lock diff then touches only that package's entry and the
+`content-hash`. The plugin never forks the client's verification.
 
 ## MyBB 1.8 APIs
 
@@ -658,7 +660,9 @@ published and reported in the ModCP's report list and the header, and a blocked 
 not deleted, with "usuń (miękko)", nothing to the author (`k41_support`); the ModCP's
 moderation queue with the plugin's note after a held censored reply (verdict, categories,
 mask), a blocked reply cut at 3000 characters and a blocked thread (`k42_modqueue`); a forged signature `401` and named in the ACP; switched
-off or deactivated `404`, and a deactivated plugin holds and sends nothing; uninstall
+off or deactivated `404`, and a deactivated plugin holds and sends nothing; a verdict
+delivered while the board is closed applied and answered `200`, though the closed board's
+page a guest gets is a `200` too (`f10_board_closed`, shared rule F10); uninstall
 "No" keeps the rows, "Yes" drops the tables. The approval inside the webhook's request
 took 36–75 ms end to end (audit measurement C-39).
 
