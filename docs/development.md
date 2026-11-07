@@ -566,11 +566,12 @@ a `release` environment with a required reviewer on the `publish` job.
 
 ## Composer
 
-`composer.json` requires `minos-moderation/client-php` at `dev-main` from its GitHub
-repository (a `vcs` repository entry); `composer.lock` pins the commit: `e5df7d6d`, the
-commit the client's `v0.2.0` tag is to name (`Signature::check`). When the tag exists,
-`dev-main` will be replaced by `^0.2`, and the `repositories` entry by Packagist if it is
-published there. The plugin never forks the client's verification.
+`composer.json` requires `minos-moderation/client-php` at `^0.2` from its GitHub
+repository (a `vcs` repository entry: the client is not on Packagist); `composer.lock`
+pins the tag `v0.2.0`, commit `e5df7d6d` (`Signature::check`). Moving to a newer client
+is a pull request of its own with a reviewed `composer update minos-moderation/client-php`
+to a tag, never to a branch; the lock diff then touches only that package's entry and the
+`content-hash`. The plugin never forks the client's verification.
 
 ## MyBB 1.8 APIs
 

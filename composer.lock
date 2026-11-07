@@ -4,11 +4,11 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "cd64e48e1ceb5a5ebdbec3cac43a5f3a",
+    "content-hash": "bcc39187069a5d00d685ee6a6302b030",
     "packages": [
         {
             "name": "minos-moderation/client-php",
-            "version": "dev-main",
+            "version": "v0.2.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/minos-moderation/client-php.git",
@@ -29,7 +29,6 @@
                 "ext-mbstring": "*",
                 "phpunit/phpunit": "^9.6"
             },
-            "default-branch": true,
             "type": "library",
             "autoload": {
                 "psr-4": {
@@ -52,7 +51,7 @@
             ],
             "description": "The PHP client of the Wergiliusz gateway's B2B API for Minos forum plugins: webhook signature verification, payload reading, and a mock gateway for development",
             "support": {
-                "source": "https://github.com/minos-moderation/client-php/tree/claude/ecstatic-wright-q34vd4",
+                "source": "https://github.com/minos-moderation/client-php/tree/v0.2.0",
                 "issues": "https://github.com/minos-moderation/client-php/issues"
             },
             "time": "2026-10-28T11:58:30+00:00"
@@ -1842,9 +1841,7 @@
     ],
     "aliases": [],
     "minimum-stability": "stable",
-    "stability-flags": {
-        "minos-moderation/client-php": 20
-    },
+    "stability-flags": {},
     "prefer-stable": false,
     "prefer-lowest": false,
     "platform": {
