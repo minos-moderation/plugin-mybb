@@ -44,7 +44,9 @@ use Minos\Client\WebhookPayload;
  *    since (an older revision) — still brings its `wsparcie` to the moderators, once per
  *    revision, and changes nothing else ({@see Applier::supportAfterDecision}, A7).
  *    When that report cannot be written, the signal's claim is given back and the answer
- *    is `500`, so the redelivery raises it.
+ *    is `500`, so the redelivery raises it. The same for the report of a verdict this
+ *    delivery applied ({@see SignalError}): the verdict stands, the answer is `500`, and
+ *    the redelivery, finding the outcome recorded, raises the report.
  *    A delivery that finds its revision's row claimed by another step — the task timing it
  *    out, a moderator's edit, another delivery — gets `503`: what that step decides is not
  *    known yet, and the redelivery meets it (applies the verdict late or as on time, or
@@ -157,6 +159,8 @@ final class Receiver
         if ($this->platform->claimPending($pid, $now, Status::OPEN, false, $rev)) {
             try {
                 $this->applier->verdict($row, $payload, $settings, $now);
+            } catch (SignalError $e) {
+                return 500; // applied, its report not raised: the redelivery raises it
             } catch (\Throwable $e) {
                 $this->applier->failedStep($pid, 'verdict', $now);
                 return 500; // the gateway delivers again
@@ -166,6 +170,8 @@ final class Receiver
             // Published by the failure mode before this verdict came: still applied.
             try {
                 $this->applier->late($row, $payload, $settings, $now);
+            } catch (SignalError $e) {
+                return 500;
             } catch (\Throwable $e) {
                 $this->applier->failedStep($pid, 'late', $now);
                 return 500;
@@ -174,6 +180,8 @@ final class Receiver
             // Held by the failure mode because this verdict was late: applied as on time.
             try {
                 $this->applier->verdict($row, $payload, $settings, $now);
+            } catch (SignalError $e) {
+                return 500;
             } catch (\Throwable $e) {
                 $this->applier->failedStep($pid, 'verdict', $now);
                 return 500;

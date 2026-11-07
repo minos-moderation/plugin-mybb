@@ -88,11 +88,13 @@ final class Applier
      * @param Settings                                                                           $settings The settings.
      * @param int                                                                                $now      Unix seconds.
      * @return string The row's new status.
+     * @throws SignalError When the outcome is recorded but its `wsparcie` report could not
+     *     be written ({@see signalSupport}).
      */
     public function verdict(array $row, array $payload, Settings $settings, int $now): string
     {
         $status = $this->onTime($row, $payload, $settings, $now);
-        $this->signalSupport($row, $payload, $status, $now);
+        $this->signalSupport($row, $payload, $status, $now, (int)($row['support_rev'] ?? 0));
         return $status;
     }
 
@@ -198,6 +200,7 @@ final class Applier
      * @param Settings                                                                           $settings The settings.
      * @param int                                                                                $now      Unix seconds.
      * @return string The row's new status.
+     * @throws SignalError As {@see verdict}.
      */
     public function late(array $row, array $payload, Settings $settings, int $now): string
     {
@@ -205,10 +208,11 @@ final class Applier
         // left it so (`bezpieczne` on a cut text keeps `auto_published`): the claimed row
         // tells whether this revision's signal was raised already.
         $claimed = $this->platform->pending((int)$row['pid']);
-        $signalled = $claimed !== null && (int)$claimed['support_rev'] > (int)$row['rev'];
+        $previous = $claimed !== null ? (int)$claimed['support_rev'] : 0;
+        $signalled = $previous > (int)$row['rev'];
         $status = $this->afterPublication($row, $payload, $settings, $now);
         if (!$signalled) {
-            $this->signalSupport($row, $payload, $status, $now);
+            $this->signalSupport($row, $payload, $status, $now, $previous);
         }
         return $status;
     }
@@ -268,22 +272,38 @@ final class Applier
      * doubled, and the row remembers the revision in the same write that records the
      * outcome ({@see signalMark}), so a repeated delivery raises nothing — not even one that
      * comes before this report is written ({@see Platform::claimSupportSignal}). A post a moderator dealt with before the verdict
-     * came (`superseded`) gets the note that the verdict came after that decision. One that
-     * fails is logged (`error`/`support`, the post id) and changes nothing of the verdict.
+     * came (`superseded`) gets the note that the verdict came after that decision.
      *
-     * @param array<string,mixed>                       $row     The claimed row.
-     * @param array{kwalifikacja:?string,wsparcie:bool} $payload The payload.
-     * @param string                                    $status  The row's new status.
+     * A report that fails changes nothing of the verdict, which stands: it is logged
+     * (`error`/`support`, the post id, never the error's message), the revision's signal
+     * the outcome recorded is given back ({@see Platform::releaseSupportSignal}) and
+     * {@see SignalError} goes to the receiver, which answers `500`. The redelivery finds the
+     * outcome recorded and the signal not taken, and raises the report
+     * ({@see supportAfterDecision}); nothing else would.
+     *
+     * @param array<string,mixed>                       $row      The claimed row.
+     * @param array{kwalifikacja:?string,wsparcie:bool} $payload  The payload.
+     * @param string                                    $status   The row's new status.
+     * @param int                                       $previous `support_rev` before the
+     *     outcome recorded this revision's signal.
+     * @throws SignalError When the report could not be written.
      */
-    private function signalSupport(array $row, array $payload, string $status, int $now): void
+    private function signalSupport(array $row, array $payload, string $status, int $now, int $previous): void
     {
         if (!$payload['wsparcie'] || $status === Status::GONE) {
             return;
         }
+        $pid = (int)$row['pid'];
         try {
-            $this->report((int)$row['pid'], $payload, $status === Status::SUPERSEDED, $now);
+            $this->report($pid, $payload, $status === Status::SUPERSEDED, $now);
         } catch (\Throwable $e) {
-            $this->platform->log('error', 'support', (int)$row['pid'], $now);
+            try {
+                $this->platform->log('error', 'support', $pid, $now);
+                $this->platform->releaseSupportSignal($pid, (int)$row['rev'], $previous);
+            } catch (\Throwable $ignored) {
+                // The database refuses even this: the redelivery meets the row as it is.
+            }
+            throw new SignalError('the support report could not be written');
         }
     }
 
@@ -320,7 +340,7 @@ final class Applier
         try {
             $claimed = $this->platform->claimSupportSignal($pid, $rev);
             if ($claimed) {
-                $this->report($pid, $payload, true, $now);
+                $this->report($pid, $payload, $this->personDecided($row, $rev), $now);
             }
         } catch (\Throwable $e) {
             try {
@@ -334,6 +354,28 @@ final class Applier
             throw $e;
         }
         return $claimed;
+    }
+
+    /**
+     * Whether a person decided about a post before this verdict could act on it — what the
+     * report of {@see supportAfterDecision} notes. Yes for an older revision (its author
+     * edited the post since), a post a moderator edited (`superseded`), deleted or whose
+     * visibility differs from what the row's outcome left. No when the plugin's own
+     * outcome still stands: the verdict was applied, and only its report failed and was
+     * given back ({@see signalSupport}), or the row was left to a human (`apply_error`).
+     *
+     * @param array<string,mixed> $row The post's row, as read.
+     * @param int                 $rev The revision the verdict is about.
+     */
+    private function personDecided(array $row, int $rev): bool
+    {
+        $visible = [Status::PUBLISHED => 1, Status::CENSORED => 1, Status::HELD => 0, Status::DELETED => -1];
+        $status = (string)$row['status'];
+        if ($rev !== (int)$row['rev'] || !isset($visible[$status])) {
+            return true;
+        }
+        $post = $this->platform->post((int)$row['pid']);
+        return $post === null || (int)$post['visible'] !== $visible[$status];
     }
 
     /**

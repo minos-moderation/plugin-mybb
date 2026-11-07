@@ -30,6 +30,7 @@ The classes:
 | `Settings` | Reads and checks the settings; everything that decides publish or hold is read fail-closed. |
 | `Text` | Post → `tekst`: what readers see (MyBB's rendering rules, per forum), the first 3000 characters; the link signals. |
 | `TextError` | A PCRE failure inside `Text`: the text could not be read (`error: true`, never `''`). |
+| `SignalError` | The `wsparcie` report of an applied verdict could not be written: the verdict stands, the webhook answers `500`, the redelivery raises the report. |
 | `Gateway` | `POST /api/v1/b2b/oceny` over cURL; reads answers into accepted (`202` only, for the items its `przyjete` names) / retry (429, 408, 5xx, no answer, a 2xx other than 202) / config error. |
 | `Submitter` | The hold (validate hooks), the submission (insert-end hooks), resubmission, edits. |
 | `Receiver` | The webhook's checklist: method, signature (`Signature::check`; a refusal counted with its reason only), payload, id, claim, apply. |
@@ -113,7 +114,10 @@ empty while the list renders. A report of the plugin's still unread for the post
 report of the same post is not looked at, so the post then has two open reports (known
 behaviour: MyBB's `report.php` would add the plugin to the user's report as a second
 reporter, which a uid-0 reporter cannot be). One that fails is
-logged as `error`/`support` and the verdict stands. Such a post is never deleted,
+logged as `error`/`support`, the verdict stands, the revision's signal is given back
+(`Platform::releaseSupportSignal`) and the webhook answers `500` (`SignalError`): the
+redelivery finds the outcome recorded and raises the report, with the plain note, since no
+person decided (`Applier::personDecided`). Such a post is never deleted,
 rejected or hidden automatically: `zablokowane` keeps it held even with "usuń (miękko)",
 and a late `zablokowane` (or a late `ocenzurowane` whose mask cannot be published) leaves
 a fail-open publication published. Nothing is sent to the author. The ACP page lists
