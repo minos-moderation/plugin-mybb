@@ -221,7 +221,11 @@ zastosowania, więc:
   zostaje w kolejce moderacji i na liście „Posty, które wymagają uwagi” (stan
   „Rozstrzygnięty przez człowieka”, powód „edytowany przez moderatora przed werdyktem”).
   Tak samo, gdy moderator poprawi post, który tryb awaryjny zostawił w kolejce, bo werdykt
-  nie nadszedł w czasie: spóźniony werdykt nie jest już stosowany.
+  nie nadszedł w czasie: spóźniony werdykt nie jest już stosowany. To odstępstwo od
+  wspólnej reguły wtyczek Minos (S3), według której poprawiony post czekający na werdykt
+  jest oceniany ponownie bez względu na to, kto go poprawił (tak robią wtyczki dla
+  WordPressa i phpBB); w tej wersji zostaje, bo moderator ma post przed sobą i sam decyduje,
+  czy go zatwierdzić.
 
 Własny post w kolejce moderacji autor może poprawić tylko wtedy, gdy forum na to pozwala
 (ustawienie MyBB `showownunapproved`, domyślnie wyłączone); poza tym poprawiają go
